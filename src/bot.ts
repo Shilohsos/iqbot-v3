@@ -2,7 +2,7 @@ import 'dotenv/config';
 import { Telegraf } from 'telegraf';
 import { ClientSdk, SsidAuthMethod, BalanceType } from './index.js';
 import { WS_URL, PLATFORM_ID, IQ_HOST } from './protocol.js';
-import { executeTradeWithSdk, createSdk, type TradeRequest, type TradeResult } from './trade.js';
+import { executeTrade, type TradeRequest, type TradeResult } from './trade.js';
 import { getRecentTrades, getTradeStats } from './db.js';
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
@@ -14,8 +14,9 @@ if (!IQ_SSID) throw new Error('IQ_SSID missing from .env');
 const bot = new Telegraf(BOT_TOKEN);
 
 const MAX_ROUNDS = 6;
-// Sum of a geometric series: 1+2+4+...+2^(n-1) = 2^n - 1
 const MAX_EXPOSURE_MULTIPLIER = Math.pow(2, MAX_ROUNDS) - 1; // 63
+const ROUND_COOLDOWN_MS = 5_000;
+const ROUND_TIMEOUT_MS = 120_000;
 
 bot.command('trade', async ctx => {
     const args = ctx.message.text.split(/\s+/).slice(1);
@@ -52,21 +53,10 @@ bot.command('trade', async ctx => {
         { parse_mode: 'Markdown' }
     );
 
-    // One SDK connection for the entire martingale run — avoids reconnect throttling.
-    let sdk: ClientSdk;
-    try {
-        sdk = await createSdk(IQ_SSID!);
-    } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : 'Unknown error';
-        await ctx.reply(`❌ *Connection failed*\n_${msg}_`, { parse_mode: 'Markdown' });
-        return;
-    }
-
     const runId = crypto.randomUUID();
     let currentAmount = amount;
     let totalPnl = 0;
 
-    try {
     for (let round = 1; round <= MAX_ROUNDS; round++) {
         const roundTrade: TradeRequest = {
             pair: baseTrade.pair,
@@ -75,15 +65,17 @@ bot.command('trade', async ctx => {
             martingaleRunId: runId,
         };
 
+        // Fresh SDK connection per round. Race against a hard wall-clock
+        // timeout so a silent hang never stalls the loop indefinitely.
         let result: TradeResult;
         let roundTimer: ReturnType<typeof setTimeout> | undefined;
         try {
             result = await Promise.race([
-                executeTradeWithSdk(sdk, roundTrade),
+                executeTrade(IQ_SSID!, roundTrade),
                 new Promise<never>((_, reject) => {
                     roundTimer = setTimeout(
                         () => reject(new Error('Round timeout')),
-                        120_000,
+                        ROUND_TIMEOUT_MS,
                     );
                 }),
             ]);
@@ -132,13 +124,15 @@ bot.command('trade', async ctx => {
             return;
         }
 
-        // LOSS — prepare next round
+        // LOSS — send round result, then wait before the next connection attempt
         if (round < MAX_ROUNDS) {
             currentAmount = currentAmount * 2;
             roundMsg += `\n\n🔄 Doubling to $${currentAmount.toFixed(2)} for round ${round + 1}...`;
+            await ctx.reply(roundMsg, { parse_mode: 'Markdown' });
+            await new Promise(r => setTimeout(r, ROUND_COOLDOWN_MS));
+        } else {
+            await ctx.reply(roundMsg, { parse_mode: 'Markdown' });
         }
-
-        await ctx.reply(roundMsg, { parse_mode: 'Markdown' });
     }
 
     // All rounds exhausted with losses
@@ -148,9 +142,6 @@ bot.command('trade', async ctx => {
         `Total loss: ${sign}$${totalPnl.toFixed(2)}`,
         { parse_mode: 'Markdown' }
     );
-    } finally {
-        await sdk.shutdown();
-    }
 });
 
 bot.command('history', async ctx => {
