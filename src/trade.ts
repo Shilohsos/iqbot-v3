@@ -13,6 +13,7 @@ export interface TradeRequest {
     pair: string;
     direction: 'call' | 'put';
     amount: number;
+    martingaleRunId?: string;
 }
 
 export interface TradeResult {
@@ -75,6 +76,7 @@ export async function executeTrade(ssid: string, trade: TradeRequest): Promise<T
             pnl: tradeResult.pnl,
             trade_id: tradeResult.tradeId,
             error: tradeResult.error,
+            martingale_run: trade.martingaleRunId,
         });
 
         return tradeResult;
