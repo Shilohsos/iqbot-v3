@@ -105,7 +105,13 @@ export async function executeTradeWithSdk(sdk: ClientSdk, trade: TradeRequest): 
  * Creates its own SDK connection and shuts it down after the trade.
  */
 export async function executeTrade(ssid: string, trade: TradeRequest): Promise<TradeResult> {
-    const sdk = await ClientSdk.create(WS_URL, PLATFORM_ID, new SsidAuthMethod(ssid), { host: IQ_HOST });
+    let sdk: ClientSdk;
+    try {
+        sdk = await ClientSdk.create(WS_URL, PLATFORM_ID, new SsidAuthMethod(ssid), { host: IQ_HOST });
+    } catch (err: unknown) {
+        if (isTimeoutError(err)) return errorResult(trade, 'Connection timed out');
+        throw err;
+    }
     try {
         return await executeTradeWithSdk(sdk, trade);
     } finally {
