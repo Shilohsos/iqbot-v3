@@ -13,8 +13,9 @@ const IQ_SSID = process.env.IQ_SSID;
 if (!BOT_TOKEN) throw new Error('BOT_TOKEN missing from .env');
 if (!IQ_SSID) throw new Error('IQ_SSID missing from .env');
 
-process.on('unhandledRejection', (reason) => {
+process.on('unhandledRejection', (reason, promise) => {
     console.error('[unhandledRejection]', reason);
+    promise.catch(() => {});  // prevent process termination (Node.js v15+)
 });
 
 const bot = new Telegraf(BOT_TOKEN);
