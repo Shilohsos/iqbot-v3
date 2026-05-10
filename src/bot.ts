@@ -13,10 +13,18 @@ if (!IQ_SSID) throw new Error('IQ_SSID missing from .env');
 
 const bot = new Telegraf(BOT_TOKEN);
 
+const MAX_ROUNDS = 6;
+// Sum of a geometric series: 1+2+4+...+2^(n-1) = 2^n - 1
+const MAX_EXPOSURE_MULTIPLIER = Math.pow(2, MAX_ROUNDS) - 1; // 63
+
 bot.command('trade', async ctx => {
     const args = ctx.message.text.split(/\s+/).slice(1);
     if (args.length < 3) {
-        return ctx.reply('Usage: /trade <pair> <direction> <amount>\nExample: /trade EURUSD-OTC put 50');
+        return ctx.reply(
+            'Usage: /trade <pair> <direction> <amount>\n' +
+            'Example: /trade EURUSD-OTC put 50\n\n' +
+            `Auto-martingale: up to ${MAX_ROUNDS} rounds, doubles on loss.`
+        );
     }
 
     const [rawPair, rawDir, amountStr] = args;
@@ -30,21 +38,94 @@ bot.command('trade', async ctx => {
         return ctx.reply('Amount must be a positive number.');
     }
 
-    const trade: TradeRequest = {
+    const baseTrade: TradeRequest = {
         pair: rawPair.toUpperCase(),
         direction: direction as 'call' | 'put',
         amount,
     };
 
-    await ctx.reply(`⏳ Placing trade: ${trade.pair} ${trade.direction.toUpperCase()} $${amount}...`);
+    await ctx.reply(
+        `🎯 *Martingale starting*\n` +
+        `Pair: \`${baseTrade.pair}\` *${baseTrade.direction.toUpperCase()}*\n` +
+        `Base: $${amount} | Max exposure: $${(amount * MAX_EXPOSURE_MULTIPLIER).toFixed(2)}\n\n` +
+        `_Round 1 starting..._`,
+        { parse_mode: 'Markdown' }
+    );
 
-    try {
-        const result = await executeTrade(IQ_SSID!, trade);
-        await ctx.reply(formatResult(result), { parse_mode: 'Markdown' });
-    } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : 'Unknown error';
-        await ctx.reply(`❌ Trade failed: ${msg}`);
+    const runId = crypto.randomUUID();
+    let currentAmount = amount;
+    let totalPnl = 0;
+
+    for (let round = 1; round <= MAX_ROUNDS; round++) {
+        const roundTrade: TradeRequest = {
+            pair: baseTrade.pair,
+            direction: baseTrade.direction,
+            amount: currentAmount,
+            martingaleRunId: runId,
+        };
+
+        let result: TradeResult;
+        try {
+            result = await executeTrade(IQ_SSID!, roundTrade);
+        } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : 'Unknown error';
+            await ctx.reply(
+                `⚠️ *Round ${round}/${MAX_ROUNDS} — exception*\n_${msg}_\n\nMartingale stopped.`,
+                { parse_mode: 'Markdown' }
+            );
+            return;
+        }
+
+        const roundPnl = result.status === 'WIN'
+            ? result.pnl
+            : result.status === 'TIE'
+                ? 0
+                : -currentAmount;
+        totalPnl += roundPnl;
+
+        const emoji = result.status === 'WIN' ? '💚' : result.status === 'LOSS' ? '💔' : result.status === 'TIE' ? '⚪' : '⚠️';
+        let roundMsg = `${emoji} *Round ${round}/${MAX_ROUNDS}*\n`;
+        roundMsg += `Amount: $${currentAmount.toFixed(2)} | `;
+
+        if (result.status === 'WIN') {
+            roundMsg += `Profit: +$${result.pnl.toFixed(2)}`;
+        } else if (result.status === 'LOSS') {
+            roundMsg += `Loss: -$${currentAmount.toFixed(2)}`;
+        } else if (result.status === 'TIE') {
+            roundMsg += `Refunded: $${currentAmount.toFixed(2)}`;
+        } else {
+            roundMsg += result.error ?? result.status;
+        }
+
+        if (result.status === 'WIN' || result.status === 'TIE') {
+            const sign = totalPnl >= 0 ? '+' : '';
+            roundMsg += `\n\n✅ *Martingale complete*\nRounds: ${round} | Total PnL: ${sign}$${totalPnl.toFixed(2)}`;
+            await ctx.reply(roundMsg, { parse_mode: 'Markdown' });
+            return;
+        }
+
+        if (result.status === 'ERROR' || result.status === 'TIMEOUT') {
+            roundMsg += `\n\n⚠️ *Martingale stopped*\n_${result.error ?? result.status}_`;
+            await ctx.reply(roundMsg, { parse_mode: 'Markdown' });
+            return;
+        }
+
+        // LOSS — prepare next round
+        if (round < MAX_ROUNDS) {
+            currentAmount = currentAmount * 2;
+            roundMsg += `\n\n🔄 Doubling to $${currentAmount.toFixed(2)} for round ${round + 1}...`;
+        }
+
+        await ctx.reply(roundMsg, { parse_mode: 'Markdown' });
     }
+
+    // All rounds exhausted with losses
+    const sign = totalPnl >= 0 ? '+' : '';
+    await ctx.reply(
+        `💔 *Martingale exhausted* — all ${MAX_ROUNDS} rounds lost.\n` +
+        `Total loss: ${sign}$${totalPnl.toFixed(2)}`,
+        { parse_mode: 'Markdown' }
+    );
 });
 
 bot.command('history', async ctx => {
@@ -61,7 +142,9 @@ bot.command('history', async ctx => {
             : t.status === 'LOSS'
                 ? `-$${t.amount.toFixed(2)}`
                 : '$0.00';
-        msg += `${emoji} \`${t.pair}\` *${t.direction.toUpperCase()}* $${t.amount} → ${pnlStr}\n`;
+        msg += `${emoji} \`${t.pair}\` *${t.direction.toUpperCase()}* $${t.amount} → ${pnlStr}`;
+        if (t.martingale_run) msg += ' 🔄';
+        msg += '\n';
         if (t.error) msg += `  _${t.error}_\n`;
     }
 
@@ -105,7 +188,7 @@ bot.command('start', async ctx => {
     msg += `📊 *Stats*: ${stats.total} trades | PnL: ${pnlSign}$${stats.totalPnl.toFixed(2)}\n\n`;
     msg += '/history — Recent trades\n';
     msg += '/balance — Live balance\n';
-    msg += '_Section 2: History + Balance_';
+    msg += '_Section 3: Auto-Martingale_';
     await ctx.reply(msg, { parse_mode: 'Markdown' });
 });
 
@@ -116,15 +199,3 @@ console.log('[iqbot-v3] running');
 
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
-
-function formatResult(r: TradeResult): string {
-    const emoji = r.status === 'WIN' ? '💚' : r.status === 'LOSS' ? '💔' : r.status === 'TIE' ? '⚪' : '⚠️';
-    let msg = `${emoji} *${r.status}*\n`;
-    msg += `Pair: \`${r.pair}\`\n`;
-    msg += `Direction: *${r.direction.toUpperCase()}*\n`;
-    msg += `Amount: $${r.amount}\n`;
-    if (r.status === 'WIN') msg += `Profit: +$${r.pnl.toFixed(2)}\n`;
-    else if (r.status === 'LOSS') msg += `Loss: -$${r.amount.toFixed(2)}\n`;
-    if (r.error) msg += `_${r.error}_`;
-    return msg;
-}
