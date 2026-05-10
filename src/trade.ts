@@ -7,6 +7,7 @@ import {
     type Position,
 } from './index.js';
 import { WS_URL, PLATFORM_ID, IQ_HOST } from './protocol.js';
+import { insertTrade } from './db.js';
 
 export interface TradeRequest {
     pair: string;
@@ -64,7 +65,19 @@ export async function executeTrade(ssid: string, trade: TradeRequest): Promise<T
         const option = await turboOptions.buy(instrument, dir, trade.amount, demoBalance);
 
         const result = await waitForResult(positions, option.id, instrument.expirationSize + 90);
-        return { ...result, tradeId: option.id, pair: trade.pair, direction: trade.direction, amount: trade.amount };
+        const tradeResult: TradeResult = { ...result, tradeId: option.id, pair: trade.pair, direction: trade.direction, amount: trade.amount };
+
+        insertTrade({
+            pair: tradeResult.pair,
+            direction: tradeResult.direction,
+            amount: tradeResult.amount,
+            status: tradeResult.status,
+            pnl: tradeResult.pnl,
+            trade_id: tradeResult.tradeId,
+            error: tradeResult.error,
+        });
+
+        return tradeResult;
     } finally {
         await sdk.shutdown();
     }
