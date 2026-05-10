@@ -26,11 +26,15 @@ export interface TradeResult {
     error?: string;
 }
 
-export async function executeTrade(ssid: string, trade: TradeRequest): Promise<TradeResult> {
-    const sdk = await ClientSdk.create(WS_URL, PLATFORM_ID, new SsidAuthMethod(ssid), { host: IQ_HOST });
-
+/**
+ * Runs a single trade on an already-authenticated SDK instance.
+ * The caller owns the SDK lifecycle (connect / shutdown).
+ * Catches SDK-internal TimeoutError and converts it to an ERROR result
+ * so the martingale loop can handle it gracefully instead of crashing.
+ */
+export async function executeTradeWithSdk(sdk: ClientSdk, trade: TradeRequest): Promise<TradeResult> {
     try {
-        // Initialize positions facade before buying so the WS subscription is active
+        // sdk.positions() is cached after the first call — safe to call every round.
         const positions = await sdk.positions();
 
         const balances = await sdk.balances();
@@ -66,7 +70,13 @@ export async function executeTrade(ssid: string, trade: TradeRequest): Promise<T
         const option = await turboOptions.buy(instrument, dir, trade.amount, demoBalance);
 
         const result = await waitForResult(positions, option.id, instrument.expirationSize + 90);
-        const tradeResult: TradeResult = { ...result, tradeId: option.id, pair: trade.pair, direction: trade.direction, amount: trade.amount };
+        const tradeResult: TradeResult = {
+            ...result,
+            tradeId: option.id,
+            pair: trade.pair,
+            direction: trade.direction,
+            amount: trade.amount,
+        };
 
         insertTrade({
             pair: tradeResult.pair,
@@ -80,9 +90,36 @@ export async function executeTrade(ssid: string, trade: TradeRequest): Promise<T
         });
 
         return tradeResult;
+    } catch (err: unknown) {
+        // SDK's p-timeout throws TimeoutError — convert to a safe ERROR result
+        // so callers never see an unhandled rejection.
+        if (isTimeoutError(err)) {
+            return errorResult(trade, 'IQ Option timed out');
+        }
+        throw err;
+    }
+}
+
+/**
+ * Convenience wrapper for one-shot trades (e.g. /balance).
+ * Creates its own SDK connection and shuts it down after the trade.
+ */
+export async function executeTrade(ssid: string, trade: TradeRequest): Promise<TradeResult> {
+    const sdk = await ClientSdk.create(WS_URL, PLATFORM_ID, new SsidAuthMethod(ssid), { host: IQ_HOST });
+    try {
+        return await executeTradeWithSdk(sdk, trade);
     } finally {
         await sdk.shutdown();
     }
+}
+
+export function createSdk(ssid: string): Promise<ClientSdk> {
+    return ClientSdk.create(WS_URL, PLATFORM_ID, new SsidAuthMethod(ssid), { host: IQ_HOST });
+}
+
+function isTimeoutError(err: unknown): boolean {
+    if (!(err instanceof Error)) return false;
+    return err.name === 'TimeoutError' || err.message.includes('timed out') || err.message.includes('TimeoutError');
 }
 
 function waitForResult(

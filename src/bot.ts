@@ -2,7 +2,7 @@ import 'dotenv/config';
 import { Telegraf } from 'telegraf';
 import { ClientSdk, SsidAuthMethod, BalanceType } from './index.js';
 import { WS_URL, PLATFORM_ID, IQ_HOST } from './protocol.js';
-import { executeTrade, type TradeRequest, type TradeResult } from './trade.js';
+import { executeTradeWithSdk, createSdk, type TradeRequest, type TradeResult } from './trade.js';
 import { getRecentTrades, getTradeStats } from './db.js';
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
@@ -52,10 +52,21 @@ bot.command('trade', async ctx => {
         { parse_mode: 'Markdown' }
     );
 
+    // One SDK connection for the entire martingale run — avoids reconnect throttling.
+    let sdk: ClientSdk;
+    try {
+        sdk = await createSdk(IQ_SSID!);
+    } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : 'Unknown error';
+        await ctx.reply(`❌ *Connection failed*\n_${msg}_`, { parse_mode: 'Markdown' });
+        return;
+    }
+
     const runId = crypto.randomUUID();
     let currentAmount = amount;
     let totalPnl = 0;
 
+    try {
     for (let round = 1; round <= MAX_ROUNDS; round++) {
         const roundTrade: TradeRequest = {
             pair: baseTrade.pair,
@@ -66,7 +77,7 @@ bot.command('trade', async ctx => {
 
         let result: TradeResult;
         try {
-            result = await executeTrade(IQ_SSID!, roundTrade);
+            result = await executeTradeWithSdk(sdk, roundTrade);
         } catch (err: unknown) {
             const msg = err instanceof Error ? err.message : 'Unknown error';
             await ctx.reply(
@@ -126,6 +137,9 @@ bot.command('trade', async ctx => {
         `Total loss: ${sign}$${totalPnl.toFixed(2)}`,
         { parse_mode: 'Markdown' }
     );
+    } finally {
+        await sdk.shutdown();
+    }
 });
 
 bot.command('history', async ctx => {
