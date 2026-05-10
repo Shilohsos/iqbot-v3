@@ -6,6 +6,7 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
+    "bot": "tsx src/bot.ts",
     "build": "npx tsc",
     "lint": "npx eslint .",
     "docs": "npx typedoc",
@@ -26,6 +27,7 @@
     "eslint": "^8.54.0",
     "http-proxy": "^1.17.16",
     "mock-socket": "^9.3.1",
+    "tsx": "^4.21.0",
     "typedoc": "^0.25.4",
     "typescript": "^5.3.2",
     "vitest": "3.2.4",
@@ -33,7 +35,9 @@
   },
   "dependencies": {
     "@upstash/redis": "^1.36.1",
+    "dotenv": "^16.6.1",
     "isomorphic-ws": "^5.0.0",
+    "telegraf": "^4.16.3",
     "tweetsodium": "^0.0.5",
     "vitest-websocket-mock": "^0.5.0",
     "ws": "^8.14.2"
