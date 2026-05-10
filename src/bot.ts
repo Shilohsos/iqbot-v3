@@ -76,8 +76,17 @@ bot.command('trade', async ctx => {
         };
 
         let result: TradeResult;
+        let roundTimer: ReturnType<typeof setTimeout> | undefined;
         try {
-            result = await executeTradeWithSdk(sdk, roundTrade);
+            result = await Promise.race([
+                executeTradeWithSdk(sdk, roundTrade),
+                new Promise<never>((_, reject) => {
+                    roundTimer = setTimeout(
+                        () => reject(new Error('Round timeout')),
+                        120_000,
+                    );
+                }),
+            ]);
         } catch (err: unknown) {
             const msg = err instanceof Error ? err.message : 'Unknown error';
             await ctx.reply(
@@ -85,6 +94,8 @@ bot.command('trade', async ctx => {
                 { parse_mode: 'Markdown' }
             );
             return;
+        } finally {
+            clearTimeout(roundTimer);
         }
 
         const roundPnl = result.status === 'WIN'
