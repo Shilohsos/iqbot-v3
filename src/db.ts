@@ -27,6 +27,15 @@ if (!existingCols.includes('martingale_run')) {
     db.exec('ALTER TABLE trades ADD COLUMN martingale_run TEXT');
 }
 
+db.exec(`
+  CREATE TABLE IF NOT EXISTS users (
+    telegram_id  INTEGER PRIMARY KEY,
+    ssid         TEXT    NOT NULL,
+    created_at   TEXT    NOT NULL DEFAULT (datetime('now')),
+    last_used    TEXT    NOT NULL DEFAULT (datetime('now'))
+  )
+`);
+
 export interface TradeRecord {
     id?: number;
     pair: string;
@@ -90,4 +99,31 @@ export function getTradeStats(): TradeStats {
         ties: row.ties ?? 0,
         totalPnl: row.totalPnl ?? 0,
     };
+}
+
+export interface UserRecord {
+    telegram_id: number;
+    ssid: string;
+    created_at?: string;
+    last_used?: string;
+}
+
+export function getUser(telegramId: number): UserRecord | undefined {
+    return db.prepare('SELECT * FROM users WHERE telegram_id = ?').get(telegramId) as UserRecord | undefined;
+}
+
+export function saveUser(user: Pick<UserRecord, 'telegram_id' | 'ssid'>): void {
+    db.prepare(`
+        INSERT INTO users (telegram_id, ssid, last_used)
+        VALUES (@telegram_id, @ssid, datetime('now'))
+        ON CONFLICT(telegram_id) DO UPDATE SET ssid = @ssid, last_used = datetime('now')
+    `).run(user);
+}
+
+export function deleteUser(telegramId: number): void {
+    db.prepare('DELETE FROM users WHERE telegram_id = ?').run(telegramId);
+}
+
+export function getAllUsers(): UserRecord[] {
+    return db.prepare('SELECT * FROM users ORDER BY last_used DESC').all() as UserRecord[];
 }

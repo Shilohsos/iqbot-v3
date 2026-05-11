@@ -3,7 +3,7 @@ import { Telegraf, Context } from 'telegraf';
 import { ClientSdk, SsidAuthMethod, BalanceType } from './index.js';
 import { WS_URL, PLATFORM_ID, IQ_HOST } from './protocol.js';
 import { executeTrade, type TradeRequest, type TradeResult } from './trade.js';
-import { getRecentTrades, getTradeStats } from './db.js';
+import { getRecentTrades, getTradeStats, getUser, saveUser, deleteUser, getAllUsers } from './db.js';
 import { analyzePair, type AnalysisResult } from './analysis.js';
 import { amountKeyboard, timeframeKeyboard, pairKeyboard, tfLabel, OTC_PAIRS } from './menu.js';
 import { createSdk } from './trade.js';
@@ -11,10 +11,9 @@ import { startKeyboard, backKeyboard } from './ui/user.js';
 import { ADMIN_ID, adminKeyboard } from './ui/admin.js';
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
-const IQ_SSID = process.env.IQ_SSID;
+const IQ_SSID = process.env.IQ_SSID; // optional fallback for users without /connect
 
 if (!BOT_TOKEN) throw new Error('BOT_TOKEN missing from .env');
-if (!IQ_SSID) throw new Error('IQ_SSID missing from .env');
 
 process.on('unhandledRejection', (reason) => {
     console.error('[unhandledRejection]', reason);
@@ -47,9 +46,24 @@ interface WizardState {
 }
 const wizardSessions = new Map<number, WizardState>();
 
+// ─── Connect wizard ──────────────────────────────────────────────────────────
+
+type ConnectStep = 'email' | 'password';
+interface ConnectState {
+    step: ConnectStep;
+    email?: string;
+}
+const connectSessions = new Map<number, ConnectState>();
+
+function getSsidForUser(telegramId: number): string | null {
+    const user = getUser(telegramId);
+    if (user) return user.ssid;
+    return IQ_SSID ?? null;
+}
+
 // ─── Martingale loop (shared helper) ────────────────────────────────────────
 
-async function runMartingale(ctx: Context, pair: string, direction: 'call' | 'put', amount: number, timeframeSec = 60): Promise<void> {
+async function runMartingale(ctx: Context, ssid: string, pair: string, direction: 'call' | 'put', amount: number, timeframeSec = 60): Promise<void> {
     const dirStr = direction.toUpperCase();
     const runId = crypto.randomUUID();
     const roundTimeoutMs = (timeframeSec + 90) * 1000;
@@ -77,7 +91,7 @@ async function runMartingale(ctx: Context, pair: string, direction: 'call' | 'pu
         let roundTimer: ReturnType<typeof setTimeout> | undefined;
         try {
             result = await Promise.race([
-                executeTrade(IQ_SSID!, roundTrade),
+                executeTrade(ssid, roundTrade),
                 new Promise<never>((_, reject) => {
                     roundTimer = setTimeout(
                         () => reject(new Error('Round timeout')),
@@ -237,12 +251,18 @@ bot.action(/^pair:(.+)$/, async ctx => {
         return;
     }
 
+    const ssid = getSsidForUser(ctx.from!.id);
+    if (!ssid) {
+        await ctx.editMessageText('❌ Not connected. Use /connect to link your IQ Option account.');
+        return;
+    }
+
     const label = tfLabel(timeframe);
     await ctx.editMessageText(`🔍 *Analyzing ${pair} on ${label}...*`, { parse_mode: 'Markdown' });
 
     let analysis: AnalysisResult;
     try {
-        analysis = await analyzePair(IQ_SSID!, pair, timeframe);
+        analysis = await analyzePair(ssid, pair, timeframe);
     } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : 'Unknown error';
         await ctx.reply(`❌ Analysis failed: ${msg}`);
@@ -255,7 +275,7 @@ bot.action(/^pair:(.+)$/, async ctx => {
         { parse_mode: 'Markdown' }
     );
 
-    await runMartingale(ctx, pair, analysis.direction, amount, timeframe);
+    await runMartingale(ctx, ssid, pair, analysis.direction, amount, timeframe);
 });
 
 // ─── Other commands ──────────────────────────────────────────────────────────
@@ -288,8 +308,13 @@ bot.command('history', async ctx => {
 });
 
 bot.command('balance', async ctx => {
+    const ssid = getSsidForUser(ctx.from!.id);
+    if (!ssid) {
+        await ctx.reply('❌ Not connected. Use /connect to link your IQ Option account.', { reply_markup: backKeyboard() });
+        return;
+    }
     try {
-        const sdk = await ClientSdk.create(WS_URL, PLATFORM_ID, new SsidAuthMethod(IQ_SSID!), { host: IQ_HOST });
+        const sdk = await ClientSdk.create(WS_URL, PLATFORM_ID, new SsidAuthMethod(ssid), { host: IQ_HOST });
         try {
             const balances = await sdk.balances();
             const all = balances.getBalances();
@@ -354,8 +379,13 @@ bot.action('ui:history', async ctx => {
 
 bot.action('ui:balance', async ctx => {
     await ctx.answerCbQuery();
+    const ssid = getSsidForUser(ctx.from!.id);
+    if (!ssid) {
+        await ctx.reply('❌ Not connected. Use /connect to link your IQ Option account.', { reply_markup: backKeyboard() });
+        return;
+    }
     try {
-        const sdk = await ClientSdk.create(WS_URL, PLATFORM_ID, new SsidAuthMethod(IQ_SSID!), { host: IQ_HOST });
+        const sdk = await ClientSdk.create(WS_URL, PLATFORM_ID, new SsidAuthMethod(ssid), { host: IQ_HOST });
         try {
             const balances = await sdk.balances();
             const all = balances.getBalances();
@@ -392,7 +422,17 @@ bot.command('admin', async ctx => {
 
 bot.action('admin:users', async ctx => {
     await ctx.answerCbQuery();
-    await ctx.reply('👥 User management coming soon.');
+    const users = getAllUsers();
+    if (users.length === 0) {
+        await ctx.reply('👥 No connected users.');
+        return;
+    }
+    let msg = `👥 *Connected Users* (${users.length})\n\n`;
+    for (const u of users) {
+        const lastUsed = u.last_used ? u.last_used.replace('T', ' ').slice(0, 16) : '—';
+        msg += `• \`${u.telegram_id}\` — last: ${lastUsed}\n`;
+    }
+    await ctx.reply(msg, { parse_mode: 'Markdown' });
 });
 bot.action('admin:broadcast', async ctx => {
     await ctx.answerCbQuery();
@@ -407,9 +447,28 @@ bot.action('admin:tokens', async ctx => {
     await ctx.reply('🔑 Token management coming soon.');
 });
 
+// ─── /connect wizard ─────────────────────────────────────────────────────────
+
+bot.command('connect', async ctx => {
+    const chatId = ctx.chat.id;
+    connectSessions.set(chatId, { step: 'email' });
+    await ctx.reply('📧 Enter your IQ Option email:');
+});
+
+bot.command('disconnect', async ctx => {
+    const telegramId = ctx.from!.id;
+    deleteUser(telegramId);
+    connectSessions.delete(ctx.chat.id);
+    await ctx.reply('✅ Disconnected. Your IQ Option session has been removed.');
+});
+
+// ─── /pairs debug ────────────────────────────────────────────────────────────
+
 bot.command('pairs', async ctx => {
+    const pairsSsid = getSsidForUser(ctx.from!.id);
+    if (!pairsSsid) { await ctx.reply('❌ Not connected. Use /connect first.'); return; }
     try {
-        const sdk = await createSdk(IQ_SSID!);
+        const sdk = await createSdk(pairsSsid);
         try {
             const turboOptions = await sdk.turboOptions();
             const actives = turboOptions.getActives();
@@ -433,15 +492,63 @@ bot.command('pairs', async ctx => {
 
 bot.command('ping', ctx => ctx.reply('pong'));
 
-// Custom amount: plain text input after tapping "Custom".
+// Text handler: covers both connect wizard and trade custom-amount step.
 // Must be registered after all commands so command handlers take priority.
 bot.on('text', async ctx => {
     if (ctx.message.text.startsWith('/')) return;
     const chatId = ctx.chat.id;
+    const text = ctx.message.text.trim();
+
+    // ── Connect wizard ────────────────────────────────────────────────────────
+    const connectState = connectSessions.get(chatId);
+    if (connectState) {
+        if (connectState.step === 'email') {
+            connectState.email = text;
+            connectState.step = 'password';
+            await ctx.reply('🔑 Enter your password:');
+        } else if (connectState.step === 'password' && connectState.email) {
+            connectSessions.delete(chatId);
+            await ctx.reply('🔐 Logging in...');
+            try {
+                const res = await fetch(`${IQ_HOST}/v2/login`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ identifier: connectState.email, password: text }),
+                });
+                const data = await res.json() as { code?: string; message?: string; ssid?: string };
+                if (data.code !== 'success' || !data.ssid) {
+                    await ctx.reply(`❌ Login failed: ${data.message ?? 'Invalid credentials'}`);
+                    return;
+                }
+                saveUser({ telegram_id: ctx.from!.id, ssid: data.ssid });
+
+                // Show balances on successful connect
+                const sdk = await ClientSdk.create(WS_URL, PLATFORM_ID, new SsidAuthMethod(data.ssid), { host: IQ_HOST });
+                try {
+                    const balances = await sdk.balances();
+                    const all = balances.getBalances();
+                    const demo = all.find(b => b.type === BalanceType.Demo);
+                    const real = all.find(b => b.type === BalanceType.Real);
+                    let msg = '✅ *Connected!*\n\n';
+                    if (demo) msg += `🎮 Practice: $${demo.amount.toFixed(2)}\n`;
+                    if (real) msg += `💎 Live: $${real.amount.toFixed(2)}\n`;
+                    await ctx.reply(msg, { parse_mode: 'Markdown' });
+                } finally {
+                    await sdk.shutdown();
+                }
+            } catch (err: unknown) {
+                const msg = err instanceof Error ? err.message : 'Unknown error';
+                await ctx.reply(`❌ Connection failed: ${msg}`);
+            }
+        }
+        return;
+    }
+
+    // ── Trade wizard custom amount ────────────────────────────────────────────
     const state = wizardSessions.get(chatId);
     if (!state || state.step !== 'custom_amount') return;
 
-    const amount = parseFloat(ctx.message.text.trim());
+    const amount = parseFloat(text);
     if (isNaN(amount) || amount <= 0) {
         await ctx.reply('Please enter a valid positive number (e.g. 75).');
         return;
