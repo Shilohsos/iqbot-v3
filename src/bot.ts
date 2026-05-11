@@ -3,15 +3,21 @@ import { Telegraf, Context } from 'telegraf';
 import { ClientSdk, SsidAuthMethod, BalanceType } from './index.js';
 import { WS_URL, PLATFORM_ID, IQ_HOST, IQ_AUTH_URL } from './protocol.js';
 import { executeTrade, type TradeRequest, type TradeResult } from './trade.js';
-import { getRecentTrades, getTradeStats, getUser, saveUser, deleteUser, getAllUsers } from './db.js';
+import {
+    getRecentTrades, getTradeStats,
+    getUser, saveUser, deleteUser, getAllUsers,
+    upsertOnboardingUser, approveUser, setManualApproval, rejectUser, getApprovalStats,
+} from './db.js';
 import { analyzePair, type AnalysisResult } from './analysis.js';
 import { amountKeyboard, timeframeKeyboard, pairKeyboard, tfLabel, OTC_PAIRS } from './menu.js';
 import { createSdk } from './trade.js';
-import { startKeyboard, backKeyboard } from './ui/user.js';
-import { ADMIN_ID, adminKeyboard } from './ui/admin.js';
+import { startKeyboard, backKeyboard, onboardKeyboard } from './ui/user.js';
+import { getAdminId, adminKeyboard } from './ui/admin.js';
+import { checkAffiliate } from './affiliate.js';
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
-const IQ_SSID = process.env.IQ_SSID; // optional fallback for users without /connect
+const IQ_SSID = process.env.IQ_SSID;         // optional fallback for users without /connect
+const AFFILIATE_LINK = process.env.AFFILIATE_LINK ?? '';
 
 if (!BOT_TOKEN) throw new Error('BOT_TOKEN missing from .env');
 
@@ -26,15 +32,75 @@ const MAX_ROUNDS = 6;
 const MAX_EXPOSURE_MULTIPLIER = Math.pow(2, MAX_ROUNDS) - 1; // 63
 const ROUND_COOLDOWN_MS = 5_000;
 
-// ─── Shared UI helper ────────────────────────────────────────────────────────
+// ─── Start menu (admin vs client) ────────────────────────────────────────────
 
 async function sendStartMenu(ctx: Context): Promise<void> {
+    const telegramId = ctx.from!.id;
+
+    if (telegramId === getAdminId()) {
+        const stats = getApprovalStats();
+        await ctx.reply(
+            `🛡️ *Admin Dashboard*\n\n` +
+            `👥 Users: ${stats.total} total | ✅ ${stats.approved} approved | ⏳ ${stats.pending} pending | 🔔 ${stats.manual} manual | ❌ ${stats.rejected} rejected`,
+            { parse_mode: 'Markdown', reply_markup: adminKeyboard() }
+        );
+        return;
+    }
+
+    const user = getUser(telegramId);
+
+    if (!user || user.approval_status === 'pending') {
+        await startOnboarding(ctx);
+        return;
+    }
+
+    if (user.approval_status === 'manual') {
+        await ctx.reply(
+            '⏳ *Awaiting Approval*\n\nYour IQ Option User ID has been submitted.\n' +
+            'Please contact the admin for manual approval.',
+            { parse_mode: 'Markdown' }
+        );
+        return;
+    }
+
+    if (user.approval_status === 'rejected') {
+        await ctx.reply('❌ Your access has been rejected. Contact the admin if this is a mistake.');
+        return;
+    }
+
+    // Approved — show trading menu
     const stats = getTradeStats();
     const pnlSign = stats.totalPnl >= 0 ? '+' : '';
-    const msg =
-        `🤖 *IQ Bot V3*\n\n` +
-        `📊 *Stats*: ${stats.total} trades | PnL: ${pnlSign}$${stats.totalPnl.toFixed(2)}`;
-    await ctx.reply(msg, { parse_mode: 'Markdown', reply_markup: startKeyboard() });
+    await ctx.reply(
+        `🤖 *IQ Bot V3*\n\n📊 *Stats*: ${stats.total} trades | PnL: ${pnlSign}$${stats.totalPnl.toFixed(2)}`,
+        { parse_mode: 'Markdown', reply_markup: startKeyboard() }
+    );
+}
+
+// ─── Onboarding flow ─────────────────────────────────────────────────────────
+
+async function startOnboarding(ctx: Context): Promise<void> {
+    await ctx.reply(
+        '👋 *Welcome to IQ Bot V3*\n\nDo you have an IQ Option account?',
+        { parse_mode: 'Markdown', reply_markup: onboardKeyboard() }
+    );
+}
+
+// ─── Approval gate ───────────────────────────────────────────────────────────
+
+async function requireApproval(ctx: Context): Promise<boolean> {
+    const user = getUser(ctx.from!.id);
+    if (!user || user.approval_status === 'pending') {
+        await startOnboarding(ctx);
+        return false;
+    }
+    if (user.approval_status === 'approved') return true;
+    if (user.approval_status === 'manual') {
+        await ctx.reply('⏳ Your account is pending manual approval. Contact the admin.');
+        return false;
+    }
+    await ctx.reply('❌ Your access has been rejected. Contact the admin if this is a mistake.');
+    return false;
 }
 
 // ─── Wizard state machine ────────────────────────────────────────────────────
@@ -56,9 +122,19 @@ interface ConnectState {
 }
 const connectSessions = new Map<number, ConnectState>();
 
+// ─── Onboarding wizard ───────────────────────────────────────────────────────
+
+interface OnboardState {
+    step: 'user_id';
+    hasAccount: boolean;
+}
+const onboardSessions = new Map<number, OnboardState>();
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
 function getSsidForUser(telegramId: number): string | null {
     const user = getUser(telegramId);
-    if (user) return user.ssid;
+    if (user?.ssid) return user.ssid;
     return IQ_SSID ?? null;
 }
 
@@ -93,7 +169,7 @@ async function loginAndCaptureSsid(email: string, password: string): Promise<{ s
     return { ssid, sdk };
 }
 
-// ─── Martingale loop (shared helper) ────────────────────────────────────────
+// ─── Martingale loop ─────────────────────────────────────────────────────────
 
 async function runMartingale(ctx: Context, ssid: string, pair: string, direction: 'call' | 'put', amount: number, timeframeSec = 60): Promise<void> {
     const dirStr = direction.toUpperCase();
@@ -194,9 +270,40 @@ async function runMartingale(ctx: Context, ssid: string, pair: string, direction
     );
 }
 
-// ─── /trade wizard ───────────────────────────────────────────────────────────
+// ─── /start ───────────────────────────────────────────────────────────────────
+
+bot.command('start', sendStartMenu);
+
+// ─── Onboarding actions ───────────────────────────────────────────────────────
+
+bot.action('onboard:yes', async ctx => {
+    await ctx.answerCbQuery();
+    onboardSessions.set(ctx.chat!.id, { step: 'user_id', hasAccount: true });
+    await ctx.reply(
+        '🔢 *Enter your IQ Option User ID*\n\n' +
+        '_How to find it: Open IQ Option → Profile → copy the numeric User ID_',
+        { parse_mode: 'Markdown' }
+    );
+});
+
+bot.action('onboard:no', async ctx => {
+    await ctx.answerCbQuery();
+    onboardSessions.set(ctx.chat!.id, { step: 'user_id', hasAccount: false });
+    const linkText = AFFILIATE_LINK
+        ? `👉 [Create your IQ Option account](${AFFILIATE_LINK})\n\n`
+        : '👉 Create an IQ Option account first, then come back.\n\n';
+    await ctx.reply(
+        linkText +
+        '🔢 Once your account is created, enter your *User ID* here:\n\n' +
+        '_How to find it: Open IQ Option → Profile → copy the numeric User ID_',
+        { parse_mode: 'Markdown' }
+    );
+});
+
+// ─── /trade wizard ────────────────────────────────────────────────────────────
 
 bot.command('trade', async ctx => {
+    if (!await requireApproval(ctx)) return;
     const chatId = ctx.chat.id;
     wizardSessions.set(chatId, { step: 'amount' });
     await ctx.reply('💰 *Enter amount:*', {
@@ -310,7 +417,7 @@ bot.action(/^pair:(.+)$/, async ctx => {
     await runMartingale(ctx, ssid, pair, analysis.direction, amount, timeframe);
 });
 
-// ─── Other commands ──────────────────────────────────────────────────────────
+// ─── Other commands ───────────────────────────────────────────────────────────
 
 bot.command('history', async ctx => {
     const trades = getRecentTrades(10);
@@ -352,12 +459,10 @@ bot.command('balance', async ctx => {
             const all = balances.getBalances();
             const demo = all.find(b => b.type === BalanceType.Demo);
             const real = all.find(b => b.type === BalanceType.Real);
-
             let msg = '💰 *Balances*\n\n';
             if (demo) msg += `🎮 Practice: $${demo.amount.toFixed(2)}\n`;
             if (real) msg += `💎 Live: $${real.amount.toFixed(2)}\n`;
             if (!demo && !real) msg += 'No balances found.';
-
             await ctx.reply(msg, { parse_mode: 'Markdown', reply_markup: backKeyboard() });
         } finally {
             await sdk.shutdown();
@@ -368,8 +473,6 @@ bot.command('balance', async ctx => {
     }
 });
 
-bot.command('start', sendStartMenu);
-
 // ─── User menu actions ────────────────────────────────────────────────────────
 
 bot.action('ui:start', async ctx => {
@@ -378,9 +481,10 @@ bot.action('ui:start', async ctx => {
 });
 
 bot.action('ui:trade', async ctx => {
+    await ctx.answerCbQuery();
+    if (!await requireApproval(ctx)) return;
     const chatId = ctx.chat!.id;
     wizardSessions.set(chatId, { step: 'amount' });
-    await ctx.answerCbQuery();
     await ctx.reply('💰 *Enter amount:*', {
         parse_mode: 'Markdown',
         reply_markup: amountKeyboard(),
@@ -445,56 +549,121 @@ bot.action('ui:settings', async ctx => {
 // ─── Admin ────────────────────────────────────────────────────────────────────
 
 bot.command('admin', async ctx => {
-    if (ctx.from?.id !== ADMIN_ID) {
+    if (ctx.from?.id !== getAdminId()) {
         await ctx.reply('Access denied.');
         return;
     }
-    await ctx.reply('🛡️ *Admin Panel*', { parse_mode: 'Markdown', reply_markup: adminKeyboard() });
+
+    const args = ctx.message.text.split(/\s+/).slice(1);
+    const sub = args[0];
+
+    if (!sub) {
+        const stats = getApprovalStats();
+        await ctx.reply(
+            `🛡️ *Admin Panel*\n\n` +
+            `👥 ${stats.total} users | ✅ ${stats.approved} approved | ⏳ ${stats.pending} pending | 🔔 ${stats.manual} manual | ❌ ${stats.rejected} rejected`,
+            { parse_mode: 'Markdown', reply_markup: adminKeyboard() }
+        );
+        return;
+    }
+
+    if (sub === 'users') {
+        const users = getAllUsers();
+        if (users.length === 0) { await ctx.reply('No users yet.'); return; }
+        let msg = `👥 *All Users* (${users.length})\n\n`;
+        for (const u of users) {
+            const statusEmoji = u.approval_status === 'approved' ? '✅' : u.approval_status === 'manual' ? '🔔' : u.approval_status === 'rejected' ? '❌' : '⏳';
+            const iqId = u.iq_user_id ? ` · IQ: \`${u.iq_user_id}\`` : '';
+            msg += `${statusEmoji} \`${u.telegram_id}\`${iqId} — ${u.approval_status}\n`;
+        }
+        await ctx.reply(msg, { parse_mode: 'Markdown' });
+        return;
+    }
+
+    if (sub === 'approve' && args[1]) {
+        const targetId = parseInt(args[1], 10);
+        if (isNaN(targetId)) { await ctx.reply('Usage: /admin approve <telegram_id>'); return; }
+        approveUser(targetId);
+        await ctx.reply(`✅ User \`${targetId}\` approved.`, { parse_mode: 'Markdown' });
+        try { await bot.telegram.sendMessage(targetId, '✅ *Your account has been approved!* You can now start trading.', { parse_mode: 'Markdown' }); } catch {}
+        return;
+    }
+
+    if (sub === 'reject' && args[1]) {
+        const targetId = parseInt(args[1], 10);
+        if (isNaN(targetId)) { await ctx.reply('Usage: /admin reject <telegram_id>'); return; }
+        rejectUser(targetId);
+        await ctx.reply(`❌ User \`${targetId}\` rejected.`, { parse_mode: 'Markdown' });
+        try { await bot.telegram.sendMessage(targetId, '❌ Your access request has been rejected. Contact the admin for more information.'); } catch {}
+        return;
+    }
+
+    if (sub === 'stats') {
+        const ts = getTradeStats();
+        const as_ = getApprovalStats();
+        const pnlSign = ts.totalPnl >= 0 ? '+' : '';
+        await ctx.reply(
+            `📊 *Admin Stats*\n\n` +
+            `*Users:*\n✅ Approved: ${as_.approved}\n⏳ Pending: ${as_.pending}\n🔔 Manual: ${as_.manual}\n❌ Rejected: ${as_.rejected}\n\n` +
+            `*Trades:*\n${ts.total} total | ${ts.wins}W / ${ts.losses}L / ${ts.ties}T | PnL: ${pnlSign}$${ts.totalPnl.toFixed(2)}`,
+            { parse_mode: 'Markdown' }
+        );
+        return;
+    }
+
+    await ctx.reply('Commands: /admin users | /admin approve <id> | /admin reject <id> | /admin stats');
 });
 
 bot.action('admin:users', async ctx => {
     await ctx.answerCbQuery();
     const users = getAllUsers();
-    if (users.length === 0) {
-        await ctx.reply('👥 No connected users.');
-        return;
-    }
-    let msg = `👥 *Connected Users* (${users.length})\n\n`;
+    if (users.length === 0) { await ctx.reply('No users yet.'); return; }
+    let msg = `👥 *All Users* (${users.length})\n\n`;
     for (const u of users) {
-        const lastUsed = u.last_used ? u.last_used.replace('T', ' ').slice(0, 16) : '—';
-        msg += `• \`${u.telegram_id}\` — last: ${lastUsed}\n`;
+        const statusEmoji = u.approval_status === 'approved' ? '✅' : u.approval_status === 'manual' ? '🔔' : u.approval_status === 'rejected' ? '❌' : '⏳';
+        const iqId = u.iq_user_id ? ` · IQ: \`${u.iq_user_id}\`` : '';
+        msg += `${statusEmoji} \`${u.telegram_id}\`${iqId} — ${u.approval_status}\n`;
     }
     await ctx.reply(msg, { parse_mode: 'Markdown' });
 });
+
 bot.action('admin:broadcast', async ctx => {
     await ctx.answerCbQuery();
     await ctx.reply('📢 Broadcast system coming soon.');
 });
+
 bot.action('admin:stats', async ctx => {
     await ctx.answerCbQuery();
-    await ctx.reply('📊 Admin statistics coming soon.');
+    const ts = getTradeStats();
+    const as_ = getApprovalStats();
+    const pnlSign = ts.totalPnl >= 0 ? '+' : '';
+    await ctx.reply(
+        `📊 *Admin Stats*\n\n` +
+        `*Users:*\n✅ Approved: ${as_.approved}\n⏳ Pending: ${as_.pending}\n🔔 Manual: ${as_.manual}\n❌ Rejected: ${as_.rejected}\n\n` +
+        `*Trades:*\n${ts.total} total | ${ts.wins}W / ${ts.losses}L / ${ts.ties}T | PnL: ${pnlSign}$${ts.totalPnl.toFixed(2)}`,
+        { parse_mode: 'Markdown' }
+    );
 });
+
 bot.action('admin:tokens', async ctx => {
     await ctx.answerCbQuery();
     await ctx.reply('🔑 Token management coming soon.');
 });
 
-// ─── /connect wizard ─────────────────────────────────────────────────────────
+// ─── /connect wizard ──────────────────────────────────────────────────────────
 
 bot.command('connect', async ctx => {
-    const chatId = ctx.chat.id;
-    connectSessions.set(chatId, { step: 'email' });
+    connectSessions.set(ctx.chat.id, { step: 'email' });
     await ctx.reply('📧 Enter your IQ Option email:');
 });
 
 bot.command('disconnect', async ctx => {
-    const telegramId = ctx.from!.id;
-    deleteUser(telegramId);
+    deleteUser(ctx.from!.id);
     connectSessions.delete(ctx.chat.id);
     await ctx.reply('✅ Disconnected. Your IQ Option session has been removed.');
 });
 
-// ─── /pairs debug ────────────────────────────────────────────────────────────
+// ─── /pairs debug ─────────────────────────────────────────────────────────────
 
 bot.command('pairs', async ctx => {
     const pairsSsid = getSsidForUser(ctx.from!.id);
@@ -524,8 +693,9 @@ bot.command('pairs', async ctx => {
 
 bot.command('ping', ctx => ctx.reply('pong'));
 
-// Text handler: covers both connect wizard and trade custom-amount step.
+// ─── Text handler (all wizards) ───────────────────────────────────────────────
 // Must be registered after all commands so command handlers take priority.
+
 bot.on('text', async ctx => {
     if (ctx.message.text.startsWith('/')) return;
     const chatId = ctx.chat.id;
@@ -541,7 +711,6 @@ bot.on('text', async ctx => {
         } else if (connectState.step === 'password' && connectState.email) {
             const email = connectState.email;
             connectSessions.delete(chatId);
-            // Delete the password message so it's never visible in chat (issue #14)
             try { await ctx.deleteMessage(); } catch {}
             await ctx.reply('🔐 Logging in...');
             try {
@@ -563,6 +732,65 @@ bot.on('text', async ctx => {
                 const msg = err instanceof Error ? err.message : 'Unknown error';
                 await ctx.reply(`❌ Connection failed: ${msg}`);
             }
+        }
+        return;
+    }
+
+    // ── Onboarding — User ID submission ──────────────────────────────────────
+    const onboardState = onboardSessions.get(chatId);
+    if (onboardState?.step === 'user_id') {
+        const iqUserId = parseInt(text, 10);
+        if (isNaN(iqUserId) || iqUserId <= 0) {
+            await ctx.reply('Please enter a valid numeric IQ Option User ID.');
+            return;
+        }
+        onboardSessions.delete(chatId);
+        await ctx.reply('🔍 Checking your account...');
+
+        upsertOnboardingUser(ctx.from!.id, iqUserId);
+
+        try {
+            const result = await checkAffiliate(iqUserId);
+            if (result.found) {
+                approveUser(ctx.from!.id, result.data ? JSON.stringify(result.data) : undefined);
+                await ctx.reply(
+                    '✅ *Account verified!* You\'re all set.\n\nUse /start to open the trading menu.',
+                    { parse_mode: 'Markdown' }
+                );
+            } else {
+                setManualApproval(ctx.from!.id);
+                await ctx.reply(
+                    '⏳ Your User ID wasn\'t found in our affiliate records.\n\n' +
+                    'A notification has been sent to the admin for manual review. ' +
+                    'You\'ll be notified once approved.'
+                );
+                // Notify admin
+                const adminId = getAdminId();
+                try {
+                    await bot.telegram.sendMessage(
+                        adminId,
+                        `🔔 *Manual approval needed*\nTelegram ID: \`${ctx.from!.id}\`\nIQ User ID: \`${iqUserId}\`\n\nApprove: /admin approve ${ctx.from!.id}\nReject: /admin reject ${ctx.from!.id}`,
+                        { parse_mode: 'Markdown' }
+                    );
+                } catch {}
+            }
+        } catch (err: unknown) {
+            // Affiliate check failed (Python not set up yet) — fall back to manual
+            const errMsg = err instanceof Error ? err.message : 'Unknown error';
+            console.error('[affiliate check]', errMsg);
+            setManualApproval(ctx.from!.id);
+            await ctx.reply(
+                '⏳ Your User ID has been submitted for manual review.\n' +
+                'You\'ll be notified once the admin approves your account.'
+            );
+            const adminId = getAdminId();
+            try {
+                await bot.telegram.sendMessage(
+                    adminId,
+                    `🔔 *Manual approval needed* (auto-check unavailable)\nTelegram ID: \`${ctx.from!.id}\`\nIQ User ID: \`${iqUserId}\`\n\nApprove: /admin approve ${ctx.from!.id}\nReject: /admin reject ${ctx.from!.id}`,
+                    { parse_mode: 'Markdown' }
+                );
+            } catch {}
         }
         return;
     }

@@ -21,3 +21,12 @@ export function backKeyboard(): IKMarkup {
         inline_keyboard: [[{ text: '🔙 Back', callback_data: 'ui:start' }]],
     };
 }
+
+export function onboardKeyboard(): IKMarkup {
+    return {
+        inline_keyboard: [[
+            { text: '✅ Yes, I have one', callback_data: 'onboard:yes' },
+            { text: '➕ No, create one',  callback_data: 'onboard:no' },
+        ]],
+    };
+}

@@ -1,7 +1,10 @@
-export const ADMIN_ID = 1615652240;
-
 type Btn = { text: string; callback_data: string };
 type IKMarkup = { inline_keyboard: Btn[][] };
+
+export function getAdminId(): number {
+    const fromEnv = parseInt(process.env.ADMIN_USER_ID ?? '', 10);
+    return isNaN(fromEnv) ? 1615652240 : fromEnv;
+}
 
 export function adminKeyboard(): IKMarkup {
     return {
