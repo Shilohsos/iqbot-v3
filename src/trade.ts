@@ -61,11 +61,8 @@ export async function executeTradeWithSdk(sdk: ClientSdk, trade: TradeRequest): 
         const available = instrumentsFacade.getAvailableForBuyAt(currentTime);
 
         const targetSize = trade.timeframeSec ?? 60;
-        const instrument =
-            available.find(i => i.expirationSize === targetSize && i.durationRemainingForPurchase(currentTime) > 3000) ??
-            (targetSize !== 60 ? available.find(i => i.expirationSize === 60 && i.durationRemainingForPurchase(currentTime) > 3000) : undefined) ??
-            available.find(i => i.durationRemainingForPurchase(currentTime) > 3000);
-        if (!instrument) return errorResult(trade, `No available instrument for ${trade.pair}`);
+        const instrument = available.find(i => i.expirationSize === targetSize && i.durationRemainingForPurchase(currentTime) > 3000);
+        if (!instrument) return errorResult(trade, `No ${targetSize}s instrument available for ${trade.pair}`);
 
         const dir = trade.direction === 'call' ? TurboOptionsDirection.Call : TurboOptionsDirection.Put;
         const option = await turboOptions.buy(instrument, dir, trade.amount, demoBalance);
