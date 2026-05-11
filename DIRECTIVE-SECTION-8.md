@@ -62,20 +62,19 @@ After user submits User ID:
 - First deposit amount
 - (any other data visible in channel messages)
 
-**Implementation notes:**
-- Do NOT add full Telethon as dependency to the Node.js project
-- Instead: create a **standalone Python script** (`scripts/check_affiliate.py`) that:
-  - Takes a User ID as argument
-  - Uses Telethon with the session string (from env var `TELETHON_SESSION`)
+**Implementation notes (TypeScript — NO Python):**
+- Use **GramJS** (https://gram.js.org/) — the TypeScript MTProto client, equivalent to Telethon
+- Single runtime (Node.js), no child process or Python dependency
+- Create a module `src/affiliate.ts` that:
+  - Takes a User ID as input
+  - Uses GramJS with the session string (from env var `TELETHON_SESSION`)
   - Connects to the tracking channel (channel ID from env var `AFFILIATE_CHANNEL_ID`)
   - Scans last N messages (configurable, default 1000)
   - Returns `true` + user data if found, `false` if not found
-- Bot spawns child process to call this script when needed
 - Session string stored in `.env` as `TELETHON_SESSION`
 
-**Dependencies (Python):**
-- `telethon`
-- `python-dotenv`
+**Dependencies (npm):**
+- `gramjs`
 
 ---
 
