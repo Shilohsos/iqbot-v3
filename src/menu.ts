@@ -27,8 +27,9 @@ export function timeframeKeyboard(): IKMarkup {
     return {
         inline_keyboard: [
             [
-                { text: '1m', callback_data: 'tf:60' },
-                { text: '5m', callback_data: 'tf:300' },
+                { text: '30s', callback_data: 'tf:30' },
+                { text: '1m',  callback_data: 'tf:60' },
+                { text: '5m',  callback_data: 'tf:300' },
                 { text: '15m', callback_data: 'tf:900' },
             ],
             [{ text: '❌ Cancel', callback_data: 'wizard:cancel' }],
@@ -58,6 +59,7 @@ export function pairKeyboard(page = 0): IKMarkup {
 }
 
 export function tfLabel(timeframeSec: number): string {
+    if (timeframeSec === 30) return '30s';
     if (timeframeSec === 60) return '1m';
     if (timeframeSec === 300) return '5m';
     return '15m';
