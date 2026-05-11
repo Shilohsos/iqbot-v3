@@ -1,6 +1,6 @@
 export const OTC_PAIRS = [
     'EURUSD-OTC', 'GBPUSD-OTC', 'EURJPY-OTC', 'GBPJPY-OTC',
-    'USDJPY-OTC', 'AUDUSD-OTC', 'USDCAD-OTC', 'EURGBP-OTC',
+    'AUDUSD-OTC', 'USDCAD-OTC', 'EURGBP-OTC', 'USDCHF-OTC',
 ];
 
 type Btn = { text: string; callback_data: string };
