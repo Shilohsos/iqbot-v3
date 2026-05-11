@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import { Telegraf, Context } from 'telegraf';
 import { ClientSdk, SsidAuthMethod, BalanceType } from './index.js';
-import { WS_URL, PLATFORM_ID, IQ_HOST } from './protocol.js';
+import { WS_URL, PLATFORM_ID, IQ_HOST, IQ_AUTH_URL } from './protocol.js';
 import { executeTrade, type TradeRequest, type TradeResult } from './trade.js';
 import { getRecentTrades, getTradeStats, getUser, saveUser, deleteUser, getAllUsers } from './db.js';
 import { analyzePair, type AnalysisResult } from './analysis.js';
@@ -64,7 +64,7 @@ function getSsidForUser(telegramId: number): string | null {
 // Replicates LoginPasswordAuthMethod's internal HTTP call with correct headers,
 // capturing the SSID so it can be persisted without storing the password.
 async function loginAndCaptureSsid(email: string, password: string): Promise<{ ssid: string; sdk: ClientSdk }> {
-    const res = await fetch(`${IQ_HOST}/v2/login`, {
+    const res = await fetch(`${IQ_AUTH_URL}/v2/login`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -72,7 +72,18 @@ async function loginAndCaptureSsid(email: string, password: string): Promise<{ s
         },
         body: JSON.stringify({ identifier: email, password }),
     });
-    const data = await res.json() as { code?: string; message?: string; ssid?: string };
+
+    // Read as text first so we can log the raw body if JSON parsing fails.
+    const rawBody = await res.text();
+    console.log(`[connect] HTTP ${res.status}: ${rawBody.slice(0, 200)}`);
+
+    let data: { code?: string; message?: string; ssid?: string };
+    try {
+        data = JSON.parse(rawBody);
+    } catch {
+        throw new Error(`Login response is not JSON (HTTP ${res.status}): ${rawBody.slice(0, 100)}`);
+    }
+
     if (data.code !== 'success' || !data.ssid) {
         throw new Error(data.message ?? 'Login failed');
     }
