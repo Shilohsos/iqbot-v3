@@ -3,7 +3,7 @@ module.exports = {
     {
       name: 'iqbot-v3-bot',
       script: 'src/bot.ts',
-      interpreter: './node_modules/.bin/tsx',
+      interpreter: '/root/iqbot-v3/node_modules/.bin/tsx',
       cwd: '/root/iqbot-v3',
       autorestart: true,
       restart_delay: 3000,
