@@ -30,16 +30,37 @@ CREATE TABLE IF NOT EXISTS users (
 
 ### 2. Connect flow: `/connect`
 
-User sends `/connect <ssid>` to link their IQ Option account.
+User calls `/connect` → bot asks for email → bot asks for password → SDK authenticates.
 
 ```
-User: /connect 93d48bdced4e547b5d5cd604f8deda7p
-Bot: Verifying credentials...
-Bot: ✅ Connected! Balance: Practice $4,412.87
+User: /connect
+Bot: 📧 Enter your IQ Option email:
+User: user@email.com
+Bot: 🔑 Enter your password:
+User: ********
+Bot: 🔐 Logging in...
+Bot: ✅ Connected!
+      🎮 Practice: $4,412.87
+      💎 Live: $127.50
 ```
 
-Verification: Create a temporary SDK connection, fetch balances, confirm
-the SSID is valid. Show the user their balance to confirm correct account.
+No SSID input from user. SDK auto-generates it via `LoginPasswordAuthMethod`.
+
+Implementation:
+
+```typescript
+import { LoginPasswordAuthMethod } from './index.js';
+
+// In /connect handler:
+const authMethod = new LoginPasswordAuthMethod(IQ_HOST, email, password);
+const sdk = await ClientSdk.create(WS_URL, PLATFORM_ID, authMethod, { host: IQ_HOST });
+```
+
+After successful connection:
+1. Show both balances (demo + real) using `sdk.balances()`
+2. Extract the SSID from the SDK connection (if accessible) or just store email/password
+   for reconnection. **Better: store email+password encrypted, re-authenticate each session.**
+3. Save to `users` table
 
 ### 3. Route trades per-user
 
