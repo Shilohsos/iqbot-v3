@@ -24,7 +24,6 @@ const bot = new Telegraf(BOT_TOKEN);
 const MAX_ROUNDS = 6;
 const MAX_EXPOSURE_MULTIPLIER = Math.pow(2, MAX_ROUNDS) - 1; // 63
 const ROUND_COOLDOWN_MS = 5_000;
-const ROUND_TIMEOUT_MS = 120_000;
 
 // ─── Wizard state machine ────────────────────────────────────────────────────
 
@@ -41,6 +40,7 @@ const wizardSessions = new Map<number, WizardState>();
 async function runMartingale(ctx: Context, pair: string, direction: 'call' | 'put', amount: number, timeframeSec = 60): Promise<void> {
     const dirStr = direction.toUpperCase();
     const runId = crypto.randomUUID();
+    const roundTimeoutMs = (timeframeSec + 90) * 1000;
     let currentAmount = amount;
     let totalPnl = 0;
 
@@ -69,7 +69,7 @@ async function runMartingale(ctx: Context, pair: string, direction: 'call' | 'pu
                 new Promise<never>((_, reject) => {
                     roundTimer = setTimeout(
                         () => reject(new Error('Round timeout')),
-                        ROUND_TIMEOUT_MS,
+                        roundTimeoutMs,
                     );
                 }),
             ]);
