@@ -243,27 +243,6 @@ bot.action(/^pair:(.+)$/, async ctx => {
     await runMartingale(ctx, pair, analysis.direction, amount);
 });
 
-// Custom amount: plain text input after tapping "Custom"
-bot.on('text', async ctx => {
-    if (ctx.message.text.startsWith('/')) return;
-    const chatId = ctx.chat.id;
-    const state = wizardSessions.get(chatId);
-    if (!state || state.step !== 'custom_amount') return;
-
-    const amount = parseFloat(ctx.message.text.trim());
-    if (isNaN(amount) || amount <= 0) {
-        await ctx.reply('Please enter a valid positive number (e.g. 75).');
-        return;
-    }
-
-    state.amount = amount;
-    state.step = 'timeframe';
-    await ctx.reply('⏱ *Pick timeframe:*', {
-        parse_mode: 'Markdown',
-        reply_markup: timeframeKeyboard(),
-    });
-});
-
 // ─── Other commands ──────────────────────────────────────────────────────────
 
 bot.command('history', async ctx => {
@@ -331,6 +310,28 @@ bot.command('start', async ctx => {
 });
 
 bot.command('ping', ctx => ctx.reply('pong'));
+
+// Custom amount: plain text input after tapping "Custom".
+// Must be registered after all commands so command handlers take priority.
+bot.on('text', async ctx => {
+    if (ctx.message.text.startsWith('/')) return;
+    const chatId = ctx.chat.id;
+    const state = wizardSessions.get(chatId);
+    if (!state || state.step !== 'custom_amount') return;
+
+    const amount = parseFloat(ctx.message.text.trim());
+    if (isNaN(amount) || amount <= 0) {
+        await ctx.reply('Please enter a valid positive number (e.g. 75).');
+        return;
+    }
+
+    state.amount = amount;
+    state.step = 'timeframe';
+    await ctx.reply('⏱ *Pick timeframe:*', {
+        parse_mode: 'Markdown',
+        reply_markup: timeframeKeyboard(),
+    });
+});
 
 bot.launch();
 console.log('[iqbot-v3] running');
