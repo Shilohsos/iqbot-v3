@@ -1,6 +1,4 @@
 import 'dotenv/config';
-import { spawn } from 'child_process';
-import { resolve } from 'node:path';
 import { Telegraf, Context } from 'telegraf';
 import { ClientSdk, SsidAuthMethod, BalanceType } from './index.js';
 import { WS_URL, PLATFORM_ID, IQ_HOST, IQ_AUTH_URL } from './protocol.js';
@@ -15,6 +13,7 @@ import { amountKeyboard, timeframeKeyboard, pairKeyboard, tfLabel, OTC_PAIRS } f
 import { createSdk } from './trade.js';
 import { startKeyboard, backKeyboard, onboardKeyboard } from './ui/user.js';
 import { getAdminId, adminKeyboard } from './ui/admin.js';
+import { checkAffiliate } from './affiliate.js';
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const IQ_SSID = process.env.IQ_SSID;         // optional fallback for users without /connect
@@ -31,38 +30,6 @@ const bot = new Telegraf(BOT_TOKEN);
 const MAX_ROUNDS = 6;
 const MAX_EXPOSURE_MULTIPLIER = Math.pow(2, MAX_ROUNDS) - 1; // 63
 const ROUND_COOLDOWN_MS = 5_000;
-
-// ─── Affiliate channel check (Python child process) ──────────────────────────
-
-interface AffiliateResult {
-    found: boolean;
-    data?: { message: string; date: string } | null;
-    error?: string;
-}
-
-function checkAffiliate(iqUserId: number): Promise<AffiliateResult> {
-    return new Promise((resolve2, reject) => {
-        const proc = spawn('python3', [resolve('scripts/check_affiliate.py'), String(iqUserId)], {
-            env: process.env,
-        });
-        let stdout = '';
-        let stderr = '';
-        proc.stdout.on('data', (d: Buffer) => { stdout += d.toString(); });
-        proc.stderr.on('data', (d: Buffer) => { stderr += d.toString(); });
-        proc.on('error', reject);
-        proc.on('close', (code) => {
-            if (code !== 0) {
-                reject(new Error(`check_affiliate.py exited ${code}: ${stderr.slice(0, 200)}`));
-                return;
-            }
-            try {
-                resolve2(JSON.parse(stdout.trim()) as AffiliateResult);
-            } catch {
-                reject(new Error(`check_affiliate.py bad JSON: ${stdout.slice(0, 200)}`));
-            }
-        });
-    });
-}
 
 // ─── Start menu (admin vs client) ────────────────────────────────────────────
 
