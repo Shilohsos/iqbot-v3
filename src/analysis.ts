@@ -10,11 +10,11 @@ export async function analyzePair(ssid: string, pair: string, timeframeSec: numb
     const sdk = await createSdk(ssid);
     try {
         const turboOptions = await sdk.turboOptions();
-        const normalizedPair = pair.replace(/^front\./i, '');
+        const normTicker = (s: string) => s.toUpperCase().replace(/^front\./i, '').replace(/[-/\s]/g, '');
+        const normalizedInput = normTicker(pair);
         const active = turboOptions.getActives().find(a =>
-            a.ticker === normalizedPair ||
-            a.localizationKey === normalizedPair ||
-            a.localizationKey === `front.${normalizedPair}`
+            normTicker(a.ticker) === normalizedInput ||
+            normTicker(a.localizationKey) === normalizedInput
         );
         if (!active) throw new Error(`Unknown pair: ${pair}`);
 

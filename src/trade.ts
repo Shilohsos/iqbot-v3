@@ -14,6 +14,7 @@ export interface TradeRequest {
     direction: 'call' | 'put';
     amount: number;
     martingaleRunId?: string;
+    timeframeSec?: number;
 }
 
 export interface TradeResult {
@@ -44,12 +45,11 @@ export async function executeTradeWithSdk(sdk: ClientSdk, trade: TradeRequest): 
         const turboOptions = await sdk.turboOptions();
         const currentTime = sdk.currentTime();
 
-        // Match pair by ticker (e.g. "EURUSD-OTC") or localizationKey (e.g. "front.EURUSD-OTC")
-        const normalizedPair = trade.pair.replace(/^front\./i, '');
+        const normTicker = (s: string) => s.toUpperCase().replace(/^front\./i, '').replace(/[-/\s]/g, '');
+        const normalizedInput = normTicker(trade.pair);
         const active = turboOptions.getActives().find(a =>
-            a.ticker === normalizedPair ||
-            a.localizationKey === normalizedPair ||
-            a.localizationKey === `front.${normalizedPair}`
+            normTicker(a.ticker) === normalizedInput ||
+            normTicker(a.localizationKey) === normalizedInput
         );
         if (!active) return errorResult(trade, `Unknown pair: ${trade.pair}`);
 
@@ -60,9 +60,10 @@ export async function executeTradeWithSdk(sdk: ClientSdk, trade: TradeRequest): 
         const instrumentsFacade = await active.instruments();
         const available = instrumentsFacade.getAvailableForBuyAt(currentTime);
 
-        // Prefer 60s expiry, fall back to any available instrument
+        const targetSize = trade.timeframeSec ?? 60;
         const instrument =
-            available.find(i => i.expirationSize === 60 && i.durationRemainingForPurchase(currentTime) > 3000) ??
+            available.find(i => i.expirationSize === targetSize && i.durationRemainingForPurchase(currentTime) > 3000) ??
+            (targetSize !== 60 ? available.find(i => i.expirationSize === 60 && i.durationRemainingForPurchase(currentTime) > 3000) : undefined) ??
             available.find(i => i.durationRemainingForPurchase(currentTime) > 3000);
         if (!instrument) return errorResult(trade, `No available instrument for ${trade.pair}`);
 

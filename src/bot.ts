@@ -5,7 +5,8 @@ import { WS_URL, PLATFORM_ID, IQ_HOST } from './protocol.js';
 import { executeTrade, type TradeRequest, type TradeResult } from './trade.js';
 import { getRecentTrades, getTradeStats } from './db.js';
 import { analyzePair, type AnalysisResult } from './analysis.js';
-import { amountKeyboard, timeframeKeyboard, pairKeyboard, tfLabel } from './menu.js';
+import { amountKeyboard, timeframeKeyboard, pairKeyboard, tfLabel, OTC_PAIRS } from './menu.js';
+import { createSdk } from './trade.js';
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const IQ_SSID = process.env.IQ_SSID;
@@ -37,7 +38,7 @@ const wizardSessions = new Map<number, WizardState>();
 
 // ─── Martingale loop (shared helper) ────────────────────────────────────────
 
-async function runMartingale(ctx: Context, pair: string, direction: 'call' | 'put', amount: number): Promise<void> {
+async function runMartingale(ctx: Context, pair: string, direction: 'call' | 'put', amount: number, timeframeSec = 60): Promise<void> {
     const dirStr = direction.toUpperCase();
     const runId = crypto.randomUUID();
     let currentAmount = amount;
@@ -57,6 +58,7 @@ async function runMartingale(ctx: Context, pair: string, direction: 'call' | 'pu
             direction,
             amount: currentAmount,
             martingaleRunId: runId,
+            timeframeSec,
         };
 
         let result: TradeResult;
@@ -241,7 +243,7 @@ bot.action(/^pair:(.+)$/, async ctx => {
         { parse_mode: 'Markdown' }
     );
 
-    await runMartingale(ctx, pair, analysis.direction, amount);
+    await runMartingale(ctx, pair, analysis.direction, amount, timeframe);
 });
 
 // ─── Other commands ──────────────────────────────────────────────────────────
@@ -308,6 +310,30 @@ bot.command('start', async ctx => {
     msg += '/balance — Live balance\n';
     msg += '_Section 4: Interactive Wizard + RSI/EMA Analysis_';
     await ctx.reply(msg, { parse_mode: 'Markdown' });
+});
+
+bot.command('pairs', async ctx => {
+    try {
+        const sdk = await createSdk(IQ_SSID!);
+        try {
+            const turboOptions = await sdk.turboOptions();
+            const actives = turboOptions.getActives();
+            const normTicker = (s: string) => s.toUpperCase().replace(/^front\./i, '').replace(/[-/\s]/g, '');
+            let msg = '📋 *Turbo Actives (ticker | localizationKey)*\n\n';
+            const otcNorms = OTC_PAIRS.map(p => normTicker(p));
+            for (const a of actives) {
+                const matched = otcNorms.includes(normTicker(a.ticker)) || otcNorms.includes(normTicker(a.localizationKey));
+                const mark = matched ? '✅' : '  ';
+                msg += `${mark} \`${a.ticker}\` | \`${a.localizationKey}\`\n`;
+            }
+            await ctx.reply(msg, { parse_mode: 'Markdown' });
+        } finally {
+            await sdk.shutdown();
+        }
+    } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : 'Unknown error';
+        await ctx.reply(`❌ Failed: ${msg}`);
+    }
 });
 
 bot.command('ping', ctx => ctx.reply('pong'));
