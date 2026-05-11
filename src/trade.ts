@@ -1,7 +1,7 @@
 import {
     ClientSdk,
     SsidAuthMethod,
-    TurboOptionsDirection,
+    BlitzOptionsDirection,
     BalanceType,
     type Positions,
     type Position,
@@ -27,11 +27,15 @@ export interface TradeResult {
     error?: string;
 }
 
+const normTicker = (s: string) => s.toUpperCase().replace(/^front\./i, '').replace(/[-/\s]/g, '');
+
 /**
  * Runs a single trade on an already-authenticated SDK instance.
  * The caller owns the SDK lifecycle (connect / shutdown).
  * Catches SDK-internal TimeoutError and converts it to an ERROR result
  * so the martingale loop can handle it gracefully instead of crashing.
+ *
+ * All timeframes (30s / 60s / 300s) execute via BlitzOptions.
  */
 export async function executeTradeWithSdk(sdk: ClientSdk, trade: TradeRequest): Promise<TradeResult> {
     try {
@@ -42,32 +46,23 @@ export async function executeTradeWithSdk(sdk: ClientSdk, trade: TradeRequest): 
         const demoBalance = balances.getBalances().find(b => b.type === BalanceType.Demo);
         if (!demoBalance) return errorResult(trade, 'No demo balance found');
 
-        const turboOptions = await sdk.turboOptions();
         const currentTime = sdk.currentTime();
-
-        const normTicker = (s: string) => s.toUpperCase().replace(/^front\./i, '').replace(/[-/\s]/g, '');
+        const targetSize = trade.timeframeSec ?? 60;
         const normalizedInput = normTicker(trade.pair);
-        const active = turboOptions.getActives().find(a =>
+
+        const blitzOptions = await sdk.blitzOptions();
+        const active = blitzOptions.getActives().find(a =>
             normTicker(a.ticker) === normalizedInput ||
             normTicker(a.localizationKey) === normalizedInput
         );
         if (!active) return errorResult(trade, `Unknown pair: ${trade.pair}`);
+        if (!active.canBeBoughtAt(currentTime)) return errorResult(trade, `${trade.pair} market is closed right now`);
+        if (!active.expirationTimes.includes(targetSize)) return errorResult(trade, `No ${targetSize}s instrument available for ${trade.pair}`);
 
-        if (!active.canBeBoughtAt(currentTime)) {
-            return errorResult(trade, `${trade.pair} market is closed right now`);
-        }
+        const dir = trade.direction === 'call' ? BlitzOptionsDirection.Call : BlitzOptionsDirection.Put;
+        const option = await blitzOptions.buy(active, dir, targetSize, trade.amount, demoBalance);
 
-        const instrumentsFacade = await active.instruments();
-        const available = instrumentsFacade.getAvailableForBuyAt(currentTime);
-
-        const targetSize = trade.timeframeSec ?? 60;
-        const instrument = available.find(i => i.expirationSize === targetSize && i.durationRemainingForPurchase(currentTime) > 3000);
-        if (!instrument) return errorResult(trade, `No ${targetSize}s instrument available for ${trade.pair}`);
-
-        const dir = trade.direction === 'call' ? TurboOptionsDirection.Call : TurboOptionsDirection.Put;
-        const option = await turboOptions.buy(instrument, dir, trade.amount, demoBalance);
-
-        const result = await waitForResult(positions, option.id, instrument.expirationSize + 90);
+        const result = await waitForResult(positions, option.id, targetSize + 90);
         const tradeResult: TradeResult = {
             ...result,
             tradeId: option.id,
@@ -99,7 +94,7 @@ export async function executeTradeWithSdk(sdk: ClientSdk, trade: TradeRequest): 
 }
 
 /**
- * Convenience wrapper for one-shot trades (e.g. /balance).
+ * Convenience wrapper for one-shot trades.
  * Creates its own SDK connection and shuts it down after the trade.
  */
 export async function executeTrade(ssid: string, trade: TradeRequest): Promise<TradeResult> {
