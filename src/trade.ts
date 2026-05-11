@@ -2,7 +2,6 @@ import {
     ClientSdk,
     SsidAuthMethod,
     BlitzOptionsDirection,
-    BinaryOptionsDirection,
     BalanceType,
     type Positions,
     type Position,
@@ -36,9 +35,7 @@ const normTicker = (s: string) => s.toUpperCase().replace(/^front\./i, '').repla
  * Catches SDK-internal TimeoutError and converts it to an ERROR result
  * so the martingale loop can handle it gracefully instead of crashing.
  *
- * Facade routing:
- *   30s / 60s / 300s → BlitzOptions
- *   900s             → BinaryOptions
+ * All timeframes (30s / 60s / 300s) execute via BlitzOptions.
  */
 export async function executeTradeWithSdk(sdk: ClientSdk, trade: TradeRequest): Promise<TradeResult> {
     try {
@@ -53,49 +50,22 @@ export async function executeTradeWithSdk(sdk: ClientSdk, trade: TradeRequest): 
         const targetSize = trade.timeframeSec ?? 60;
         const normalizedInput = normTicker(trade.pair);
 
-        let optionId: number;
-        let expirySeconds: number;
+        const blitzOptions = await sdk.blitzOptions();
+        const active = blitzOptions.getActives().find(a =>
+            normTicker(a.ticker) === normalizedInput ||
+            normTicker(a.localizationKey) === normalizedInput
+        );
+        if (!active) return errorResult(trade, `Unknown pair: ${trade.pair}`);
+        if (!active.canBeBoughtAt(currentTime)) return errorResult(trade, `${trade.pair} market is closed right now`);
+        if (!active.expirationTimes.includes(targetSize)) return errorResult(trade, `No ${targetSize}s instrument available for ${trade.pair}`);
 
-        if (targetSize === 900) {
-            // ── Binary Options (15m) ──────────────────────────────────────────
-            const binaryOptions = await sdk.binaryOptions();
-            const active = binaryOptions.getActives().find(a =>
-                normTicker(a.ticker) === normalizedInput ||
-                normTicker(a.localizationKey) === normalizedInput
-            );
-            if (!active) return errorResult(trade, `Unknown pair: ${trade.pair}`);
-            if (!active.canBeBoughtAt(currentTime)) return errorResult(trade, `${trade.pair} market is closed right now`);
+        const dir = trade.direction === 'call' ? BlitzOptionsDirection.Call : BlitzOptionsDirection.Put;
+        const option = await blitzOptions.buy(active, dir, targetSize, trade.amount, demoBalance);
 
-            const instrumentsFacade = await active.instruments();
-            const available = instrumentsFacade.getAvailableForBuyAt(currentTime);
-            const instrument = available.find(i => i.expirationSize === 900 && i.durationRemainingForPurchase(currentTime) > 3000);
-            if (!instrument) return errorResult(trade, `No 900s instrument available for ${trade.pair}`);
-
-            const dir = trade.direction === 'call' ? BinaryOptionsDirection.Call : BinaryOptionsDirection.Put;
-            const option = await binaryOptions.buy(instrument, dir, trade.amount, demoBalance);
-            optionId = option.id;
-            expirySeconds = 900;
-        } else {
-            // ── Blitz Options (30s / 60s / 300s) ─────────────────────────────
-            const blitzOptions = await sdk.blitzOptions();
-            const active = blitzOptions.getActives().find(a =>
-                normTicker(a.ticker) === normalizedInput ||
-                normTicker(a.localizationKey) === normalizedInput
-            );
-            if (!active) return errorResult(trade, `Unknown pair: ${trade.pair}`);
-            if (!active.canBeBoughtAt(currentTime)) return errorResult(trade, `${trade.pair} market is closed right now`);
-            if (!active.expirationTimes.includes(targetSize)) return errorResult(trade, `No ${targetSize}s instrument available for ${trade.pair}`);
-
-            const dir = trade.direction === 'call' ? BlitzOptionsDirection.Call : BlitzOptionsDirection.Put;
-            const option = await blitzOptions.buy(active, dir, targetSize, trade.amount, demoBalance);
-            optionId = option.id;
-            expirySeconds = targetSize;
-        }
-
-        const result = await waitForResult(positions, optionId, expirySeconds + 90);
+        const result = await waitForResult(positions, option.id, targetSize + 90);
         const tradeResult: TradeResult = {
             ...result,
-            tradeId: optionId,
+            tradeId: option.id,
             pair: trade.pair,
             direction: trade.direction,
             amount: trade.amount,

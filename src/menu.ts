@@ -30,7 +30,6 @@ export function timeframeKeyboard(): IKMarkup {
                 { text: '30s', callback_data: 'tf:30' },
                 { text: '1m',  callback_data: 'tf:60' },
                 { text: '5m',  callback_data: 'tf:300' },
-                { text: '15m', callback_data: 'tf:900' },
             ],
             [{ text: '❌ Cancel', callback_data: 'wizard:cancel' }],
         ],
