@@ -7,6 +7,8 @@ import { getRecentTrades, getTradeStats } from './db.js';
 import { analyzePair, type AnalysisResult } from './analysis.js';
 import { amountKeyboard, timeframeKeyboard, pairKeyboard, tfLabel, OTC_PAIRS } from './menu.js';
 import { createSdk } from './trade.js';
+import { startKeyboard, backKeyboard } from './ui/user.js';
+import { ADMIN_ID, adminKeyboard } from './ui/admin.js';
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const IQ_SSID = process.env.IQ_SSID;
@@ -23,6 +25,17 @@ const bot = new Telegraf(BOT_TOKEN);
 const MAX_ROUNDS = 6;
 const MAX_EXPOSURE_MULTIPLIER = Math.pow(2, MAX_ROUNDS) - 1; // 63
 const ROUND_COOLDOWN_MS = 5_000;
+
+// ─── Shared UI helper ────────────────────────────────────────────────────────
+
+async function sendStartMenu(ctx: Context): Promise<void> {
+    const stats = getTradeStats();
+    const pnlSign = stats.totalPnl >= 0 ? '+' : '';
+    const msg =
+        `🤖 *IQ Bot V3*\n\n` +
+        `📊 *Stats*: ${stats.total} trades | PnL: ${pnlSign}$${stats.totalPnl.toFixed(2)}`;
+    await ctx.reply(msg, { parse_mode: 'Markdown', reply_markup: startKeyboard() });
+}
 
 // ─── Wizard state machine ────────────────────────────────────────────────────
 
@@ -250,7 +263,7 @@ bot.action(/^pair:(.+)$/, async ctx => {
 bot.command('history', async ctx => {
     const trades = getRecentTrades(10);
     if (trades.length === 0) {
-        return ctx.reply('No trades yet. Use /trade to get started.');
+        return ctx.reply('No trades yet. Use /trade to get started.', { reply_markup: backKeyboard() });
     }
 
     let msg = '📋 *Recent Trades*\n\n';
@@ -271,7 +284,7 @@ bot.command('history', async ctx => {
     const pnlSign = stats.totalPnl >= 0 ? '+' : '';
     msg += `\n📊 *Stats*: ${stats.total} trades | ${stats.wins}W / ${stats.losses}L / ${stats.ties}T | PnL: ${pnlSign}$${stats.totalPnl.toFixed(2)}`;
 
-    await ctx.reply(msg, { parse_mode: 'Markdown' });
+    await ctx.reply(msg, { parse_mode: 'Markdown', reply_markup: backKeyboard() });
 });
 
 bot.command('balance', async ctx => {
@@ -288,27 +301,110 @@ bot.command('balance', async ctx => {
             if (real) msg += `💎 Live: $${real.amount.toFixed(2)}\n`;
             if (!demo && !real) msg += 'No balances found.';
 
-            await ctx.reply(msg, { parse_mode: 'Markdown' });
+            await ctx.reply(msg, { parse_mode: 'Markdown', reply_markup: backKeyboard() });
         } finally {
             await sdk.shutdown();
         }
     } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : 'Unknown error';
-        await ctx.reply(`❌ Balance fetch failed: ${msg}`);
+        await ctx.reply(`❌ Balance fetch failed: ${msg}`, { reply_markup: backKeyboard() });
     }
 });
 
-bot.command('start', async ctx => {
+bot.command('start', sendStartMenu);
+
+// ─── User menu actions ────────────────────────────────────────────────────────
+
+bot.action('ui:start', async ctx => {
+    await ctx.answerCbQuery();
+    await sendStartMenu(ctx);
+});
+
+bot.action('ui:trade', async ctx => {
+    const chatId = ctx.chat!.id;
+    wizardSessions.set(chatId, { step: 'amount' });
+    await ctx.answerCbQuery();
+    await ctx.reply('💰 *Enter amount:*', {
+        parse_mode: 'Markdown',
+        reply_markup: amountKeyboard(),
+    });
+});
+
+bot.action('ui:history', async ctx => {
+    await ctx.answerCbQuery();
+    const trades = getRecentTrades(10);
+    if (trades.length === 0) {
+        await ctx.reply('No trades yet.', { reply_markup: backKeyboard() });
+        return;
+    }
+    let msg = '📋 *Recent Trades*\n\n';
+    for (const t of trades) {
+        const emoji = t.status === 'WIN' ? '💚' : t.status === 'LOSS' ? '💔' : t.status === 'TIE' ? '⚪' : '⚠️';
+        const pnlStr = t.status === 'WIN' ? `+$${t.pnl.toFixed(2)}` : t.status === 'LOSS' ? `-$${t.amount.toFixed(2)}` : '$0.00';
+        msg += `${emoji} \`${t.pair}\` *${t.direction.toUpperCase()}* $${t.amount} → ${pnlStr}`;
+        if (t.martingale_run) msg += ' 🔄';
+        msg += '\n';
+        if (t.error) msg += `  _${t.error}_\n`;
+    }
     const stats = getTradeStats();
     const pnlSign = stats.totalPnl >= 0 ? '+' : '';
-    let msg = '🤖 *IQ Bot V3*\n\n';
-    msg += 'Trade directly from Telegram:\n';
-    msg += '`/trade` — interactive wizard (amount → timeframe → pair)\n\n';
-    msg += `📊 *Stats*: ${stats.total} trades | PnL: ${pnlSign}$${stats.totalPnl.toFixed(2)}\n\n`;
-    msg += '/history — Recent trades\n';
-    msg += '/balance — Live balance\n';
-    msg += '_Section 4: Interactive Wizard + RSI/EMA Analysis_';
-    await ctx.reply(msg, { parse_mode: 'Markdown' });
+    msg += `\n📊 *Stats*: ${stats.total} trades | ${stats.wins}W / ${stats.losses}L / ${stats.ties}T | PnL: ${pnlSign}$${stats.totalPnl.toFixed(2)}`;
+    await ctx.reply(msg, { parse_mode: 'Markdown', reply_markup: backKeyboard() });
+});
+
+bot.action('ui:balance', async ctx => {
+    await ctx.answerCbQuery();
+    try {
+        const sdk = await ClientSdk.create(WS_URL, PLATFORM_ID, new SsidAuthMethod(IQ_SSID!), { host: IQ_HOST });
+        try {
+            const balances = await sdk.balances();
+            const all = balances.getBalances();
+            const demo = all.find(b => b.type === BalanceType.Demo);
+            const real = all.find(b => b.type === BalanceType.Real);
+            let msg = '💰 *Balances*\n\n';
+            if (demo) msg += `🎮 Practice: $${demo.amount.toFixed(2)}\n`;
+            if (real) msg += `💎 Live: $${real.amount.toFixed(2)}\n`;
+            if (!demo && !real) msg += 'No balances found.';
+            await ctx.reply(msg, { parse_mode: 'Markdown', reply_markup: backKeyboard() });
+        } finally {
+            await sdk.shutdown();
+        }
+    } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : 'Unknown error';
+        await ctx.reply(`❌ Balance fetch failed: ${msg}`, { reply_markup: backKeyboard() });
+    }
+});
+
+bot.action('ui:settings', async ctx => {
+    await ctx.answerCbQuery();
+    await ctx.reply('⚙️ Settings coming soon.', { reply_markup: backKeyboard() });
+});
+
+// ─── Admin ────────────────────────────────────────────────────────────────────
+
+bot.command('admin', async ctx => {
+    if (ctx.from?.id !== ADMIN_ID) {
+        await ctx.reply('Access denied.');
+        return;
+    }
+    await ctx.reply('🛡️ *Admin Panel*', { parse_mode: 'Markdown', reply_markup: adminKeyboard() });
+});
+
+bot.action('admin:users', async ctx => {
+    await ctx.answerCbQuery();
+    await ctx.reply('👥 User management coming soon.');
+});
+bot.action('admin:broadcast', async ctx => {
+    await ctx.answerCbQuery();
+    await ctx.reply('📢 Broadcast system coming soon.');
+});
+bot.action('admin:stats', async ctx => {
+    await ctx.answerCbQuery();
+    await ctx.reply('📊 Admin statistics coming soon.');
+});
+bot.action('admin:tokens', async ctx => {
+    await ctx.answerCbQuery();
+    await ctx.reply('🔑 Token management coming soon.');
 });
 
 bot.command('pairs', async ctx => {
