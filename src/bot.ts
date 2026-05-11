@@ -62,6 +62,26 @@ function getSsidForUser(telegramId: number): string | null {
     return IQ_SSID ?? null;
 }
 
+// Replicates LoginPasswordAuthMethod's internal HTTP call with correct headers,
+// capturing the SSID so it can be persisted without storing the password.
+async function loginAndCaptureSsid(email: string, password: string): Promise<{ ssid: string; sdk: ClientSdk }> {
+    const res = await fetch(`${IQ_HOST}/v2/login`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'User-Agent': 'quadcode-client-sdk-js/1.3.21',
+        },
+        body: JSON.stringify({ identifier: email, password }),
+    });
+    const data = await res.json() as { code?: string; message?: string; ssid?: string };
+    if (data.code !== 'success' || !data.ssid) {
+        throw new Error(data.message ?? 'Login failed');
+    }
+    const ssid = data.ssid;
+    const sdk = await ClientSdk.create(WS_URL, PLATFORM_ID, new SsidAuthMethod(ssid), { host: IQ_HOST });
+    return { ssid, sdk };
+}
+
 // ─── Martingale loop (shared helper) ────────────────────────────────────────
 
 async function runMartingale(ctx: Context, ssid: string, pair: string, direction: 'call' | 'put', amount: number, timeframeSec = 60): Promise<void> {
@@ -508,23 +528,14 @@ bot.on('text', async ctx => {
             connectState.step = 'password';
             await ctx.reply('🔑 Enter your password:');
         } else if (connectState.step === 'password' && connectState.email) {
+            const email = connectState.email;
             connectSessions.delete(chatId);
+            // Delete the password message so it's never visible in chat (issue #14)
+            try { await ctx.deleteMessage(); } catch {}
             await ctx.reply('🔐 Logging in...');
             try {
-                const res = await fetch(`${IQ_HOST}/v2/login`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ identifier: connectState.email, password: text }),
-                });
-                const data = await res.json() as { code?: string; message?: string; ssid?: string };
-                if (data.code !== 'success' || !data.ssid) {
-                    await ctx.reply(`❌ Login failed: ${data.message ?? 'Invalid credentials'}`);
-                    return;
-                }
-                saveUser({ telegram_id: ctx.from!.id, ssid: data.ssid });
-
-                // Show balances on successful connect
-                const sdk = await ClientSdk.create(WS_URL, PLATFORM_ID, new SsidAuthMethod(data.ssid), { host: IQ_HOST });
+                const { ssid, sdk } = await loginAndCaptureSsid(email, text);
+                saveUser({ telegram_id: ctx.from!.id, ssid });
                 try {
                     const balances = await sdk.balances();
                     const all = balances.getBalances();
