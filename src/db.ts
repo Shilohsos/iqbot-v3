@@ -387,7 +387,7 @@ export function getRecentApprovals(hours = 24): UserRecord[] {
 
 export function getPendingManualUsers(): UserRecord[] {
     return db.prepare(`
-        SELECT * FROM users WHERE approval_status = 'manual' ORDER BY created_at DESC
+        SELECT * FROM users WHERE approval_status IN ('pending', 'manual') ORDER BY created_at DESC
     `).all() as UserRecord[];
 }
 
