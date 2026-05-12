@@ -162,6 +162,7 @@ async function sendStartMenu(ctx: Context): Promise<void> {
 // ─── Onboarding helpers ───────────────────────────────────────────────────────
 
 async function startOnboarding(ctx: Context): Promise<void> {
+    // L1 — welcome
     try { await ctx.replyWithPhoto(ASSET('L1.png')); } catch {}
     await ctx.reply(
         `I'm 10x Special Bot.\n\n` +
@@ -169,14 +170,17 @@ async function startOnboarding(ctx: Context): Promise<void> {
         `I scan markets. I read signals. I place trades.\n` +
         `You sit back and watch the wins land.`
     );
-    try { await ctx.replyWithPhoto(ASSET('L2.png')); } catch {}
-    await ctx.reply(
-        `⚡ Built for serious traders.\n` +
-        `🎯 Trades 8+ OTC pairs.\n` +
-        `🛡️ Smart Gale recovery.\n` +
-        `💰 Withdraws straight to your own IQ Option account.`
-    );
+    // L3 — Link Your Account (connect step comes before tier selection)
     try { await ctx.replyWithPhoto(ASSET('L3.png')); } catch {}
+    await ctx.reply(
+        `Connect your IQ Option account.\n\n` +
+        `Free signup · 60 seconds · Linked instantly.\n` +
+        `Bot trades on your account. Money stays yours.\n\n` +
+        `Pick what fits 👇`,
+        { reply_markup: onboardKeyboard() }
+    );
+    // L2 — Three Ways to Begin (tier selection)
+    try { await ctx.replyWithPhoto(ASSET('L2.png')); } catch {}
     await ctx.reply(
         `Three ways to start 👾\n\n` +
         `✅ The bot itself is completely free.\n\n` +
@@ -255,7 +259,7 @@ async function runMartingale(
         logLines.push(`⚡ Trade 1|Step ${round}|🟡 $${currentAmount.toFixed(2)} → in flight`);
         await syncLog();
 
-        const roundTrade: TradeRequest = { pair, direction, amount: currentAmount, martingaleRunId: runId, timeframeSec, balanceType };
+        const roundTrade: TradeRequest = { pair, direction, amount: currentAmount, martingaleRunId: runId, timeframeSec, balanceType, telegramId: ctx.from!.id };
 
         let result: TradeResult;
         let roundTimer: ReturnType<typeof setTimeout> | undefined;
@@ -299,7 +303,8 @@ async function runMartingale(
         }
 
         if (result.status === 'WIN' || result.status === 'TIE') {
-            try { await ctx.replyWithPhoto(ASSET('L11a.png')); } catch {}
+            // L11b = MAJOR WIN / COMEBACK ACHIEVED (martingale sequence win)
+            try { await ctx.replyWithPhoto(ASSET('L11b.png')); } catch {}
             await ctx.reply(
                 `🏆 +$${result.pnl.toFixed(2)} added to your balance.\n\n` +
                 (round > 1 ? `Recovery complete on step ${round}/${MAX_ROUNDS}.\n\n` : '') +
@@ -326,6 +331,8 @@ async function runMartingale(
     }
 
     const sign = totalPnl >= 0 ? '+' : '';
+    // L11c = LOST, BUT THIS IS NOT THE END (martingale exhausted)
+    try { await ctx.replyWithPhoto(ASSET('L11c.png')); } catch {}
     await ctx.reply(`Lost this one 💔! Remain confident! New setup loading 👾\n\nTotal: ${sign}$${totalPnl.toFixed(2)}`);
     if (balanceType === 'demo') await showDemoUpsell(ctx);
 }
@@ -354,14 +361,14 @@ bot.command('start', sendStartMenu);
 // ─── Tier selection ───────────────────────────────────────────────────────────
 
 bot.action(/^tier:(demo|newbie|pro)$/, async ctx => {
-    await ctx.answerCbQuery();
     const tier = ctx.match[1].toUpperCase();
     const chatId = ctx.chat!.id;
     const existing = onboardSessions.get(chatId) ?? { step: 'user_id' as OnboardStep };
     onboardSessions.set(chatId, { ...existing, tier });
     const dbUser = getUser(ctx.from!.id);
     if (dbUser) setUserTier(ctx.from!.id, tier);
-    await askAccountConnection(ctx);
+    // Onboard keyboard was already shown in startOnboarding — just confirm tier selection
+    await ctx.answerCbQuery(`✅ ${tier} selected`);
 });
 
 // ─── Account connection choice ────────────────────────────────────────────────
@@ -396,7 +403,6 @@ bot.action(/^mode:(demo|live)$/, async ctx => {
     if (!state || state.step !== 'mode') return;
     state.mode = ctx.match[1] as 'demo' | 'live';
     state.step = 'amount';
-    try { await ctx.replyWithPhoto(ASSET('L5.png')); } catch {}
     await ctx.reply('Enter amount', { reply_markup: amountKeyboard() });
 });
 
@@ -422,7 +428,7 @@ bot.action(/^amt:(.+)$/, async ctx => {
         if (state.mode === 'demo' && amt > 20) { await ctx.answerCbQuery('Demo max is $20.'); return; }
         state.amount = amt;
         state.step = 'timeframe';
-        try { await ctx.replyWithPhoto(ASSET('L6.png')); } catch {}
+        try { await ctx.replyWithPhoto(ASSET('L5.png')); } catch {}
         await ctx.editMessageText(
             '⏱ Pick your expiry timeframe 👇\n⏱ Faster timeframes settle quicker.\n🐢 Longer timeframes ride bigger moves.',
             { reply_markup: timeframeKeyboard() }
@@ -439,7 +445,7 @@ bot.action(/^tf:(\d+)$/, async ctx => {
     if (!state || state.step !== 'timeframe') { await ctx.answerCbQuery('Session expired — start over.'); return; }
     state.timeframe = parseInt(ctx.match[1], 10);
     state.step = 'pair';
-    try { await ctx.replyWithPhoto(ASSET('L7.png')); } catch {}
+    try { await ctx.replyWithPhoto(ASSET('L6.png')); } catch {}
     await ctx.editMessageText(
         'Top picks ready 🎯\n\nHighest chance to win right now:\n\n' +
         '🏆 EUR/GBP OTC — Win rate ≈83%\n✅ EUR/USD OTC — Win rate ≈78%\n✅ AUD/USD OTC — Win rate ≈70%\n✅ USD/CAD OTC — Win rate ≈66%\n\n🚀 Make your choice below 👇',
@@ -475,7 +481,8 @@ bot.action(/^pair:(.+)$/, async ctx => {
     const ssid = getSsidForUser(ctx.from!.id);
     if (!ssid) { await ctx.editMessageText('❌ Not connected. Use /connect to link your IQ Option account.'); return; }
 
-    try { await ctx.replyWithPhoto(ASSET('L8.png')); } catch {}
+    // L7 — Bot Is Analyzing (radar) before analysis starts
+    try { await ctx.replyWithPhoto(ASSET('L7.png')); } catch {}
     await ctx.editMessageText(`Selected: ${pair}\n\n🔍 Scanning markets...`);
 
     let analysis: AnalysisResult;
@@ -486,15 +493,17 @@ bot.action(/^pair:(.+)$/, async ctx => {
         return;
     }
 
-    const signalImg = analysis.direction === 'call' ? 'L9a.png' : 'L9b.png';
-    try { await ctx.replyWithPhoto(ASSET(signalImg)); } catch {}
-
+    // L8 — Opportunity Found (after analysis completes)
+    try { await ctx.replyWithPhoto(ASSET('L8.png')); } catch {}
+    // F: call = bullish = L9b (upward trend); put = bearish = L9a (downward trend)
+    const signalImg = analysis.direction === 'call' ? 'L9b.png' : 'L9a.png';
     const dirStr = analysis.direction === 'call' ? '🟢 CALL SIGNAL' : '🔴 PUT SIGNAL';
     await ctx.reply(
         `OPPORTUNITY FOUND\nConfidence: 78% · Bot is ready to execute.\n\n${dirStr}\n\n` +
         `🔷 Trading pair: ${pair}\n🔷 Amount: $${amount.toFixed(2)} USD\n` +
         `🔷 Expiration: ${tfLabel(timeframe)}\n🔷 Strategy: High-Profit ⚡`
     );
+    try { await ctx.replyWithPhoto(ASSET(signalImg)); } catch {}
 
     await runMartingale(ctx, ssid, pair, analysis.direction, amount, timeframe, mode === 'live' ? 'live' : 'demo');
 });
@@ -525,7 +534,8 @@ bot.action('ui:trade', async ctx => {
 
 bot.action('ui:history', async ctx => {
     await ctx.answerCbQuery();
-    const trades = getRecentTrades(10);
+    const uid = ctx.from!.id;
+    const trades = getRecentTrades(10, uid);
     if (trades.length === 0) { await ctx.reply('No trades yet.', { reply_markup: backKeyboard() }); return; }
     let msg = '📋 *Recent Trades*\n\n';
     for (const t of trades) {
@@ -536,7 +546,7 @@ bot.action('ui:history', async ctx => {
         msg += '\n';
         if (t.error) msg += `  _${t.error}_\n`;
     }
-    const stats = getTradeStats();
+    const stats = getTradeStats(uid);
     const pnlSign = stats.totalPnl >= 0 ? '+' : '';
     msg += `\n📊 *Stats*: ${stats.total} trades | ${stats.wins}W / ${stats.losses}L / ${stats.ties}T | PnL: ${pnlSign}$${stats.totalPnl.toFixed(2)}`;
     await ctx.reply(msg, { parse_mode: 'Markdown', reply_markup: backKeyboard() });
@@ -544,8 +554,9 @@ bot.action('ui:history', async ctx => {
 
 bot.action('ui:stats', async ctx => {
     await ctx.answerCbQuery();
-    const stats = getTradeStats();
-    const ss = getSessionStats(ctx.from!.id);
+    const uid = ctx.from!.id;
+    const stats = getTradeStats(uid);
+    const ss = getSessionStats(uid);
     const pnlSign = stats.totalPnl >= 0 ? '+' : '';
     const ssPnlSign = ss.pnl >= 0 ? '+' : '';
     await ctx.reply(
@@ -595,7 +606,8 @@ bot.command('trade', async ctx => {
 });
 
 bot.command('history', async ctx => {
-    const trades = getRecentTrades(10);
+    const uid = ctx.from!.id;
+    const trades = getRecentTrades(10, uid);
     if (trades.length === 0) return ctx.reply('No trades yet.', { reply_markup: backKeyboard() });
     let msg = '📋 *Recent Trades*\n\n';
     for (const t of trades) {
@@ -606,7 +618,7 @@ bot.command('history', async ctx => {
         msg += '\n';
         if (t.error) msg += `  _${t.error}_\n`;
     }
-    const stats = getTradeStats();
+    const stats = getTradeStats(uid);
     const pnlSign = stats.totalPnl >= 0 ? '+' : '';
     msg += `\n📊 *Stats*: ${stats.total} trades | ${stats.wins}W / ${stats.losses}L / ${stats.ties}T | PnL: ${pnlSign}$${stats.totalPnl.toFixed(2)}`;
     await ctx.reply(msg, { parse_mode: 'Markdown', reply_markup: backKeyboard() });
@@ -818,7 +830,6 @@ bot.on('text', async ctx => {
             ob.email = text;
             ob.step = 'connect_password';
             await ctx.reply('🛡️ Your password is safe\n\nWe use the official IQ Option API.\nWe can\'t read or store it.\nYour message auto-deletes from this chat in 10 seconds.');
-            try { await ctx.replyWithPhoto(ASSET('L4.png')); } catch {}
             await ctx.reply('🔑 Enter your IQ Option password:');
             return;
         }
