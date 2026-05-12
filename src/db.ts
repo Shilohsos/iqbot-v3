@@ -84,6 +84,54 @@ if (ssidColNotNull) {
         db.exec("ALTER TABLE users ADD COLUMN tier TEXT NOT NULL DEFAULT 'DEMO'");
 }
 
+// Additional column migrations (run after main table setup to get final state)
+const finalUserCols = (db.prepare('PRAGMA table_info(users)').all() as { name: string }[]).map(c => c.name);
+if (!finalUserCols.includes('username'))
+    db.exec('ALTER TABLE users ADD COLUMN username TEXT');
+
+// ─── Section 10 tables ────────────────────────────────────────────────────────
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS tokens (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    token       TEXT    UNIQUE NOT NULL,
+    tier        TEXT    NOT NULL,
+    used_by     INTEGER,
+    used_at     TEXT,
+    expires_at  TEXT    NOT NULL,
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+  )
+`);
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS leaderboard (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    telegram_id   INTEGER NOT NULL,
+    auto_profit   REAL    NOT NULL DEFAULT 0,
+    manual_profit REAL,
+    date          TEXT    NOT NULL,
+    created_at    TEXT    NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(telegram_id, date)
+  )
+`);
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS funnel_events (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_type TEXT    NOT NULL,
+    metadata   TEXT,
+    created_at TEXT    NOT NULL DEFAULT (datetime('now'))
+  )
+`);
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS config (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  )
+`);
+
 // ─── Trades ──────────────────────────────────────────────────────────────────
 
 export interface TradeRecord {
@@ -163,12 +211,26 @@ export function getTradeStats(telegramId?: number): TradeStats {
     };
 }
 
+export function getTopTradersToday(limit = 20): Array<{ telegram_id: number; username: string | null; trade_count: number }> {
+    return db.prepare(`
+        SELECT t.telegram_id, u.username, COUNT(*) AS trade_count
+        FROM trades t
+        LEFT JOIN users u ON t.telegram_id = u.telegram_id
+        WHERE date(t.created_at) = date('now')
+          AND t.telegram_id IS NOT NULL
+        GROUP BY t.telegram_id
+        ORDER BY trade_count DESC
+        LIMIT ?
+    `).all(limit) as Array<{ telegram_id: number; username: string | null; trade_count: number }>;
+}
+
 // ─── Users ───────────────────────────────────────────────────────────────────
 
-export type ApprovalStatus = 'pending' | 'approved' | 'manual' | 'rejected';
+export type ApprovalStatus = 'pending' | 'approved' | 'manual' | 'rejected' | 'paused';
 
 export interface UserRecord {
     telegram_id: number;
+    username?: string | null;
     ssid?: string | null;
     iq_user_id?: number | null;
     approval_status: ApprovalStatus;
@@ -179,8 +241,20 @@ export interface UserRecord {
     last_used?: string;
 }
 
+export function maskUserId(id: number): string {
+    const s = String(id);
+    const half = Math.ceil(s.length / 2);
+    return s.slice(0, half) + 'X'.repeat(s.length - half);
+}
+
 export function getUser(telegramId: number): UserRecord | undefined {
     return db.prepare('SELECT * FROM users WHERE telegram_id = ?').get(telegramId) as UserRecord | undefined;
+}
+
+export function findUsersByUsername(username: string): UserRecord[] {
+    return db.prepare(
+        'SELECT * FROM users WHERE username LIKE ? ORDER BY last_used DESC LIMIT 10'
+    ).all(`%${username}%`) as UserRecord[];
 }
 
 export function saveUser(user: Pick<UserRecord, 'telegram_id' | 'ssid'>): void {
@@ -189,6 +263,13 @@ export function saveUser(user: Pick<UserRecord, 'telegram_id' | 'ssid'>): void {
         VALUES (@telegram_id, @ssid, datetime('now'))
         ON CONFLICT(telegram_id) DO UPDATE SET ssid = @ssid, last_used = datetime('now')
     `).run(user);
+}
+
+export function saveUsername(telegramId: number, username: string | undefined): void {
+    if (!username) return;
+    db.prepare(`
+        UPDATE users SET username = ?, last_used = datetime('now') WHERE telegram_id = ?
+    `).run(username, telegramId);
 }
 
 export function upsertOnboardingUser(telegramId: number, iqUserId: number): void {
@@ -217,6 +298,14 @@ export function rejectUser(telegramId: number): void {
     db.prepare(`UPDATE users SET approval_status = 'rejected' WHERE telegram_id = ?`).run(telegramId);
 }
 
+export function pauseUser(telegramId: number): void {
+    db.prepare(`UPDATE users SET approval_status = 'paused' WHERE telegram_id = ?`).run(telegramId);
+}
+
+export function resumeUser(telegramId: number): void {
+    db.prepare(`UPDATE users SET approval_status = 'approved' WHERE telegram_id = ?`).run(telegramId);
+}
+
 export function deleteUser(telegramId: number): void {
     db.prepare('DELETE FROM users WHERE telegram_id = ?').run(telegramId);
 }
@@ -227,6 +316,42 @@ export function setUserTier(telegramId: number, tier: string): void {
 
 export function getAllUsers(): UserRecord[] {
     return db.prepare('SELECT * FROM users ORDER BY last_used DESC').all() as UserRecord[];
+}
+
+export function getAllUserIds(): number[] {
+    return (db.prepare('SELECT telegram_id FROM users').all() as { telegram_id: number }[]).map(r => r.telegram_id);
+}
+
+export function getActiveTraderIds(hours = 5): number[] {
+    return (db.prepare(`
+        SELECT DISTINCT telegram_id FROM trades
+        WHERE created_at >= datetime('now', ? || ' hours')
+          AND telegram_id IS NOT NULL
+    `).all(`-${hours}`) as { telegram_id: number }[]).map(r => r.telegram_id);
+}
+
+export function getInactiveTraderIds(hours = 5): number[] {
+    const activeIds = getActiveTraderIds(hours);
+    if (activeIds.length === 0) return getAllUserIds();
+    const placeholders = activeIds.map(() => '?').join(',');
+    return (db.prepare(
+        `SELECT telegram_id FROM users WHERE telegram_id NOT IN (${placeholders})`
+    ).all(...activeIds) as { telegram_id: number }[]).map(r => r.telegram_id);
+}
+
+export function getRecentApprovals(hours = 24): UserRecord[] {
+    return db.prepare(`
+        SELECT * FROM users
+        WHERE approval_status = 'approved'
+          AND approved_at >= datetime('now', ? || ' hours')
+        ORDER BY approved_at DESC
+    `).all(`-${hours}`) as UserRecord[];
+}
+
+export function getPendingManualUsers(): UserRecord[] {
+    return db.prepare(`
+        SELECT * FROM users WHERE approval_status = 'manual' ORDER BY created_at DESC
+    `).all() as UserRecord[];
 }
 
 export interface ApprovalStats {
@@ -253,5 +378,189 @@ export function getApprovalStats(): ApprovalStats {
         manual:   row.manual   ?? 0,
         rejected: row.rejected ?? 0,
         total:    row.total    ?? 0,
+    };
+}
+
+// ─── Tokens ───────────────────────────────────────────────────────────────────
+
+export interface TokenRecord {
+    id: number;
+    token: string;
+    tier: string;
+    used_by?: number | null;
+    used_at?: string | null;
+    expires_at: string;
+    created_at: string;
+}
+
+export function generateToken(tier: string): string {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    const rand = (n: number) => Array.from({ length: n }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+    const token = `10X-${rand(4)}-${rand(4)}`;
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    db.prepare('INSERT INTO tokens (token, tier, expires_at) VALUES (?, ?, ?)').run(token, tier, expiresAt);
+    return token;
+}
+
+export function validateToken(token: string): { valid: boolean; tier?: string; error?: string } {
+    const rec = db.prepare('SELECT * FROM tokens WHERE token = ?').get(token) as TokenRecord | undefined;
+    if (!rec) return { valid: false, error: 'Invalid token' };
+    if (rec.used_by) return { valid: false, error: 'Token already used' };
+    if (new Date(rec.expires_at) < new Date()) return { valid: false, error: 'Token expired' };
+    return { valid: true, tier: rec.tier };
+}
+
+export function useToken(token: string, telegramId: number): boolean {
+    const result = db.prepare(`
+        UPDATE tokens SET used_by = ?, used_at = datetime('now')
+        WHERE token = ? AND used_by IS NULL AND expires_at > datetime('now')
+    `).run(telegramId, token);
+    return (result as { changes: number }).changes > 0;
+}
+
+export function getTokens(): TokenRecord[] {
+    return db.prepare('SELECT * FROM tokens ORDER BY created_at DESC LIMIT 50').all() as TokenRecord[];
+}
+
+// ─── Leaderboard ──────────────────────────────────────────────────────────────
+
+export function updateLeaderboardAuto(telegramId: number, pnl: number): void {
+    if (pnl <= 0) return;
+    const today = new Date().toISOString().split('T')[0];
+    db.prepare(`
+        INSERT INTO leaderboard (telegram_id, auto_profit, date)
+        VALUES (?, ?, ?)
+        ON CONFLICT(telegram_id, date) DO UPDATE SET
+            auto_profit = auto_profit + excluded.auto_profit
+        WHERE manual_profit IS NULL
+    `).run(telegramId, pnl, today);
+}
+
+export function addLeaderboardManual(telegramId: number, profit: number): boolean {
+    const today = new Date().toISOString().split('T')[0];
+    const count = (db.prepare(
+        'SELECT COUNT(*) AS cnt FROM leaderboard WHERE date = ?'
+    ).get(today) as { cnt: number }).cnt;
+    if (count >= 10) return false;
+    db.prepare(`
+        INSERT INTO leaderboard (telegram_id, auto_profit, manual_profit, date)
+        VALUES (?, 0, ?, ?)
+        ON CONFLICT(telegram_id, date) DO UPDATE SET manual_profit = excluded.manual_profit
+    `).run(telegramId, profit, today);
+    return true;
+}
+
+export function getLeaderboard(date?: string): Array<{ telegram_id: number; profit: number }> {
+    const d = date ?? new Date().toISOString().split('T')[0];
+    return db.prepare(`
+        SELECT telegram_id,
+               COALESCE(manual_profit, auto_profit) AS profit
+        FROM leaderboard
+        WHERE date = ?
+        ORDER BY profit DESC
+        LIMIT 10
+    `).all(d) as Array<{ telegram_id: number; profit: number }>;
+}
+
+// ─── Funnel ───────────────────────────────────────────────────────────────────
+
+export function insertFunnelEvent(eventType: string, metadata?: string): void {
+    db.prepare('INSERT INTO funnel_events (event_type, metadata) VALUES (?, ?)').run(eventType, metadata ?? null);
+}
+
+export function getFunnelStats(): { events: number; byType: Array<{ event_type: string; cnt: number }> } {
+    const events = (db.prepare(
+        `SELECT COUNT(*) AS cnt FROM funnel_events WHERE date(created_at) = date('now')`
+    ).get() as { cnt: number }).cnt;
+    const byType = db.prepare(
+        `SELECT event_type, COUNT(*) AS cnt FROM funnel_events WHERE date(created_at) = date('now') GROUP BY event_type`
+    ).all() as Array<{ event_type: string; cnt: number }>;
+    return { events, byType };
+}
+
+// ─── Config ───────────────────────────────────────────────────────────────────
+
+export function getConfig(key: string): string | null {
+    const row = db.prepare('SELECT value FROM config WHERE key = ?').get(key) as { value: string } | undefined;
+    return row?.value ?? null;
+}
+
+export function setConfig(key: string, value: string): void {
+    db.prepare(`
+        INSERT INTO config (key, value, updated_at) VALUES (?, ?, datetime('now'))
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')
+    `).run(key, value);
+}
+
+// ─── Audit report ─────────────────────────────────────────────────────────────
+
+export interface AuditReport {
+    newUsers: number;
+    autoApproved: number;
+    manualPending: number;
+    totalTrades: number;
+    wins: number;
+    losses: number;
+    ties: number;
+    totalPnl: number;
+    martingaleRuns: number;
+    martingaleRecovered: number;
+    topPerformerId?: number;
+    topPerformerProfit?: number;
+}
+
+export function getAuditReport(): AuditReport {
+    const tradeRow = db.prepare(`
+        SELECT
+            COUNT(*)                                          AS total,
+            SUM(CASE WHEN status = 'WIN'  THEN 1 ELSE 0 END) AS wins,
+            SUM(CASE WHEN status = 'LOSS' THEN 1 ELSE 0 END) AS losses,
+            SUM(CASE WHEN status = 'TIE'  THEN 1 ELSE 0 END) AS ties,
+            COALESCE(SUM(pnl), 0)                            AS totalPnl
+        FROM trades
+        WHERE created_at >= datetime('now', '-1 day')
+    `).get() as { total: number; wins: number; losses: number; ties: number; totalPnl: number };
+
+    const userRow = db.prepare(`
+        SELECT
+            COUNT(*) AS new_users,
+            SUM(CASE WHEN approval_status = 'approved'
+                      AND approved_at >= datetime('now', '-1 day') THEN 1 ELSE 0 END) AS auto_approved,
+            SUM(CASE WHEN approval_status = 'manual' THEN 1 ELSE 0 END) AS manual_pending
+        FROM users
+        WHERE created_at >= datetime('now', '-1 day')
+    `).get() as { new_users: number; auto_approved: number; manual_pending: number };
+
+    const mgRow = db.prepare(`
+        SELECT
+            COUNT(DISTINCT martingale_run)                                         AS runs,
+            COUNT(DISTINCT CASE WHEN status = 'WIN' THEN martingale_run END)       AS recovered
+        FROM trades
+        WHERE created_at >= datetime('now', '-1 day')
+          AND martingale_run IS NOT NULL AND martingale_run != ''
+    `).get() as { runs: number; recovered: number };
+
+    const topRow = db.prepare(`
+        SELECT telegram_id, COALESCE(SUM(pnl), 0) AS total_pnl
+        FROM trades
+        WHERE created_at >= datetime('now', '-1 day') AND telegram_id IS NOT NULL
+        GROUP BY telegram_id
+        ORDER BY total_pnl DESC
+        LIMIT 1
+    `).get() as { telegram_id: number; total_pnl: number } | undefined;
+
+    return {
+        newUsers: userRow?.new_users ?? 0,
+        autoApproved: userRow?.auto_approved ?? 0,
+        manualPending: userRow?.manual_pending ?? 0,
+        totalTrades: tradeRow?.total ?? 0,
+        wins: tradeRow?.wins ?? 0,
+        losses: tradeRow?.losses ?? 0,
+        ties: tradeRow?.ties ?? 0,
+        totalPnl: tradeRow?.totalPnl ?? 0,
+        martingaleRuns: mgRow?.runs ?? 0,
+        martingaleRecovered: mgRow?.recovered ?? 0,
+        topPerformerId: topRow?.telegram_id,
+        topPerformerProfit: topRow?.total_pnl,
     };
 }
