@@ -366,7 +366,7 @@ async function sendStartMenu(ctx: Context): Promise<void> {
         `What now? 👇`,
     ].filter(l => l !== '');
 
-    await ctx.reply(lines.join('\n'), { reply_markup: startKeyboard() });
+    await ctx.reply(lines.join('\n'), { reply_markup: startKeyboard(user.tier ?? undefined) });
 }
 
 // ─── Onboarding helpers ───────────────────────────────────────────────────────
@@ -842,7 +842,8 @@ bot.action(/^pair:(.+)$/, async ctx => {
         return;
     }
 
-    const martingaleRounds = userMartingaleSettings.get(ctx.from!.id)?.maxRounds;
+    const mgSettings = userMartingaleSettings.get(ctx.from!.id);
+    const martingaleRounds = mgSettings ? (mgSettings.enabled ? mgSettings.maxRounds : 1) : undefined;
     try {
         await runMartingale(ctx, ssid, pair, analysis.direction, amount, timeframe, mode === 'live' ? 'live' : 'demo', martingaleRounds);
     } catch (err: unknown) {
@@ -929,6 +930,42 @@ bot.action('ui:upgrade', async ctx => {
         `Don't have a token? Contact support to get your token.`,
         { parse_mode: 'Markdown', reply_markup: backKeyboard() }
     );
+});
+
+bot.action('ui:martingale_settings', async ctx => {
+    await ctx.answerCbQuery();
+    const userId = ctx.from!.id;
+    const settings = userMartingaleSettings.get(userId) ?? { enabled: true, maxRounds: 6 };
+    await ctx.reply(
+        `⚙️ *Martingale Settings*\n\n` +
+        `Current: ${settings.enabled ? 'ON' : 'OFF'} · ${settings.maxRounds} rounds max\n\n` +
+        `Choose your preferred martingale strategy:`,
+        {
+            parse_mode: 'Markdown',
+            reply_markup: { inline_keyboard: [
+                [
+                    { text: '🔁 Full (6 rounds)',   callback_data: 'martingale:6' },
+                    { text: '🔁 Medium (3 rounds)', callback_data: 'martingale:3' },
+                ],
+                [{ text: '⛔ Disable gale', callback_data: 'martingale:off' }],
+                [{ text: '🔙 Back',         callback_data: 'ui:start' }],
+            ]},
+        }
+    );
+});
+
+bot.action(/^martingale:(\d+|off)$/, async ctx => {
+    await ctx.answerCbQuery();
+    const userId = ctx.from!.id;
+    const val = ctx.match[1];
+    if (val === 'off') {
+        userMartingaleSettings.set(userId, { enabled: false, maxRounds: 1 });
+        await ctx.editMessageText('⛔ Gale disabled. Trades will run a single round with no recovery.').catch(() => {});
+    } else {
+        const rounds = parseInt(val, 10);
+        userMartingaleSettings.set(userId, { enabled: true, maxRounds: rounds });
+        await ctx.editMessageText(`✅ Martingale set to ${rounds} rounds.`).catch(() => {});
+    }
 });
 
 bot.action('ui:leaderboard', async ctx => {
@@ -1809,7 +1846,7 @@ bot.on('text', async ctx => {
             setUserTier(ctx.from!.id, result.tier!);
             await ctx.reply(
                 `✅ Token accepted! Your tier has been upgraded to *${result.tier}*. 🎉`,
-                { parse_mode: 'Markdown', reply_markup: startKeyboard() }
+                { parse_mode: 'Markdown', reply_markup: startKeyboard(result.tier!) }
             );
         } else {
             await ctx.reply('❌ Token could not be applied. It may have already been used or expired.');
