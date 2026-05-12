@@ -802,19 +802,26 @@ bot.action(/^pair:(.+)$/, async ctx => {
         `🔷 Expiration: ${tfLabel(timeframe)}\n🔷 Strategy: High-Profit ⚡`
     );
 
-    await runMartingale(ctx, ssid, pair, analysis.direction, amount, timeframe, mode === 'live' ? 'live' : 'demo');
+    try {
+        await runMartingale(ctx, ssid, pair, analysis.direction, amount, timeframe, mode === 'live' ? 'live' : 'demo');
+    } catch (err: unknown) {
+        console.error('[pair] runMartingale threw:', err);
+        await ctx.reply('⚠️ Trade session ended unexpectedly. Please try again.').catch(() => {});
+    }
 });
 
 // ─── Demo upsell ──────────────────────────────────────────────────────────────
 
 bot.action('upsell:live', async ctx => {
     await ctx.answerCbQuery();
-    try { await ctx.editMessageText('✅ Switched to Live mode! Your next trade will use your real balance.'); } catch {}
+    try { await ctx.editMessageText('✅ Switched to Live mode! Your next trade will use your real balance.'); }
+    catch { await ctx.reply('✅ Switched to Live mode! Your next trade will use your real balance.').catch(() => {}); }
 });
 
 bot.action('upsell:demo', async ctx => {
     await ctx.answerCbQuery();
-    try { await ctx.editMessageText('🪫 Continuing on Demo. Next trade stays in practice mode.'); } catch {}
+    try { await ctx.editMessageText('🪫 Continuing on Demo. Next trade stays in practice mode.'); }
+    catch { await ctx.reply('🪫 Continuing on Demo. Next trade stays in practice mode.').catch(() => {}); }
 });
 
 // ─── User menu actions ────────────────────────────────────────────────────────
@@ -1871,7 +1878,11 @@ bot.on('text', async ctx => {
 
 bot.catch((err: unknown, ctx) => {
     console.error(`[bot.catch] ${ctx.updateType}:`, err);
-    ctx.reply('⚠️ Something went wrong. Please try again.').catch(() => {});
+    if (ctx.callbackQuery) {
+        ctx.answerCbQuery('⚠️ Error occurred. Try again.').catch(() => {});
+    } else {
+        ctx.reply('⚠️ Something went wrong. Please try again.').catch(() => {});
+    }
 });
 
 bot.launch({ dropPendingUpdates: true });
