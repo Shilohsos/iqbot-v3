@@ -15,6 +15,7 @@ export interface TradeRequest {
     amount: number;
     martingaleRunId?: string;
     timeframeSec?: number;
+    balanceType?: 'demo' | 'live';
 }
 
 export interface TradeResult {
@@ -43,8 +44,11 @@ export async function executeTradeWithSdk(sdk: ClientSdk, trade: TradeRequest): 
         const positions = await sdk.positions();
 
         const balances = await sdk.balances();
-        const demoBalance = balances.getBalances().find(b => b.type === BalanceType.Demo);
-        if (!demoBalance) return errorResult(trade, 'No demo balance found');
+        const wantLive = trade.balanceType === 'live';
+        const selectedBalance = balances.getBalances().find(b =>
+            b.type === (wantLive ? BalanceType.Real : BalanceType.Demo)
+        );
+        if (!selectedBalance) return errorResult(trade, wantLive ? 'No real balance found' : 'No demo balance found');
 
         const currentTime = sdk.currentTime();
         const targetSize = trade.timeframeSec ?? 60;
@@ -60,7 +64,7 @@ export async function executeTradeWithSdk(sdk: ClientSdk, trade: TradeRequest): 
         if (!active.expirationTimes.includes(targetSize)) return errorResult(trade, `No ${targetSize}s instrument available for ${trade.pair}`);
 
         const dir = trade.direction === 'call' ? BlitzOptionsDirection.Call : BlitzOptionsDirection.Put;
-        const option = await blitzOptions.buy(active, dir, targetSize, trade.amount, demoBalance);
+        const option = await blitzOptions.buy(active, dir, targetSize, trade.amount, selectedBalance);
 
         const result = await waitForResult(positions, option.id, targetSize + 90);
         const tradeResult: TradeResult = {

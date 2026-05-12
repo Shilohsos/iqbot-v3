@@ -36,6 +36,7 @@ db.exec(`
     approval_status TEXT    NOT NULL DEFAULT 'pending',
     approved_at     TEXT,
     affiliate_data  TEXT,
+    tier            TEXT    NOT NULL DEFAULT 'DEMO',
     created_at      TEXT    NOT NULL DEFAULT (datetime('now')),
     last_used       TEXT    NOT NULL DEFAULT (datetime('now'))
   )
@@ -57,6 +58,7 @@ if (ssidColNotNull) {
             approval_status TEXT    NOT NULL DEFAULT 'pending',
             approved_at     TEXT,
             affiliate_data  TEXT,
+            tier            TEXT    NOT NULL DEFAULT 'DEMO',
             created_at      TEXT    NOT NULL DEFAULT (datetime('now')),
             last_used       TEXT    NOT NULL DEFAULT (datetime('now'))
         );
@@ -74,6 +76,8 @@ if (ssidColNotNull) {
         db.exec('ALTER TABLE users ADD COLUMN approved_at TEXT');
     if (!userColNames.includes('affiliate_data'))
         db.exec('ALTER TABLE users ADD COLUMN affiliate_data TEXT');
+    if (!userColNames.includes('tier'))
+        db.exec("ALTER TABLE users ADD COLUMN tier TEXT NOT NULL DEFAULT 'DEMO'");
 }
 
 // ─── Trades ──────────────────────────────────────────────────────────────────
@@ -154,6 +158,7 @@ export interface UserRecord {
     approval_status: ApprovalStatus;
     approved_at?: string | null;
     affiliate_data?: string | null;
+    tier?: string | null;
     created_at?: string;
     last_used?: string;
 }
@@ -198,6 +203,10 @@ export function rejectUser(telegramId: number): void {
 
 export function deleteUser(telegramId: number): void {
     db.prepare('DELETE FROM users WHERE telegram_id = ?').run(telegramId);
+}
+
+export function setUserTier(telegramId: number, tier: string): void {
+    db.prepare('UPDATE users SET tier = ? WHERE telegram_id = ?').run(tier, telegramId);
 }
 
 export function getAllUsers(): UserRecord[] {

@@ -3,7 +3,7 @@ export const OTC_PAIRS = [
     'AUDUSD-OTC', 'USDCAD-OTC', 'EURGBP-OTC', 'USDCHF-OTC',
 ];
 
-type Btn = { text: string; callback_data: string };
+type Btn = { text: string; callback_data: string } | { text: string; url: string };
 type IKMarkup = { inline_keyboard: Btn[][] };
 
 export function amountKeyboard(): IKMarkup {
@@ -62,4 +62,54 @@ export function tfLabel(timeframeSec: number): string {
     if (timeframeSec === 60) return '1m';
     if (timeframeSec === 300) return '5m';
     return '15m';
+}
+
+export function tierKeyboard(): IKMarkup {
+    return {
+        inline_keyboard: [
+            [{ text: '🧪 DEMO — try the bot risk-free', callback_data: 'tier:demo' }],
+            [{ text: '🚀 Newbie — trade with $20+ capital', callback_data: 'tier:newbie' }],
+            [{ text: '⚡ PRO — trade with $100+ capital', callback_data: 'tier:pro' }],
+        ],
+    };
+}
+
+export function hasAccountKeyboard(): IKMarkup {
+    return {
+        inline_keyboard: [
+            [{ text: '✅ I have an IQ Option account', callback_data: 'onboard:yes' }],
+            [{ text: '🆕 Create one free (takes 2 min)', callback_data: 'onboard:no' }],
+        ],
+    };
+}
+
+export function tradeModeKeyboard(): IKMarkup {
+    return {
+        inline_keyboard: [
+            [
+                { text: 'Trade Live', callback_data: 'mode:live' },
+                { text: 'Trade Demo', callback_data: 'mode:demo' },
+            ],
+        ],
+    };
+}
+
+export function affiliateFailKeyboard(): IKMarkup {
+    const affiliateLink = process.env.AFFILIATE_LINK ?? 'https://iqbroker.com/lp/regframe-01-light-nosocials/?aff=749367&aff_model=revenue';
+    const adminLink = process.env.ADMIN_CONTACT_LINK ?? 'https://t.me/shiloh_is_10xing';
+    return {
+        inline_keyboard: [
+            [{ text: '🆕 Create free account (takes 2 min)', url: affiliateLink }],
+            [{ text: '👾 Contact admin', url: adminLink }],
+        ],
+    };
+}
+
+export function demoUpsellKeyboard(): IKMarkup {
+    return {
+        inline_keyboard: [
+            [{ text: 'Switch to live 🔋 earn real money', callback_data: 'upsell:live' }],
+            [{ text: 'Continue demo 🪫 keep testing', callback_data: 'upsell:demo' }],
+        ],
+    };
 }
