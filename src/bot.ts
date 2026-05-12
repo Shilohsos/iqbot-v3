@@ -979,5 +979,13 @@ bot.on('text', async ctx => {
 bot.launch({ dropPendingUpdates: true });
 console.log('[iqbot-v3] running');
 
+setInterval(async () => {
+    try {
+        await bot.telegram.getMe();
+    } catch (err) {
+        console.error('[keepalive] getMe failed:', err instanceof Error ? err.message : err);
+    }
+}, 600_000);
+
 process.once('SIGINT',  () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
