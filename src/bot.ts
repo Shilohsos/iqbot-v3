@@ -23,7 +23,7 @@ import {
 import { startKeyboard, backKeyboard, onboardKeyboard } from './ui/user.js';
 import {
     getAdminId, adminKeyboard, adminBackKeyboard,
-    broadcastTargetKeyboard, broadcastTimerKeyboard,
+    broadcastTargetKeyboard, broadcastLinkKeyboard, broadcastTimerKeyboard,
     tokenTierKeyboard, generateTokenKeyboard,
     topTradersAdminKeyboard, funnelKeyboard, memberManagementKeyboard,
 } from './ui/admin.js';
@@ -91,6 +91,8 @@ const connectSessions = new Map<number, ConnectState>();
 type AdminStep =
     | 'find_users'
     | 'broadcast_message'
+    | 'broadcast_link_url'
+    | 'broadcast_link_label'
     | 'manual_add_id'
     | 'manual_add_profit'
     | 'funnel_url'
@@ -104,6 +106,7 @@ type AdminStep =
 interface AdminSessionState {
     step: AdminStep;
     broadcastTarget?: 'active' | 'inactive' | 'all';
+    broadcastLinkUrl?: string;
     manualAddUserId?: number;
     memberMessageUserId?: number;
 }
@@ -113,7 +116,7 @@ const adminSessions = new Map<number, AdminSessionState>();
 const upgradeSessions = new Set<number>();
 
 // In-flight broadcast payloads keyed by admin chat ID
-const pendingBroadcasts = new Map<number, { message: string; targetIds: number[] }>();
+const pendingBroadcasts = new Map<number, { message: string; targetIds: number[]; linkUrl?: string; linkLabel?: string }>();
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -968,6 +971,17 @@ bot.action(/^broadcast:(active|inactive|all)$/, async ctx => {
     await ctx.reply(`📝 Send your broadcast message for *${target}* users:`, { parse_mode: 'Markdown' });
 });
 
+bot.action('broadcast_link:yes', async ctx => {
+    await ctx.answerCbQuery();
+    adminSessions.set(ctx.chat!.id, { step: 'broadcast_link_url' });
+    await ctx.reply('🔗 Enter the link URL (e.g. https://example.com):');
+});
+
+bot.action('broadcast_link:no', async ctx => {
+    await ctx.answerCbQuery();
+    await ctx.reply('⏱ Auto-delete after?', { reply_markup: broadcastTimerKeyboard() });
+});
+
 bot.action(/^bcast_timer:(\d+)$/, async ctx => {
     await ctx.answerCbQuery();
     const deleteAfterMs = parseInt(ctx.match[1], 10);
@@ -976,12 +990,15 @@ bot.action(/^bcast_timer:(\d+)$/, async ctx => {
     adminSessions.delete(ctx.chat!.id);
     if (!pending) { await ctx.reply('❌ Session expired.', { reply_markup: adminBackKeyboard() }); return; }
 
-    const { message, targetIds } = pending;
+    const { message, targetIds, linkUrl, linkLabel } = pending;
     const sentMsgIds: Array<{ telegramId: number; msgId: number }> = [];
+    const replyMarkup = linkUrl && linkLabel
+        ? { inline_keyboard: [[{ text: linkLabel, url: linkUrl }]] }
+        : undefined;
 
     for (const uid of targetIds) {
         try {
-            const m = await bot.telegram.sendMessage(uid, message);
+            const m = await bot.telegram.sendMessage(uid, message, replyMarkup ? { reply_markup: replyMarkup } : undefined);
             sentMsgIds.push({ telegramId: uid, msgId: m.message_id });
         } catch {}
     }
@@ -1178,6 +1195,7 @@ bot.on('text', async ctx => {
     if (ctx.from?.id === getAdminId()) {
         const as = adminSessions.get(chatId);
         if (as) {
+            try {
             adminSessions.delete(chatId);
 
             if (as.step === 'find_users') {
@@ -1208,18 +1226,39 @@ bot.on('text', async ctx => {
             }
 
             if (as.step === 'broadcast_message') {
-                const target = as.broadcastTarget!;
-                let targetIds: number[];
-                if (target === 'active') targetIds = getActiveTraderIds(5);
-                else if (target === 'inactive') targetIds = getInactiveTraderIds(5);
-                else targetIds = getAllUserIds();
+                try {
+                    const target = as.broadcastTarget!;
+                    let targetIds: number[];
+                    if (target === 'active') targetIds = getActiveTraderIds(5);
+                    else if (target === 'inactive') targetIds = getInactiveTraderIds(5);
+                    else targetIds = getAllUserIds();
 
-                // Store message in session and ask for timer
-                adminSessions.set(chatId, { ...as, step: 'broadcast_message', broadcastTarget: target });
-                // Use a temporary in-flight map to pass message through callback
-                pendingBroadcasts.set(chatId, { message: text, targetIds });
+                    pendingBroadcasts.set(chatId, { message: text, targetIds });
+                    adminSessions.delete(chatId);
+                    await ctx.reply(
+                        `📝 Message saved. Send to *${targetIds.length}* ${target} user(s).\n\nAdd a link button?`,
+                        { parse_mode: 'Markdown', reply_markup: broadcastLinkKeyboard() }
+                    );
+                } catch (err) {
+                    console.error('[broadcast] broadcast_message error:', err);
+                    await ctx.reply('❌ Broadcast setup failed. Check server logs.', { reply_markup: adminBackKeyboard() });
+                }
+                return;
+            }
+
+            if (as.step === 'broadcast_link_url') {
+                adminSessions.set(chatId, { ...as, step: 'broadcast_link_label', broadcastLinkUrl: text });
+                await ctx.reply('✏️ Enter the button label (e.g. "Open App"):');
+                return;
+            }
+
+            if (as.step === 'broadcast_link_label') {
+                const pending = pendingBroadcasts.get(chatId);
+                adminSessions.delete(chatId);
+                if (!pending) { await ctx.reply('❌ Session expired.', { reply_markup: adminBackKeyboard() }); return; }
+                pendingBroadcasts.set(chatId, { ...pending, linkUrl: as.broadcastLinkUrl, linkLabel: text });
                 await ctx.reply(
-                    `📤 Ready to send to *${targetIds.length}* users.\n\nAuto-delete after?`,
+                    `🔗 Button set: *${text}* → ${as.broadcastLinkUrl}\n\nAuto-delete after?`,
                     { parse_mode: 'Markdown', reply_markup: broadcastTimerKeyboard() }
                 );
                 return;
@@ -1304,6 +1343,10 @@ bot.on('text', async ctx => {
             }
 
             return;
+            } catch (err) {
+                console.error('[admin-wizard] unhandled error in step', as.step, ':', err);
+                await ctx.reply('❌ An error occurred. Check server logs.', { reply_markup: adminBackKeyboard() });
+            }
         }
     }
 
