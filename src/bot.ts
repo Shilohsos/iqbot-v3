@@ -51,6 +51,7 @@ interface WizardState {
     mode?: 'demo' | 'live';
     amount?: number;
     timeframe?: number;
+    lastImageMsgId?: number;
 }
 const wizardSessions = new Map<number, WizardState>();
 
@@ -249,6 +250,16 @@ async function runMartingale(
     const logLines: string[] = ['✦ Trade session initialized…'];
     const logMsg = await ctx.reply(logLines.join('\n'));
 
+    // Tracks the latest round image so the previous one can be deleted before the next
+    let lastRoundImgId: number | undefined;
+    const sendRoundImage = async (f: string) => {
+        if (lastRoundImgId) {
+            try { await ctx.telegram.deleteMessage(ctx.chat!.id, lastRoundImgId); } catch {}
+            lastRoundImgId = undefined;
+        }
+        try { const m = await ctx.replyWithPhoto(ASSET(f)); lastRoundImgId = m.message_id; } catch {}
+    };
+
     const syncLog = async () => {
         try {
             await ctx.telegram.editMessageText(ctx.chat!.id, logMsg.message_id, undefined, logLines.join('\n'));
@@ -303,8 +314,8 @@ async function runMartingale(
         }
 
         if (result.status === 'WIN' || result.status === 'TIE') {
-            // L11b = MAJOR WIN / COMEBACK ACHIEVED (martingale sequence win)
-            try { await ctx.replyWithPhoto(ASSET('L11b.png')); } catch {}
+            // L11b = MAJOR WIN / COMEBACK ACHIEVED; replaces L10 if it's still showing
+            await sendRoundImage('L11b.png');
             await ctx.reply(
                 `🏆 +$${result.pnl.toFixed(2)} added to your balance.\n\n` +
                 (round > 1 ? `Recovery complete on step ${round}/${MAX_ROUNDS}.\n\n` : '') +
@@ -322,7 +333,7 @@ async function runMartingale(
         // LOSS — next round
         if (round < MAX_ROUNDS) {
             if (round === 1) {
-                try { await ctx.replyWithPhoto(ASSET('L10.png')); } catch {}
+                await sendRoundImage('L10.png');
                 await ctx.reply('SMART RECOVERY ACTIVATED\nBumping the next stake. Bot fights back.');
             }
             currentAmount = currentAmount * 2;
@@ -331,8 +342,8 @@ async function runMartingale(
     }
 
     const sign = totalPnl >= 0 ? '+' : '';
-    // L11c = LOST, BUT THIS IS NOT THE END (martingale exhausted)
-    try { await ctx.replyWithPhoto(ASSET('L11c.png')); } catch {}
+    // L11c = LOST, BUT THIS IS NOT THE END; replaces L10 if showing
+    await sendRoundImage('L11c.png');
     await ctx.reply(`Lost this one 💔! Remain confident! New setup loading 👾\n\nTotal: ${sign}$${totalPnl.toFixed(2)}`);
     if (balanceType === 'demo') await showDemoUpsell(ctx);
 }
@@ -409,6 +420,10 @@ bot.action(/^mode:(demo|live)$/, async ctx => {
 // ─── Trade wizard — amount ────────────────────────────────────────────────────
 
 bot.action('wizard:cancel', async ctx => {
+    const state = wizardSessions.get(ctx.chat!.id);
+    if (state?.lastImageMsgId) {
+        try { await ctx.telegram.deleteMessage(ctx.chat!.id, state.lastImageMsgId); } catch {}
+    }
     wizardSessions.delete(ctx.chat!.id);
     await ctx.editMessageText('❌ Trade cancelled.');
     await ctx.answerCbQuery();
@@ -428,7 +443,10 @@ bot.action(/^amt:(.+)$/, async ctx => {
         if (state.mode === 'demo' && amt > 20) { await ctx.answerCbQuery('Demo max is $20.'); return; }
         state.amount = amt;
         state.step = 'timeframe';
-        try { await ctx.replyWithPhoto(ASSET('L5.png')); } catch {}
+        if (state.lastImageMsgId) {
+            try { await ctx.telegram.deleteMessage(ctx.chat!.id, state.lastImageMsgId); } catch {}
+        }
+        try { const m = await ctx.replyWithPhoto(ASSET('L5.png')); state.lastImageMsgId = m.message_id; } catch {}
         await ctx.editMessageText(
             '⏱ Pick your expiry timeframe 👇\n⏱ Faster timeframes settle quicker.\n🐢 Longer timeframes ride bigger moves.',
             { reply_markup: timeframeKeyboard() }
@@ -445,7 +463,10 @@ bot.action(/^tf:(\d+)$/, async ctx => {
     if (!state || state.step !== 'timeframe') { await ctx.answerCbQuery('Session expired — start over.'); return; }
     state.timeframe = parseInt(ctx.match[1], 10);
     state.step = 'pair';
-    try { await ctx.replyWithPhoto(ASSET('L6.png')); } catch {}
+    if (state.lastImageMsgId) {
+        try { await ctx.telegram.deleteMessage(ctx.chat!.id, state.lastImageMsgId); } catch {}
+    }
+    try { const m = await ctx.replyWithPhoto(ASSET('L6.png')); state.lastImageMsgId = m.message_id; } catch {}
     await ctx.editMessageText(
         'Top picks ready 🎯\n\nHighest chance to win right now:\n\n' +
         '🏆 EUR/GBP OTC — Win rate ≈83%\n✅ EUR/USD OTC — Win rate ≈78%\n✅ AUD/USD OTC — Win rate ≈70%\n✅ USD/CAD OTC — Win rate ≈66%\n\n🚀 Make your choice below 👇',
@@ -472,7 +493,7 @@ bot.action(/^pair:(.+)$/, async ctx => {
     if (!state || state.step !== 'pair') { await ctx.answerCbQuery('Session expired — start over.'); return; }
 
     const pair = ctx.match[1];
-    const { amount, timeframe, mode } = state;
+    const { amount, timeframe, mode, lastImageMsgId: prevImgId } = state;
     wizardSessions.delete(chatId);
     await ctx.answerCbQuery();
 
@@ -481,8 +502,10 @@ bot.action(/^pair:(.+)$/, async ctx => {
     const ssid = getSsidForUser(ctx.from!.id);
     if (!ssid) { await ctx.editMessageText('❌ Not connected. Use /connect to link your IQ Option account.'); return; }
 
-    // L7 — Bot Is Analyzing (radar) before analysis starts
-    try { await ctx.replyWithPhoto(ASSET('L7.png')); } catch {}
+    // Delete L6 (pair selection image) then send L7 (analyzing radar)
+    if (prevImgId) { try { await ctx.telegram.deleteMessage(chatId, prevImgId); } catch {} }
+    let l7MsgId: number | undefined;
+    try { const m = await ctx.replyWithPhoto(ASSET('L7.png')); l7MsgId = m.message_id; } catch {}
     await ctx.editMessageText(`Selected: ${pair}\n\n🔍 Scanning markets...`);
 
     let analysis: AnalysisResult;
@@ -493,7 +516,8 @@ bot.action(/^pair:(.+)$/, async ctx => {
         return;
     }
 
-    // L8 — Opportunity Found (after analysis completes)
+    // Delete L7 (analyzing) then send L8 (opportunity found)
+    if (l7MsgId) { try { await ctx.telegram.deleteMessage(chatId, l7MsgId); } catch {} }
     try { await ctx.replyWithPhoto(ASSET('L8.png')); } catch {}
     // F: call = bullish = L9b (upward trend); put = bearish = L9a (downward trend)
     const signalImg = analysis.direction === 'call' ? 'L9b.png' : 'L9a.png';
@@ -527,8 +551,9 @@ bot.action('ui:start', async ctx => { await ctx.answerCbQuery(); await sendStart
 bot.action('ui:trade', async ctx => {
     await ctx.answerCbQuery();
     if (!await requireApproval(ctx)) return;
-    wizardSessions.set(ctx.chat!.id, { step: 'mode' });
-    try { await ctx.replyWithPhoto(ASSET('L4.png')); } catch {}
+    const state: WizardState = { step: 'mode' };
+    try { const m = await ctx.replyWithPhoto(ASSET('L4.png')); state.lastImageMsgId = m.message_id; } catch {}
+    wizardSessions.set(ctx.chat!.id, state);
     await ctx.reply('Trade live | Trade Demo', { reply_markup: tradeModeKeyboard() });
 });
 
@@ -600,8 +625,9 @@ bot.action('ui:support', async ctx => {
 
 bot.command('trade', async ctx => {
     if (!await requireApproval(ctx)) return;
-    wizardSessions.set(ctx.chat.id, { step: 'mode' });
-    try { await ctx.replyWithPhoto(ASSET('L4.png')); } catch {}
+    const state: WizardState = { step: 'mode' };
+    try { const m = await ctx.replyWithPhoto(ASSET('L4.png')); state.lastImageMsgId = m.message_id; } catch {}
+    wizardSessions.set(ctx.chat.id, state);
     await ctx.reply('Trade live | Trade Demo', { reply_markup: tradeModeKeyboard() });
 });
 
@@ -912,7 +938,10 @@ bot.on('text', async ctx => {
 
     wiz.amount = amount;
     wiz.step = 'timeframe';
-    try { await ctx.replyWithPhoto(ASSET('L6.png')); } catch {}
+    if (wiz.lastImageMsgId) {
+        try { await ctx.telegram.deleteMessage(chatId, wiz.lastImageMsgId); } catch {}
+    }
+    try { const m = await ctx.replyWithPhoto(ASSET('L5.png')); wiz.lastImageMsgId = m.message_id; } catch {}
     await ctx.reply(
         '⏱ Pick your expiry timeframe 👇\n⏱ Faster timeframes settle quicker.\n🐢 Longer timeframes ride bigger moves.',
         { reply_markup: timeframeKeyboard() }
