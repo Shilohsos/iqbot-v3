@@ -91,6 +91,7 @@ const connectSessions = new Map<number, ConnectState>();
 type AdminStep =
     | 'find_users'
     | 'broadcast_message'
+    | 'broadcast_media'
     | 'broadcast_link_url'
     | 'broadcast_link_label'
     | 'manual_add_id'
@@ -116,7 +117,12 @@ const adminSessions = new Map<number, AdminSessionState>();
 const upgradeSessions = new Set<number>();
 
 // In-flight broadcast payloads keyed by admin chat ID
-const pendingBroadcasts = new Map<number, { message: string; targetIds: number[]; linkUrl?: string; linkLabel?: string }>();
+const pendingBroadcasts = new Map<number, {
+    message: string;
+    targetIds: number[];
+    media?: { type: 'photo' | 'video'; fileId: string };
+    linkButton?: { text: string; url: string };
+}>();
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -990,15 +996,22 @@ bot.action(/^bcast_timer:(\d+)$/, async ctx => {
     adminSessions.delete(ctx.chat!.id);
     if (!pending) { await ctx.reply('❌ Session expired.', { reply_markup: adminBackKeyboard() }); return; }
 
-    const { message, targetIds, linkUrl, linkLabel } = pending;
+    const { message, targetIds, media, linkButton } = pending;
     const sentMsgIds: Array<{ telegramId: number; msgId: number }> = [];
-    const replyMarkup = linkUrl && linkLabel
-        ? { inline_keyboard: [[{ text: linkLabel, url: linkUrl }]] }
+    const replyMarkup = linkButton
+        ? { inline_keyboard: [[{ text: linkButton.text, url: linkButton.url }]] }
         : undefined;
 
     for (const uid of targetIds) {
         try {
-            const m = await bot.telegram.sendMessage(uid, message, replyMarkup ? { reply_markup: replyMarkup } : undefined);
+            let m;
+            if (media?.type === 'photo') {
+                m = await bot.telegram.sendPhoto(uid, media.fileId, { caption: message, ...(replyMarkup ? { reply_markup: replyMarkup } : {}) });
+            } else if (media?.type === 'video') {
+                m = await bot.telegram.sendVideo(uid, media.fileId, { caption: message, ...(replyMarkup ? { reply_markup: replyMarkup } : {}) });
+            } else {
+                m = await bot.telegram.sendMessage(uid, message, replyMarkup ? { reply_markup: replyMarkup } : undefined);
+            }
             sentMsgIds.push({ telegramId: uid, msgId: m.message_id });
         } catch {}
     }
@@ -1184,6 +1197,33 @@ bot.command('pairs', async ctx => {
 
 bot.command('ping', ctx => ctx.reply('pong'));
 
+// ─── Broadcast media handlers ─────────────────────────────────────────────────
+
+bot.on('photo', async ctx => {
+    if (ctx.from?.id !== getAdminId()) return;
+    const chatId = ctx.chat.id;
+    const as = adminSessions.get(chatId);
+    if (!as || as.step !== 'broadcast_media') return;
+    const pending = pendingBroadcasts.get(chatId);
+    if (!pending) { await ctx.reply('❌ Session expired.'); return; }
+    const photo = ctx.message.photo.at(-1)!;
+    pendingBroadcasts.set(chatId, { ...pending, media: { type: 'photo', fileId: photo.file_id } });
+    adminSessions.delete(chatId);
+    await ctx.reply('📎 Image received! Include a link button?', { reply_markup: broadcastLinkKeyboard() });
+});
+
+bot.on('video', async ctx => {
+    if (ctx.from?.id !== getAdminId()) return;
+    const chatId = ctx.chat.id;
+    const as = adminSessions.get(chatId);
+    if (!as || as.step !== 'broadcast_media') return;
+    const pending = pendingBroadcasts.get(chatId);
+    if (!pending) { await ctx.reply('❌ Session expired.'); return; }
+    pendingBroadcasts.set(chatId, { ...pending, media: { type: 'video', fileId: ctx.message.video.file_id } });
+    adminSessions.delete(chatId);
+    await ctx.reply('📹 Video received! Include a link button?', { reply_markup: broadcastLinkKeyboard() });
+});
+
 // ─── Text handler (all wizards) ───────────────────────────────────────────────
 
 bot.on('text', async ctx => {
@@ -1234,14 +1274,22 @@ bot.on('text', async ctx => {
                     else targetIds = getAllUserIds();
 
                     pendingBroadcasts.set(chatId, { message: text, targetIds });
-                    adminSessions.delete(chatId);
-                    await ctx.reply(
-                        `📝 Message saved. Send to *${targetIds.length}* ${target} user(s).\n\nAdd a link button?`,
-                        { parse_mode: 'Markdown', reply_markup: broadcastLinkKeyboard() }
-                    );
+                    adminSessions.set(chatId, { ...as, step: 'broadcast_media' });
+                    await ctx.reply(`📎 Send to *${targetIds.length}* ${target} user(s).\n\nInclude an image or video? Send the file, or type "skip":`, { parse_mode: 'Markdown' });
                 } catch (err) {
                     console.error('[broadcast] broadcast_message error:', err);
                     await ctx.reply('❌ Broadcast setup failed. Check server logs.', { reply_markup: adminBackKeyboard() });
+                }
+                return;
+            }
+
+            if (as.step === 'broadcast_media') {
+                if (text.toLowerCase() === 'skip') {
+                    // adminSessions already deleted at top — proceed to link prompt
+                    await ctx.reply('Include a link button?', { reply_markup: broadcastLinkKeyboard() });
+                } else {
+                    adminSessions.set(chatId, as); // restore for retry
+                    await ctx.reply('❌ Please send an image/video file, or type "skip" to continue without media.');
                 }
                 return;
             }
@@ -1254,9 +1302,8 @@ bot.on('text', async ctx => {
 
             if (as.step === 'broadcast_link_label') {
                 const pending = pendingBroadcasts.get(chatId);
-                adminSessions.delete(chatId);
                 if (!pending) { await ctx.reply('❌ Session expired.', { reply_markup: adminBackKeyboard() }); return; }
-                pendingBroadcasts.set(chatId, { ...pending, linkUrl: as.broadcastLinkUrl, linkLabel: text });
+                pendingBroadcasts.set(chatId, { ...pending, linkButton: { text, url: as.broadcastLinkUrl! } });
                 await ctx.reply(
                     `🔗 Button set: *${text}* → ${as.broadcastLinkUrl}\n\nAuto-delete after?`,
                     { parse_mode: 'Markdown', reply_markup: broadcastTimerKeyboard() }
