@@ -693,13 +693,13 @@ bot.action(/^mode:(demo|live)$/, async ctx => {
 // ─── Trade wizard — amount ────────────────────────────────────────────────────
 
 bot.action('wizard:cancel', async ctx => {
+    await ctx.answerCbQuery();
     const state = wizardSessions.get(ctx.chat!.id);
     if (state?.lastImageMsgId) {
         try { await ctx.telegram.deleteMessage(ctx.chat!.id, state.lastImageMsgId); } catch {}
     }
     wizardSessions.delete(ctx.chat!.id);
-    await ctx.editMessageText('❌ Trade cancelled.');
-    await ctx.answerCbQuery();
+    try { await ctx.editMessageText('❌ Trade cancelled.'); } catch {}
 });
 
 bot.action(/^amt:(.+)$/, async ctx => {
@@ -710,7 +710,7 @@ bot.action(/^amt:(.+)$/, async ctx => {
     const val = ctx.match[1];
     if (val === 'custom') {
         state.step = 'custom_amount';
-        await ctx.editMessageText('✏️ Enter your custom amount (e.g. 75):');
+        try { await ctx.editMessageText('✏️ Enter your custom amount (e.g. 75):'); } catch {}
     } else {
         const amt = parseFloat(val);
         if (state.mode === 'demo' && amt > 20) { await ctx.answerCbQuery('Demo max is $20.'); return; }
@@ -720,10 +720,10 @@ bot.action(/^amt:(.+)$/, async ctx => {
             try { await ctx.telegram.deleteMessage(ctx.chat!.id, state.lastImageMsgId); } catch {}
         }
         try { const m = await ctx.replyWithPhoto(ASSET('L5.png')); state.lastImageMsgId = m.message_id; } catch {}
-        await ctx.editMessageText(
+        try { await ctx.editMessageText(
             '⏱ Pick your expiry timeframe 👇\n⏱ Faster timeframes settle quicker.\n🐢 Longer timeframes ride bigger moves.',
             { reply_markup: timeframeKeyboard() }
-        );
+        ); } catch {}
     }
     await ctx.answerCbQuery();
 });
@@ -740,11 +740,11 @@ bot.action(/^tf:(\d+)$/, async ctx => {
         try { await ctx.telegram.deleteMessage(ctx.chat!.id, state.lastImageMsgId); } catch {}
     }
     try { const m = await ctx.replyWithPhoto(ASSET('L6.png')); state.lastImageMsgId = m.message_id; } catch {}
-    await ctx.editMessageText(
+    try { await ctx.editMessageText(
         'Top picks ready 🎯\n\nHighest chance to win right now:\n\n' +
         '🏆 EUR/GBP OTC — Win rate ≈83%\n✅ EUR/USD OTC — Win rate ≈78%\n✅ AUD/USD OTC — Win rate ≈70%\n✅ USD/CAD OTC — Win rate ≈66%\n\n🚀 Make your choice below 👇',
         { reply_markup: pairKeyboard(0) }
-    );
+    ); } catch {}
     await ctx.answerCbQuery();
 });
 
@@ -754,7 +754,7 @@ bot.action(/^page:(\d+)$/, async ctx => {
     const chatId = ctx.chat!.id;
     const state = wizardSessions.get(chatId);
     if (!state || state.step !== 'pair') { await ctx.answerCbQuery('Session expired — start over.'); return; }
-    await ctx.editMessageReplyMarkup(pairKeyboard(parseInt(ctx.match[1], 10)));
+    try { await ctx.editMessageReplyMarkup(pairKeyboard(parseInt(ctx.match[1], 10))); } catch {}
     await ctx.answerCbQuery();
 });
 
@@ -770,16 +770,16 @@ bot.action(/^pair:(.+)$/, async ctx => {
     wizardSessions.delete(chatId);
     await ctx.answerCbQuery();
 
-    if (!amount || !timeframe) { await ctx.editMessageText('❌ Session error — start over.'); return; }
+    if (!amount || !timeframe) { try { await ctx.editMessageText('❌ Session error — start over.'); } catch { await ctx.reply('❌ Session error — start over.'); } return; }
 
     const ssid = getSsidForUser(ctx.from!.id);
-    if (!ssid) { await ctx.editMessageText('❌ Not connected. Use /connect to link your IQ Option account.'); return; }
+    if (!ssid) { try { await ctx.editMessageText('❌ Not connected. Use /connect to link your IQ Option account.'); } catch { await ctx.reply('❌ Not connected. Use /connect to link your IQ Option account.'); } return; }
 
     // Delete L6 (pair selection image) then send L7 (analyzing radar)
     if (prevImgId) { try { await ctx.telegram.deleteMessage(chatId, prevImgId); } catch {} }
     let l7MsgId: number | undefined;
     try { const m = await ctx.replyWithPhoto(ASSET('L7.png')); l7MsgId = m.message_id; } catch {}
-    await ctx.editMessageText(`Selected: ${pair}\n\n🔍 Scanning markets...`);
+    try { await ctx.editMessageText(`Selected: ${pair}\n\n🔍 Scanning markets...`); } catch {}
 
     let analysis: AnalysisResult;
     try {
@@ -809,12 +809,12 @@ bot.action(/^pair:(.+)$/, async ctx => {
 
 bot.action('upsell:live', async ctx => {
     await ctx.answerCbQuery();
-    await ctx.editMessageText('✅ Switched to Live mode! Your next trade will use your real balance.');
+    try { await ctx.editMessageText('✅ Switched to Live mode! Your next trade will use your real balance.'); } catch {}
 });
 
 bot.action('upsell:demo', async ctx => {
     await ctx.answerCbQuery();
-    await ctx.editMessageText('🪫 Continuing on Demo. Next trade stays in practice mode.');
+    try { await ctx.editMessageText('🪫 Continuing on Demo. Next trade stays in practice mode.'); } catch {}
 });
 
 // ─── User menu actions ────────────────────────────────────────────────────────
@@ -1867,6 +1867,11 @@ bot.on('text', async ctx => {
         '⏱ Pick your expiry timeframe 👇\n⏱ Faster timeframes settle quicker.\n🐢 Longer timeframes ride bigger moves.',
         { reply_markup: timeframeKeyboard() }
     );
+});
+
+bot.catch((err: unknown, ctx) => {
+    console.error(`[bot.catch] ${ctx.updateType}:`, err);
+    ctx.reply('⚠️ Something went wrong. Please try again.').catch(() => {});
 });
 
 bot.launch({ dropPendingUpdates: true });
