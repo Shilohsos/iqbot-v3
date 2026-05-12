@@ -1,4 +1,4 @@
-type Btn = { text: string; callback_data: string };
+type Btn = { text: string; callback_data: string } | { text: string; url: string };
 type IKMarkup = { inline_keyboard: Btn[][] };
 
 export function getAdminId(): number {
@@ -10,14 +10,109 @@ export function adminKeyboard(): IKMarkup {
     return {
         inline_keyboard: [
             [
-                { text: '👥 Users',    callback_data: 'admin:users' },
-                { text: '📢 Broadcast', callback_data: 'admin:broadcast' },
+                { text: '📊 Today',       callback_data: 'admin:today' },
+                { text: '🔌 Activations', callback_data: 'admin:activations' },
             ],
             [
-                { text: '📊 Stats',  callback_data: 'admin:stats' },
-                { text: '🔑 Tokens', callback_data: 'admin:tokens' },
+                { text: '🔍 Find Users',  callback_data: 'admin:find_users' },
+                { text: '🔑 Tokens',      callback_data: 'admin:tokens' },
+            ],
+            [
+                { text: '⚙️ System',     callback_data: 'admin:system' },
+                { text: '📢 Broadcast',   callback_data: 'admin:broadcast' },
+            ],
+            [
+                { text: '🏆 Top Traders', callback_data: 'admin:top_traders' },
+                { text: '🔻 Funnel',      callback_data: 'admin:funnel' },
+            ],
+            [
+                { text: '📋 Audits',      callback_data: 'admin:audits' },
+                { text: '🛡️ Admin',      callback_data: 'admin:admin' },
             ],
             [{ text: '🔙 Back', callback_data: 'ui:start' }],
+        ],
+    };
+}
+
+export function adminBackKeyboard(): IKMarkup {
+    return { inline_keyboard: [[{ text: '🔙 Admin Menu', callback_data: 'admin:back' }]] };
+}
+
+export function broadcastTargetKeyboard(): IKMarkup {
+    return {
+        inline_keyboard: [
+            [{ text: '🟢 Active Traders (< 5h ago)',   callback_data: 'broadcast:active' }],
+            [{ text: '🔴 Inactive Traders (5h+ idle)', callback_data: 'broadcast:inactive' }],
+            [{ text: '👥 All Users',                   callback_data: 'broadcast:all' }],
+            [{ text: '🔙 Admin Menu',                  callback_data: 'admin:back' }],
+        ],
+    };
+}
+
+export function broadcastTimerKeyboard(): IKMarkup {
+    return {
+        inline_keyboard: [[
+            { text: '5m',    callback_data: 'bcast_timer:300000' },
+            { text: '15m',   callback_data: 'bcast_timer:900000' },
+            { text: '1h',    callback_data: 'bcast_timer:3600000' },
+            { text: 'Never', callback_data: 'bcast_timer:0' },
+        ]],
+    };
+}
+
+export function tokenTierKeyboard(): IKMarkup {
+    return {
+        inline_keyboard: [
+            [{ text: '🚀 Newbie Tier', callback_data: 'token_tier:NEWBIE' }],
+            [{ text: '⚡ PRO Tier',    callback_data: 'token_tier:PRO' }],
+            [{ text: '🔙 Admin Menu',  callback_data: 'admin:back' }],
+        ],
+    };
+}
+
+export function generateTokenKeyboard(): IKMarkup {
+    return {
+        inline_keyboard: [
+            [{ text: '➕ Generate New Token', callback_data: 'admin:generate_token' }],
+            [{ text: '🔙 Admin Menu',         callback_data: 'admin:back' }],
+        ],
+    };
+}
+
+export function topTradersAdminKeyboard(): IKMarkup {
+    return {
+        inline_keyboard: [
+            [{ text: '➕ Manual Add',  callback_data: 'admin:manual_add' }],
+            [{ text: '🔙 Admin Menu', callback_data: 'admin:back' }],
+        ],
+    };
+}
+
+export function funnelKeyboard(): IKMarkup {
+    return {
+        inline_keyboard: [
+            [{ text: '🌐 Set Landing Page URL', callback_data: 'admin:set_funnel_url' }],
+            [{ text: '🔙 Admin Menu',           callback_data: 'admin:back' }],
+        ],
+    };
+}
+
+export function memberManagementKeyboard(): IKMarkup {
+    return {
+        inline_keyboard: [
+            [
+                { text: '👥 View All', callback_data: 'member:view' },
+                { text: '➕ Add',      callback_data: 'member:add' },
+            ],
+            [
+                { text: '⏸️ Pause',   callback_data: 'member:pause' },
+                { text: '▶️ Resume',  callback_data: 'member:resume' },
+            ],
+            [
+                { text: '🗑️ Remove', callback_data: 'member:remove' },
+                { text: '✉️ Message', callback_data: 'member:message' },
+            ],
+            [{ text: '🔙 Admin Menu', callback_data: 'admin:back' }],
         ],
     };
 }

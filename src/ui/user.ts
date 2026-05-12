@@ -11,10 +11,13 @@ export function startKeyboard(): IKMarkup {
                 { text: 'Stats 📈',    callback_data: 'ui:stats' },
             ],
             [
-                { text: 'Upgrade 💡',    callback_data: 'ui:upgrade' },
-                { text: 'Help & FAQ ❓', callback_data: 'ui:help' },
+                { text: 'Upgrade 💡',     callback_data: 'ui:upgrade' },
+                { text: 'Leaderboard 🏆', callback_data: 'ui:leaderboard' },
             ],
-            [{ text: 'Support 🔋', url: supportUrl }],
+            [
+                { text: 'Help & FAQ ❓',  callback_data: 'ui:help' },
+                { text: 'Support 🔋',     url: supportUrl },
+            ],
         ],
     };
 }

@@ -4,10 +4,16 @@ import { ClientSdk, SsidAuthMethod, BalanceType } from './index.js';
 import { WS_URL, PLATFORM_ID, IQ_HOST, IQ_AUTH_URL } from './protocol.js';
 import { executeTrade, createSdk, type TradeRequest, type TradeResult } from './trade.js';
 import {
-    getRecentTrades, getTradeStats,
-    getUser, saveUser, deleteUser, getAllUsers,
+    getRecentTrades, getTradeStats, getTopTradersToday,
+    getUser, saveUser, saveUsername, deleteUser, getAllUsers, getAllUserIds,
+    getActiveTraderIds, getInactiveTraderIds, findUsersByUsername,
     upsertOnboardingUser, approveUser, setManualApproval, rejectUser, getApprovalStats,
-    setUserTier,
+    getRecentApprovals, getPendingManualUsers,
+    setUserTier, pauseUser, resumeUser,
+    generateToken, validateToken, useToken, getTokens,
+    updateLeaderboardAuto, addLeaderboardManual, getLeaderboard,
+    getFunnelStats, getConfig, setConfig,
+    getAuditReport, maskUserId,
 } from './db.js';
 import { analyzePair, type AnalysisResult } from './analysis.js';
 import {
@@ -15,7 +21,12 @@ import {
     tierKeyboard, tradeModeKeyboard, demoUpsellKeyboard, affiliateFailKeyboard,
 } from './menu.js';
 import { startKeyboard, backKeyboard, onboardKeyboard } from './ui/user.js';
-import { getAdminId, adminKeyboard } from './ui/admin.js';
+import {
+    getAdminId, adminKeyboard, adminBackKeyboard,
+    broadcastTargetKeyboard, broadcastTimerKeyboard,
+    tokenTierKeyboard, generateTokenKeyboard,
+    topTradersAdminKeyboard, funnelKeyboard, memberManagementKeyboard,
+} from './ui/admin.js';
 import { checkAffiliate } from './affiliate.js';
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
@@ -29,6 +40,14 @@ if (!BOT_TOKEN) throw new Error('BOT_TOKEN missing from .env');
 process.on('unhandledRejection', (reason) => { console.error('[unhandledRejection]', reason); });
 
 const bot = new Telegraf(BOT_TOKEN);
+
+// Save Telegram username on every interaction
+bot.use(async (ctx, next) => {
+    const id = ctx.from?.id;
+    const username = ctx.from?.username;
+    if (id && username) saveUsername(id, username);
+    return next();
+});
 
 const MAX_ROUNDS       = 6;
 const ROUND_COOLDOWN_MS = 5_000;
@@ -68,6 +87,33 @@ const onboardSessions = new Map<number, OnboardState>();
 type ConnectStep = 'email' | 'password';
 interface ConnectState { step: ConnectStep; email?: string; }
 const connectSessions = new Map<number, ConnectState>();
+
+type AdminStep =
+    | 'find_users'
+    | 'broadcast_message'
+    | 'manual_add_id'
+    | 'manual_add_profit'
+    | 'funnel_url'
+    | 'member_pause'
+    | 'member_resume'
+    | 'member_remove'
+    | 'member_message_id'
+    | 'member_message_text'
+    | 'member_add';
+
+interface AdminSessionState {
+    step: AdminStep;
+    broadcastTarget?: 'active' | 'inactive' | 'all';
+    manualAddUserId?: number;
+    memberMessageUserId?: number;
+}
+const adminSessions = new Map<number, AdminSessionState>();
+
+// Users waiting to enter an upgrade token
+const upgradeSessions = new Set<number>();
+
+// In-flight broadcast payloads keyed by admin chat ID
+const pendingBroadcasts = new Map<number, { message: string; targetIds: number[] }>();
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -224,6 +270,10 @@ async function requireApproval(ctx: Context): Promise<boolean> {
     const user = getUser(ctx.from!.id);
     if (!user || user.approval_status === 'pending') { await startOnboarding(ctx); return false; }
     if (user.approval_status === 'approved') return true;
+    if (user.approval_status === 'paused') {
+        await ctx.reply('⏸️ Your account is temporarily paused. Contact the admin to resume.');
+        return false;
+    }
     if (user.approval_status === 'manual') {
         await ctx.reply('⏳ Your account is pending manual approval. Contact the admin.');
         return false;
@@ -326,6 +376,9 @@ async function runMartingale(
             const ss = getSessionStats(ctx.from!.id);
             ss.trades++;
             ss.pnl += roundPnl;
+        }
+        if (result.status === 'WIN') {
+            updateLeaderboardAuto(ctx.from!.id, result.pnl);
         }
 
         if (result.status === 'WIN' || result.status === 'TIE') {
@@ -623,10 +676,29 @@ bot.action('ui:stats', async ctx => {
 
 bot.action('ui:upgrade', async ctx => {
     await ctx.answerCbQuery();
+    upgradeSessions.add(ctx.chat!.id);
     await ctx.reply(
-        `💡 *Upgrade your account*\n\nContact admin to upgrade your tier:\n${ADMIN_CONTACT_LINK}`,
+        `💡 *Upgrade Your Tier*\n\n` +
+        `Enter your upgrade token below to unlock NEWBIE or PRO tier.\n\n` +
+        `Don't have a token? Contact the admin: ${ADMIN_CONTACT_LINK}`,
         { parse_mode: 'Markdown', reply_markup: backKeyboard() }
     );
+});
+
+bot.action('ui:leaderboard', async ctx => {
+    await ctx.answerCbQuery();
+    const entries = getLeaderboard();
+    if (entries.length === 0) {
+        await ctx.reply('🏆 *Today\'s Leaderboard*\n\nNo trades recorded yet today.', { parse_mode: 'Markdown', reply_markup: backKeyboard() });
+        return;
+    }
+    const medals = ['🥇', '🥈', '🥉'];
+    let msg = '🏆 *Today\'s Top Traders*\n\n';
+    entries.forEach((e, i) => {
+        const medal = medals[i] ?? `${i + 1}.`;
+        msg += `${medal} ${maskUserId(e.telegram_id)} — +$${e.profit.toFixed(2)}\n`;
+    });
+    await ctx.reply(msg, { parse_mode: 'Markdown', reply_markup: backKeyboard() });
 });
 
 bot.action('ui:help', async ctx => {
@@ -758,32 +830,304 @@ bot.command('admin', async ctx => {
     await ctx.reply('Commands: /admin users | /admin approve <id> | /admin reject <id> | /admin stats');
 });
 
-bot.action('admin:users', async ctx => {
-    await ctx.answerCbQuery();
-    const users = getAllUsers();
-    if (users.length === 0) { await ctx.reply('No users yet.'); return; }
-    let msg = `👥 *All Users* (${users.length})\n\n`;
-    for (const u of users) {
-        const e = u.approval_status === 'approved' ? '✅' : u.approval_status === 'manual' ? '🔔' : u.approval_status === 'rejected' ? '❌' : '⏳';
-        msg += `${e} \`${u.telegram_id}\`${u.iq_user_id ? ` · IQ: \`${u.iq_user_id}\`` : ''} — ${u.approval_status}\n`;
-    }
-    await ctx.reply(msg, { parse_mode: 'Markdown' });
-});
+// ─── Admin back ───────────────────────────────────────────────────────────────
 
-bot.action('admin:broadcast', async ctx => { await ctx.answerCbQuery(); await ctx.reply('📢 Broadcast coming soon.'); });
-
-bot.action('admin:stats', async ctx => {
+bot.action('admin:back', async ctx => {
     await ctx.answerCbQuery();
-    const ts = getTradeStats(); const as_ = getApprovalStats();
-    const pnlSign = ts.totalPnl >= 0 ? '+' : '';
+    adminSessions.delete(ctx.chat!.id);
+    const stats = getApprovalStats();
     await ctx.reply(
-        `📊 *Admin Stats*\n\n*Users:*\n✅ Approved: ${as_.approved}\n⏳ Pending: ${as_.pending}\n🔔 Manual: ${as_.manual}\n❌ Rejected: ${as_.rejected}\n\n` +
-        `*Trades:*\n${ts.total} total | ${ts.wins}W / ${ts.losses}L / ${ts.ties}T | PnL: ${pnlSign}$${ts.totalPnl.toFixed(2)}`,
-        { parse_mode: 'Markdown' }
+        `🛡️ *Admin Dashboard*\n\n` +
+        `👥 Users: ${stats.total} | ✅ ${stats.approved} | ⏳ ${stats.pending} | 🔔 ${stats.manual} | ❌ ${stats.rejected}`,
+        { parse_mode: 'Markdown', reply_markup: adminKeyboard() }
     );
 });
 
-bot.action('admin:tokens', async ctx => { await ctx.answerCbQuery(); await ctx.reply('🔑 Token management coming soon.'); });
+// ─── Module 1: Today ─────────────────────────────────────────────────────────
+
+bot.action('admin:today', async ctx => {
+    await ctx.answerCbQuery();
+    const traders = getTopTradersToday(20);
+    if (traders.length === 0) {
+        await ctx.reply('📊 *Today\'s Top Traders*\n\nNo trades today yet.', { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
+        return;
+    }
+    let msg = '📊 *Today\'s Top Traders*\n\n';
+    traders.forEach((t, i) => {
+        const name = t.username ? `@${t.username}` : `ID: ${maskUserId(t.telegram_id)}`;
+        msg += `${i + 1}. ${name} — ${t.trade_count} trades\n`;
+    });
+    await ctx.reply(msg, { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
+});
+
+// ─── Module 2: Activations ────────────────────────────────────────────────────
+
+bot.action('admin:activations', async ctx => {
+    await ctx.answerCbQuery();
+    const pending = getPendingManualUsers();
+    const recent = getRecentApprovals(24);
+    let msg = '🔌 *Activations*\n\n';
+    if (pending.length > 0) {
+        msg += `⏳ *Pending Manual Approval (${pending.length}):*\n`;
+        for (const u of pending) {
+            const name = u.username ? `@${u.username}` : `ID: ${maskUserId(u.telegram_id)}`;
+            msg += `${name}\n`;
+        }
+        msg += '\n';
+    } else {
+        msg += '⏳ *Pending:* None\n\n';
+    }
+    if (recent.length > 0) {
+        msg += `✅ *Recently Approved (24h):*\n`;
+        for (const u of recent) {
+            const name = u.username ? `@${u.username}` : `ID: ${maskUserId(u.telegram_id)}`;
+            msg += `${name}\n`;
+        }
+    } else {
+        msg += '✅ *Approved (24h):* None';
+    }
+    await ctx.reply(msg, { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
+});
+
+// ─── Module 3: Find Users ─────────────────────────────────────────────────────
+
+bot.action('admin:find_users', async ctx => {
+    await ctx.answerCbQuery();
+    adminSessions.set(ctx.chat!.id, { step: 'find_users' });
+    await ctx.reply('🔍 Enter a Telegram User ID (number) or username to search:');
+});
+
+// ─── Module 4: Tokens ─────────────────────────────────────────────────────────
+
+bot.action('admin:tokens', async ctx => {
+    await ctx.answerCbQuery();
+    const tokens = getTokens();
+    let msg = '🔑 *Token Manager*\n\n';
+    if (tokens.length === 0) {
+        msg += 'No tokens generated yet.\n';
+    } else {
+        const now = new Date();
+        for (const t of tokens.slice(0, 15)) {
+            const expired = new Date(t.expires_at) < now;
+            const status = t.used_by ? '✅ Used' : expired ? '❌ Expired' : '⏳ Unused';
+            const hoursLeft = expired ? 0 : Math.round((new Date(t.expires_at).getTime() - now.getTime()) / 3_600_000);
+            msg += `• \`${t.token}\` — ${t.tier} — ${status}${!t.used_by && !expired ? ` (${hoursLeft}h left)` : ''}\n`;
+        }
+    }
+    await ctx.reply(msg, { parse_mode: 'Markdown', reply_markup: generateTokenKeyboard() });
+});
+
+bot.action('admin:generate_token', async ctx => {
+    await ctx.answerCbQuery();
+    await ctx.reply('🔑 Select tier for new token:', { reply_markup: tokenTierKeyboard() });
+});
+
+bot.action(/^token_tier:(NEWBIE|PRO)$/, async ctx => {
+    await ctx.answerCbQuery();
+    const tier = ctx.match[1];
+    const token = generateToken(tier);
+    await ctx.reply(
+        `✅ Token generated!\n\n\`${token}\`\n\nTier: *${tier}* · Valid 24 hours\n\nShare this with the user manually.`,
+        { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() }
+    );
+});
+
+// ─── Module 5: System ─────────────────────────────────────────────────────────
+
+bot.action('admin:system', async ctx => {
+    await ctx.answerCbQuery();
+    const uptimeSec = Math.floor(process.uptime());
+    const h = Math.floor(uptimeSec / 3600);
+    const m = Math.floor((uptimeSec % 3600) / 60);
+    const mem = (process.memoryUsage().rss / 1_048_576).toFixed(1);
+    const as_ = getApprovalStats();
+    const ts = getTradeStats();
+    await ctx.reply(
+        `⚙️ *System Status*\n\n` +
+        `🤖 Bot: ✅ Online (uptime: ${h}h ${m}m)\n` +
+        `💾 Memory: ${mem} MB\n\n` +
+        `👥 Total users: ${as_.total}\n` +
+        `✅ Approved: ${as_.approved} | ⏳ Pending: ${as_.pending} | ❌ Rejected: ${as_.rejected}\n\n` +
+        `📊 Total trades: ${ts.total}\n` +
+        `📦 Database: ✅ OK`,
+        { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() }
+    );
+});
+
+// ─── Module 6: Broadcast ─────────────────────────────────────────────────────
+
+bot.action('admin:broadcast', async ctx => {
+    await ctx.answerCbQuery();
+    await ctx.reply('📢 *Broadcast* — Select target group:', { parse_mode: 'Markdown', reply_markup: broadcastTargetKeyboard() });
+});
+
+bot.action(/^broadcast:(active|inactive|all)$/, async ctx => {
+    await ctx.answerCbQuery();
+    const target = ctx.match[1] as 'active' | 'inactive' | 'all';
+    adminSessions.set(ctx.chat!.id, { step: 'broadcast_message', broadcastTarget: target });
+    await ctx.reply(`📝 Send your broadcast message for *${target}* users:`, { parse_mode: 'Markdown' });
+});
+
+bot.action(/^bcast_timer:(\d+)$/, async ctx => {
+    await ctx.answerCbQuery();
+    const deleteAfterMs = parseInt(ctx.match[1], 10);
+    const pending = pendingBroadcasts.get(ctx.chat!.id);
+    pendingBroadcasts.delete(ctx.chat!.id);
+    adminSessions.delete(ctx.chat!.id);
+    if (!pending) { await ctx.reply('❌ Session expired.', { reply_markup: adminBackKeyboard() }); return; }
+
+    const { message, targetIds } = pending;
+    const sentMsgIds: Array<{ telegramId: number; msgId: number }> = [];
+
+    for (const uid of targetIds) {
+        try {
+            const m = await bot.telegram.sendMessage(uid, message);
+            sentMsgIds.push({ telegramId: uid, msgId: m.message_id });
+        } catch {}
+    }
+
+    const timerLabel = deleteAfterMs === 0 ? 'never' :
+        deleteAfterMs < 3_600_000 ? `${deleteAfterMs / 60_000}m` : '1h';
+    await ctx.reply(
+        `✅ Broadcast sent to *${sentMsgIds.length}/${targetIds.length}* users. Auto-delete: ${timerLabel}`,
+        { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() }
+    );
+
+    if (deleteAfterMs > 0) {
+        setTimeout(() => {
+            for (const { telegramId, msgId } of sentMsgIds) {
+                bot.telegram.deleteMessage(telegramId, msgId).catch(() => {});
+            }
+        }, deleteAfterMs);
+    }
+});
+
+// ─── Module 7: Top Traders ────────────────────────────────────────────────────
+
+bot.action('admin:top_traders', async ctx => {
+    await ctx.answerCbQuery();
+    const entries = getLeaderboard();
+    let msg = '🏆 *Today\'s Leaderboard*\n\n';
+    if (entries.length === 0) {
+        msg += 'No entries yet today.';
+    } else {
+        const medals = ['🥇', '🥈', '🥉'];
+        entries.forEach((e, i) => {
+            msg += `${medals[i] ?? `${i + 1}.`} ${maskUserId(e.telegram_id)} — +$${e.profit.toFixed(2)}\n`;
+        });
+    }
+    await ctx.reply(msg, { parse_mode: 'Markdown', reply_markup: topTradersAdminKeyboard() });
+});
+
+bot.action('admin:manual_add', async ctx => {
+    await ctx.answerCbQuery();
+    adminSessions.set(ctx.chat!.id, { step: 'manual_add_id' });
+    await ctx.reply('Enter the Telegram User ID to add to the leaderboard:');
+});
+
+// ─── Module 8: Funnel ─────────────────────────────────────────────────────────
+
+bot.action('admin:funnel', async ctx => {
+    await ctx.answerCbQuery();
+    const url = getConfig('funnel_url') ?? 'Not set';
+    const stats = getFunnelStats();
+    let msg = `🔻 *Funnel Settings*\n\n🌐 Landing Page: ${url}\n📊 Events Today: ${stats.events}`;
+    if (stats.byType.length > 0) {
+        msg += '\n' + stats.byType.map(e => `• ${e.event_type}: ${e.cnt}`).join('\n');
+    }
+    await ctx.reply(msg, { parse_mode: 'Markdown', reply_markup: funnelKeyboard() });
+});
+
+bot.action('admin:set_funnel_url', async ctx => {
+    await ctx.answerCbQuery();
+    adminSessions.set(ctx.chat!.id, { step: 'funnel_url' });
+    await ctx.reply('🌐 Enter the landing page URL:');
+});
+
+// ─── Module 9: Audits ─────────────────────────────────────────────────────────
+
+bot.action('admin:audits', async ctx => {
+    await ctx.answerCbQuery();
+    const r = getAuditReport();
+    const pnlSign = r.totalPnl >= 0 ? '+' : '';
+    const winPct = r.totalTrades > 0 ? ((r.wins / r.totalTrades) * 100).toFixed(1) : '0.0';
+    let msg =
+        `📋 *Audit Report (Last 24h)*\n\n` +
+        `👥 New Users: ${r.newUsers}\n` +
+        `✅ Auto-Approved: ${r.autoApproved}\n` +
+        `⏳ Manual Pending: ${r.manualPending}\n\n` +
+        `📊 *Trading Activity:*\n` +
+        `• Total Trades: ${r.totalTrades}\n` +
+        `• Wins: ${r.wins} (${winPct}%)\n` +
+        `• Losses: ${r.losses}\n` +
+        `• Ties: ${r.ties}\n` +
+        `• Total PnL: ${pnlSign}$${r.totalPnl.toFixed(2)}\n\n` +
+        `🔄 Martingale Runs: ${r.martingaleRuns}\n` +
+        `   - Recovered: ${r.martingaleRecovered}\n` +
+        `   - Failed: ${r.martingaleRuns - r.martingaleRecovered}`;
+    if (r.topPerformerId) {
+        msg += `\n\n🏆 Top Performer: ${maskUserId(r.topPerformerId)} (+$${(r.topPerformerProfit ?? 0).toFixed(2)})`;
+    }
+    await ctx.reply(msg, { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
+});
+
+// ─── Module 10: Admin member management ───────────────────────────────────────
+
+bot.action('admin:admin', async ctx => {
+    await ctx.answerCbQuery();
+    const as_ = getApprovalStats();
+    const paused = getAllUsers().filter(u => u.approval_status === 'paused').length;
+    await ctx.reply(
+        `🛡️ *Member Management*\n\n` +
+        `👥 Total: ${as_.total} | ✅ Active: ${as_.approved} | ⏸️ Paused: ${paused} | ❌ Rejected: ${as_.rejected}`,
+        { parse_mode: 'Markdown', reply_markup: memberManagementKeyboard() }
+    );
+});
+
+bot.action('member:view', async ctx => {
+    await ctx.answerCbQuery();
+    const users = getAllUsers();
+    if (users.length === 0) { await ctx.reply('No members yet.', { reply_markup: adminBackKeyboard() }); return; }
+    let msg = `👥 *All Members* (${users.length})\n\n`;
+    for (const u of users.slice(0, 30)) {
+        const e = u.approval_status === 'approved' ? '✅' : u.approval_status === 'paused' ? '⏸️' : u.approval_status === 'rejected' ? '❌' : '⏳';
+        const name = u.username ? `@${u.username}` : maskUserId(u.telegram_id);
+        const tier = (u.tier ?? 'DEMO').toUpperCase();
+        msg += `${e} ${name} — ${tier}\n`;
+    }
+    if (users.length > 30) msg += `\n_…and ${users.length - 30} more_`;
+    await ctx.reply(msg, { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
+});
+
+bot.action('member:pause', async ctx => {
+    await ctx.answerCbQuery();
+    adminSessions.set(ctx.chat!.id, { step: 'member_pause' });
+    await ctx.reply('⏸️ Enter Telegram User ID to pause:');
+});
+
+bot.action('member:resume', async ctx => {
+    await ctx.answerCbQuery();
+    adminSessions.set(ctx.chat!.id, { step: 'member_resume' });
+    await ctx.reply('▶️ Enter Telegram User ID to resume:');
+});
+
+bot.action('member:remove', async ctx => {
+    await ctx.answerCbQuery();
+    adminSessions.set(ctx.chat!.id, { step: 'member_remove' });
+    await ctx.reply('🗑️ Enter Telegram User ID to remove:');
+});
+
+bot.action('member:message', async ctx => {
+    await ctx.answerCbQuery();
+    adminSessions.set(ctx.chat!.id, { step: 'member_message_id' });
+    await ctx.reply('✉️ Enter Telegram User ID to message:');
+});
+
+bot.action('member:add', async ctx => {
+    await ctx.answerCbQuery();
+    adminSessions.set(ctx.chat!.id, { step: 'member_add' });
+    await ctx.reply('➕ Enter Telegram User ID to manually add/approve:');
+});
 
 // ─── /connect & /disconnect ───────────────────────────────────────────────────
 
@@ -829,6 +1173,160 @@ bot.on('text', async ctx => {
     if (ctx.message.text.startsWith('/')) return;
     const chatId = ctx.chat.id;
     const text   = ctx.message.text.trim();
+
+    // ── Admin wizard ─────────────────────────────────────────────────────────
+    if (ctx.from?.id === getAdminId()) {
+        const as = adminSessions.get(chatId);
+        if (as) {
+            adminSessions.delete(chatId);
+
+            if (as.step === 'find_users') {
+                const byId = parseInt(text, 10);
+                let found;
+                if (!isNaN(byId)) {
+                    const u = getUser(byId);
+                    found = u ? [u] : [];
+                } else {
+                    found = findUsersByUsername(text);
+                }
+                if (found.length === 0) {
+                    await ctx.reply('🔍 No user found.', { reply_markup: adminBackKeyboard() });
+                } else {
+                    let msg = `🔍 *Found ${found.length} user(s):*\n\n`;
+                    for (const u of found) {
+                        const statusEmoji = u.approval_status === 'approved' ? '✅' : u.approval_status === 'paused' ? '⏸️' : u.approval_status === 'rejected' ? '❌' : '⏳';
+                        const ts = getTradeStats(u.telegram_id);
+                        const winRate = ts.total > 0 ? ((ts.wins / ts.total) * 100).toFixed(0) : '0';
+                        msg += `Telegram: ${u.username ? `@${u.username}` : 'no username'} (\`${maskUserId(u.telegram_id)}\`)\n`;
+                        if (u.iq_user_id) msg += `IQ User ID: \`${maskUserId(u.iq_user_id)}\`\n`;
+                        msg += `Status: ${statusEmoji} ${u.approval_status} | Tier: ${u.tier ?? 'DEMO'}\n`;
+                        msg += `Trades: ${ts.total} (Win rate: ${winRate}%)\n\n`;
+                    }
+                    await ctx.reply(msg, { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
+                }
+                return;
+            }
+
+            if (as.step === 'broadcast_message') {
+                const target = as.broadcastTarget!;
+                let targetIds: number[];
+                if (target === 'active') targetIds = getActiveTraderIds(5);
+                else if (target === 'inactive') targetIds = getInactiveTraderIds(5);
+                else targetIds = getAllUserIds();
+
+                // Store message in session and ask for timer
+                adminSessions.set(chatId, { ...as, step: 'broadcast_message', broadcastTarget: target });
+                // Use a temporary in-flight map to pass message through callback
+                pendingBroadcasts.set(chatId, { message: text, targetIds });
+                await ctx.reply(
+                    `📤 Ready to send to *${targetIds.length}* users.\n\nAuto-delete after?`,
+                    { parse_mode: 'Markdown', reply_markup: broadcastTimerKeyboard() }
+                );
+                return;
+            }
+
+            if (as.step === 'manual_add_id') {
+                const uid = parseInt(text, 10);
+                if (isNaN(uid)) { await ctx.reply('❌ Invalid user ID.', { reply_markup: adminBackKeyboard() }); return; }
+                adminSessions.set(chatId, { step: 'manual_add_profit', manualAddUserId: uid });
+                await ctx.reply(`Enter profit amount for user \`${uid}\`:`, { parse_mode: 'Markdown' });
+                return;
+            }
+
+            if (as.step === 'manual_add_profit' && as.manualAddUserId) {
+                const profit = parseFloat(text);
+                if (isNaN(profit) || profit <= 0) { await ctx.reply('❌ Invalid amount.', { reply_markup: adminBackKeyboard() }); return; }
+                const added = addLeaderboardManual(as.manualAddUserId, profit);
+                await ctx.reply(
+                    added ? `✅ Added \`${maskUserId(as.manualAddUserId)}\` — +$${profit.toFixed(2)} to leaderboard.` : '❌ Leaderboard is full (max 10 entries).',
+                    { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() }
+                );
+                return;
+            }
+
+            if (as.step === 'funnel_url') {
+                setConfig('funnel_url', text);
+                await ctx.reply(`✅ Landing page URL saved:\n${text}`, { reply_markup: adminBackKeyboard() });
+                return;
+            }
+
+            if (as.step === 'member_pause') {
+                const uid = parseInt(text, 10);
+                if (isNaN(uid)) { await ctx.reply('❌ Invalid ID.', { reply_markup: adminBackKeyboard() }); return; }
+                pauseUser(uid);
+                await ctx.reply(`⏸️ User \`${uid}\` paused.`, { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
+                try { await bot.telegram.sendMessage(uid, '⏸️ Your account has been temporarily paused. Contact the admin.'); } catch {}
+                return;
+            }
+
+            if (as.step === 'member_resume') {
+                const uid = parseInt(text, 10);
+                if (isNaN(uid)) { await ctx.reply('❌ Invalid ID.', { reply_markup: adminBackKeyboard() }); return; }
+                resumeUser(uid);
+                await ctx.reply(`▶️ User \`${uid}\` resumed.`, { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
+                try { await bot.telegram.sendMessage(uid, '✅ Your account has been resumed. You can now trade again.'); } catch {}
+                return;
+            }
+
+            if (as.step === 'member_remove') {
+                const uid = parseInt(text, 10);
+                if (isNaN(uid)) { await ctx.reply('❌ Invalid ID.', { reply_markup: adminBackKeyboard() }); return; }
+                deleteUser(uid);
+                await ctx.reply(`🗑️ User \`${uid}\` removed.`, { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
+                return;
+            }
+
+            if (as.step === 'member_message_id') {
+                const uid = parseInt(text, 10);
+                if (isNaN(uid)) { await ctx.reply('❌ Invalid ID.', { reply_markup: adminBackKeyboard() }); return; }
+                adminSessions.set(chatId, { step: 'member_message_text', memberMessageUserId: uid });
+                await ctx.reply(`✉️ Enter message to send to user \`${uid}\`:`, { parse_mode: 'Markdown' });
+                return;
+            }
+
+            if (as.step === 'member_message_text' && as.memberMessageUserId) {
+                try {
+                    await bot.telegram.sendMessage(as.memberMessageUserId, text);
+                    await ctx.reply(`✅ Message sent to \`${as.memberMessageUserId}\`.`, { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
+                } catch {
+                    await ctx.reply('❌ Failed to send message. User may have blocked the bot.', { reply_markup: adminBackKeyboard() });
+                }
+                return;
+            }
+
+            if (as.step === 'member_add') {
+                const uid = parseInt(text, 10);
+                if (isNaN(uid)) { await ctx.reply('❌ Invalid ID.', { reply_markup: adminBackKeyboard() }); return; }
+                approveUser(uid);
+                await ctx.reply(`✅ User \`${uid}\` approved and added.`, { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
+                try { await bot.telegram.sendMessage(uid, '✅ *Your account has been approved!* You can now start trading.', { parse_mode: 'Markdown' }); } catch {}
+                return;
+            }
+
+            return;
+        }
+    }
+
+    // ── Upgrade token entry ───────────────────────────────────────────────────
+    if (upgradeSessions.has(chatId)) {
+        upgradeSessions.delete(chatId);
+        const tokenInput = text.toUpperCase().trim();
+        const result = validateToken(tokenInput);
+        if (!result.valid) {
+            await ctx.reply(`❌ ${result.error}. Try again or contact the admin.`);
+            return;
+        }
+        if (useToken(tokenInput, ctx.from!.id)) {
+            setUserTier(ctx.from!.id, result.tier!);
+            await ctx.reply(
+                `✅ Token accepted! Your tier has been upgraded to *${result.tier}*. 🎉`,
+                { parse_mode: 'Markdown', reply_markup: startKeyboard() }
+            );
+        } else {
+            await ctx.reply('❌ Token could not be applied. It may have already been used or expired.');
+        }
+        return;
+    }
 
     // ── Onboarding wizard ────────────────────────────────────────────────────
     const ob = onboardSessions.get(chatId);
