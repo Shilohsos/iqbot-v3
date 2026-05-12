@@ -134,13 +134,13 @@ export function generateTokenKeyboard(): IKMarkup {
     };
 }
 
-export function topTradersAdminKeyboard(): IKMarkup {
-    return {
-        inline_keyboard: [
-            [{ text: '➕ Manual Add',  callback_data: 'admin:manual_add' }],
-            [{ text: '🔙 Admin Menu', callback_data: 'admin:back' }],
-        ],
-    };
+export function topTradersAdminKeyboard(editableEntries: Array<{ telegram_id: number; masked: string }> = []): IKMarkup {
+    const rows: Btn[][] = editableEntries.map(e => [
+        { text: `✏️ Edit ${e.masked}`, callback_data: `trader_edit:${e.telegram_id}` },
+    ]);
+    rows.push([{ text: '➕ Manual Add', callback_data: 'admin:manual_add' }]);
+    rows.push([{ text: '🔙 Admin Menu', callback_data: 'admin:back' }]);
+    return { inline_keyboard: rows };
 }
 
 export function funnelKeyboard(): IKMarkup {

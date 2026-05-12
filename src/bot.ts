@@ -12,6 +12,7 @@ import {
     setUserTier, pauseUser, resumeUser,
     generateToken, validateToken, useToken, getTokens,
     updateLeaderboardAuto, addLeaderboardManual, getLeaderboard,
+    getLeaderboardDetailed, updateLeaderboardManual,
     getFunnelStats, getConfig, setConfig,
     getAuditReport, maskUserId,
 } from './db.js';
@@ -99,6 +100,7 @@ type AdminStep =
     | 'broadcast_schedule_custom'
     | 'manual_add_id'
     | 'manual_add_profit'
+    | 'edit_trader_profit'
     | 'funnel_url'
     | 'member_pause'
     | 'member_resume'
@@ -112,6 +114,7 @@ interface AdminSessionState {
     broadcastTarget?: 'active' | 'inactive' | 'all';
     broadcastLinkUrl?: string;
     manualAddUserId?: number;
+    editTraderTelegramId?: number;
     memberMessageUserId?: number;
 }
 const adminSessions = new Map<number, AdminSessionState>();
@@ -865,7 +868,7 @@ bot.action('ui:history', async ctx => {
     let msg = '📋 *Recent Trades*\n\n';
     for (const t of trades) {
         const emoji = t.status === 'WIN' ? '💚' : t.status === 'LOSS' ? '💔' : t.status === 'TIE' ? '⚪' : '⚠️';
-        const pnlStr = t.status === 'WIN' ? `+$${t.pnl.toFixed(2)}` : t.status === 'LOSS' ? `-$${t.amount.toFixed(2)}` : '$0.00';
+        const pnlStr = t.status === 'WIN' ? `+$${t.pnl.toFixed(2)}` : t.status === 'LOSS' ? `-$${(t.pnl < 0 ? Math.abs(t.pnl) : t.amount).toFixed(2)}` : '$0.00';
         msg += `${emoji} \`${t.pair}\` *${t.direction.toUpperCase()}* $${t.amount} → ${pnlStr}`;
         if (t.martingale_run) msg += ' 🔄';
         msg += '\n';
@@ -957,7 +960,7 @@ bot.command('history', async ctx => {
     let msg = '📋 *Recent Trades*\n\n';
     for (const t of trades) {
         const emoji = t.status === 'WIN' ? '💚' : t.status === 'LOSS' ? '💔' : t.status === 'TIE' ? '⚪' : '⚠️';
-        const pnlStr = t.status === 'WIN' ? `+$${t.pnl.toFixed(2)}` : t.status === 'LOSS' ? `-$${t.amount.toFixed(2)}` : '$0.00';
+        const pnlStr = t.status === 'WIN' ? `+$${t.pnl.toFixed(2)}` : t.status === 'LOSS' ? `-$${(t.pnl < 0 ? Math.abs(t.pnl) : t.amount).toFixed(2)}` : '$0.00';
         msg += `${emoji} \`${t.pair}\` *${t.direction.toUpperCase()}* $${t.amount} → ${pnlStr}`;
         if (t.martingale_run) msg += ' 🔄';
         msg += '\n';
@@ -1324,23 +1327,35 @@ bot.action(/^bcast_cancel:(\d+)$/, async ctx => {
 
 bot.action('admin:top_traders', async ctx => {
     await ctx.answerCbQuery();
-    const entries = getLeaderboard();
+    const detailed = getLeaderboardDetailed();
     let msg = '🏆 *Today\'s Leaderboard*\n\n';
-    if (entries.length === 0) {
+    if (detailed.length === 0) {
         msg += 'No entries yet today.';
     } else {
         const medals = ['🥇', '🥈', '🥉'];
-        entries.forEach((e, i) => {
-            msg += `${medals[i] ?? `${i + 1}.`} ${maskUserId(e.telegram_id)} — +$${e.profit.toFixed(2)}\n`;
+        detailed.forEach((e, i) => {
+            const profit = e.manual_profit ?? e.auto_profit;
+            const isManual = e.manual_profit !== null;
+            msg += `${medals[i] ?? `${i + 1}.`} ${maskUserId(e.telegram_id)} — +$${profit.toFixed(2)}${isManual ? ' ✏️' : ''}\n`;
         });
     }
-    await ctx.reply(msg, { parse_mode: 'Markdown', reply_markup: topTradersAdminKeyboard() });
+    const editableEntries = detailed
+        .filter(e => e.manual_profit !== null)
+        .map(e => ({ telegram_id: e.telegram_id, masked: maskUserId(e.telegram_id) }));
+    await ctx.reply(msg, { parse_mode: 'Markdown', reply_markup: topTradersAdminKeyboard(editableEntries) });
 });
 
 bot.action('admin:manual_add', async ctx => {
     await ctx.answerCbQuery();
     adminSessions.set(ctx.chat!.id, { step: 'manual_add_id' });
     await ctx.reply('Enter the Telegram User ID to add to the leaderboard:');
+});
+
+bot.action(/^trader_edit:(\d+)$/, async ctx => {
+    await ctx.answerCbQuery();
+    const telegramId = parseInt(ctx.match[1], 10);
+    adminSessions.set(ctx.chat!.id, { step: 'edit_trader_profit', editTraderTelegramId: telegramId });
+    await ctx.reply(`Enter new profit amount for user \`${maskUserId(telegramId)}\`:`, { parse_mode: 'Markdown' });
 });
 
 // ─── Module 8: Funnel ─────────────────────────────────────────────────────────
@@ -1657,6 +1672,19 @@ bot.on('text', async ctx => {
                 const added = addLeaderboardManual(as.manualAddUserId, profit);
                 await ctx.reply(
                     added ? `✅ Added \`${maskUserId(as.manualAddUserId)}\` — +$${profit.toFixed(2)} to leaderboard.` : '❌ Leaderboard is full (max 10 entries).',
+                    { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() }
+                );
+                return;
+            }
+
+            if (as.step === 'edit_trader_profit' && as.editTraderTelegramId) {
+                const profit = parseFloat(text);
+                if (isNaN(profit) || profit <= 0) { await ctx.reply('❌ Invalid amount.', { reply_markup: adminBackKeyboard() }); return; }
+                const updated = updateLeaderboardManual(as.editTraderTelegramId, profit);
+                await ctx.reply(
+                    updated
+                        ? `✅ Updated \`${maskUserId(as.editTraderTelegramId)}\` — +$${profit.toFixed(2)}.`
+                        : '❌ Entry not found or not a manual entry.',
                     { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() }
                 );
                 return;

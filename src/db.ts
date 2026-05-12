@@ -176,29 +176,66 @@ export function insertTrade(t: TradeRecord): void {
 }
 
 export function getRecentTrades(limit = 10, telegramId?: number): TradeRecord[] {
+    const whereClause = telegramId !== undefined ? 'WHERE telegram_id = ?' : '';
+    const sql = `
+        WITH circles AS (
+            SELECT
+                martingale_run,
+                MAX(created_at) AS created_at,
+                SUM(pnl)        AS pnl,
+                telegram_id,
+                (SELECT pair      FROM trades t2 WHERE t2.martingale_run = t1.martingale_run ORDER BY t2.created_at DESC LIMIT 1) AS pair,
+                (SELECT direction FROM trades t2 WHERE t2.martingale_run = t1.martingale_run ORDER BY t2.created_at DESC LIMIT 1) AS direction,
+                (SELECT amount    FROM trades t2 WHERE t2.martingale_run = t1.martingale_run ORDER BY t2.created_at DESC LIMIT 1) AS amount,
+                (SELECT status    FROM trades t2 WHERE t2.martingale_run = t1.martingale_run ORDER BY t2.created_at DESC LIMIT 1) AS status
+            FROM trades t1
+            WHERE martingale_run IS NOT NULL
+            GROUP BY martingale_run
+            UNION ALL
+            SELECT CAST(id AS TEXT) AS martingale_run, created_at, pnl, telegram_id, pair, direction, amount, status
+            FROM trades WHERE martingale_run IS NULL
+        )
+        SELECT NULL AS id, telegram_id, pair, direction, amount, status, pnl, NULL AS trade_id, NULL AS error, martingale_run, created_at
+        FROM circles
+        ${whereClause}
+        ORDER BY created_at DESC
+        LIMIT ?
+    `;
     if (telegramId !== undefined) {
-        return db.prepare(
-            'SELECT * FROM trades WHERE telegram_id = ? ORDER BY created_at DESC LIMIT ?'
-        ).all(telegramId, limit) as TradeRecord[];
+        return db.prepare(sql).all(telegramId, limit) as TradeRecord[];
     }
-    return db.prepare(
-        'SELECT * FROM trades ORDER BY created_at DESC LIMIT ?'
-    ).all(limit) as TradeRecord[];
+    return db.prepare(sql).all(limit) as TradeRecord[];
 }
 
 export function getTradeStats(telegramId?: number): TradeStats {
+    const pnlWhere  = telegramId !== undefined ? 'WHERE telegram_id = ?' : '';
+    const circleWhere = telegramId !== undefined ? 'WHERE cr.telegram_id = ?' : '';
     const sql = `
+        WITH circle_results AS (
+            SELECT
+                martingale_run,
+                (SELECT status FROM trades t2
+                 WHERE t2.martingale_run = t1.martingale_run
+                 ORDER BY created_at DESC LIMIT 1) AS final_status,
+                telegram_id
+            FROM trades t1
+            WHERE martingale_run IS NOT NULL
+            GROUP BY martingale_run
+            UNION ALL
+            SELECT CAST(id AS TEXT) AS martingale_run, status AS final_status, telegram_id
+            FROM trades WHERE martingale_run IS NULL
+        )
         SELECT
-            COUNT(*)                                          AS total,
-            SUM(CASE WHEN status = 'WIN'  THEN 1 ELSE 0 END) AS wins,
-            SUM(CASE WHEN status = 'LOSS' THEN 1 ELSE 0 END) AS losses,
-            SUM(CASE WHEN status = 'TIE'  THEN 1 ELSE 0 END) AS ties,
-            COALESCE(SUM(pnl), 0)                             AS totalPnl
-        FROM trades
-        ${telegramId !== undefined ? 'WHERE telegram_id = ?' : ''}
+            COUNT(*)                                                AS total,
+            SUM(CASE WHEN final_status = 'WIN'  THEN 1 ELSE 0 END) AS wins,
+            SUM(CASE WHEN final_status = 'LOSS' THEN 1 ELSE 0 END) AS losses,
+            SUM(CASE WHEN final_status = 'TIE'  THEN 1 ELSE 0 END) AS ties,
+            (SELECT COALESCE(SUM(pnl), 0) FROM trades ${pnlWhere})  AS totalPnl
+        FROM circle_results cr
+        ${circleWhere}
     `;
     const row = (telegramId !== undefined
-        ? db.prepare(sql).get(telegramId)
+        ? db.prepare(sql).get(telegramId, telegramId)
         : db.prepare(sql).get()
     ) as { total: number; wins: number; losses: number; ties: number; totalPnl: number };
 
@@ -460,6 +497,34 @@ export function getLeaderboard(date?: string): Array<{ telegram_id: number; prof
         ORDER BY profit DESC
         LIMIT 10
     `).all(d) as Array<{ telegram_id: number; profit: number }>;
+}
+
+export interface LeaderboardDetailedEntry {
+    id: number;
+    telegram_id: number;
+    auto_profit: number;
+    manual_profit: number | null;
+    date: string;
+}
+
+export function getLeaderboardDetailed(date?: string): LeaderboardDetailedEntry[] {
+    const d = date ?? new Date().toISOString().split('T')[0];
+    return db.prepare(`
+        SELECT id, telegram_id, auto_profit, manual_profit, date
+        FROM leaderboard
+        WHERE date = ?
+        ORDER BY COALESCE(manual_profit, auto_profit) DESC
+        LIMIT 10
+    `).all(d) as LeaderboardDetailedEntry[];
+}
+
+export function updateLeaderboardManual(telegramId: number, profit: number): boolean {
+    const today = new Date().toISOString().split('T')[0];
+    const result = db.prepare(`
+        UPDATE leaderboard SET manual_profit = ?
+        WHERE telegram_id = ? AND date = ? AND manual_profit IS NOT NULL
+    `).run(profit, telegramId, today);
+    return (result as { changes: number }).changes > 0;
 }
 
 // ─── Funnel ───────────────────────────────────────────────────────────────────
