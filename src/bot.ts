@@ -249,6 +249,17 @@ async function runMartingale(
     let totalPnl = 0;
     const logLines: string[] = ['✦ Trade session initialized…'];
     const logMsg = await ctx.reply(logLines.join('\n'));
+    const sentMessages: number[] = [logMsg.message_id];
+
+    const scheduleCleanup = () => {
+        const chatId = ctx.chat!.id;
+        const ids = [...sentMessages];
+        setTimeout(() => {
+            for (const id of ids) {
+                ctx.telegram.deleteMessage(chatId, id).catch(() => {});
+            }
+        }, 3_600_000);
+    };
 
     // Tracks the latest round image so the previous one can be deleted before the next
     let lastRoundImgId: number | undefined;
@@ -257,7 +268,7 @@ async function runMartingale(
             try { await ctx.telegram.deleteMessage(ctx.chat!.id, lastRoundImgId); } catch {}
             lastRoundImgId = undefined;
         }
-        try { const m = await ctx.replyWithPhoto(ASSET(f)); lastRoundImgId = m.message_id; } catch {}
+        try { const m = await ctx.replyWithPhoto(ASSET(f)); lastRoundImgId = m.message_id; sentMessages.push(m.message_id); } catch {}
     };
 
     const syncLog = async () => {
@@ -285,7 +296,11 @@ async function runMartingale(
             const errMsg = err instanceof Error ? err.message : 'Unknown error';
             logLines[logLines.length - 1] = `⚡ Trade 1|Step ${round}|⚠️ $${currentAmount.toFixed(2)} → error`;
             await syncLog();
-            await ctx.reply(`⚠️ Stopped: ${errMsg}`);
+            const catchReply = await ctx.reply(`⚠️ Stopped: ${errMsg}`, {
+                reply_markup: { inline_keyboard: [[{ text: '🔄 New Opportunity', callback_data: 'ui:trade' }]] },
+            });
+            sentMessages.push(catchReply.message_id);
+            scheduleCleanup();
             return;
         } finally {
             clearTimeout(roundTimer);
@@ -316,17 +331,24 @@ async function runMartingale(
         if (result.status === 'WIN' || result.status === 'TIE') {
             // Round 1 = direct win (L11a); round 2+ = comeback (L11b)
             await sendRoundImage(round === 1 ? 'L11a.png' : 'L11b.png');
-            await ctx.reply(
+            const winReply = await ctx.reply(
                 `🏆 +$${result.pnl.toFixed(2)} added to your balance.\n\n` +
                 (round > 1 ? `Recovery complete on step ${round}/${MAX_ROUNDS}.\n\n` : '') +
-                `💸 You just made +$${result.pnl.toFixed(2)}`
+                `💸 You just made +$${result.pnl.toFixed(2)}`,
+                { reply_markup: { inline_keyboard: [[{ text: '🔄 New Opportunity', callback_data: 'ui:trade' }]] } }
             );
+            sentMessages.push(winReply.message_id);
+            scheduleCleanup();
             if (balanceType === 'demo') await showDemoUpsell(ctx);
             return;
         }
 
         if (result.status === 'ERROR' || result.status === 'TIMEOUT') {
-            await ctx.reply(`⚠️ Stopped: ${result.error ?? result.status}`);
+            const errStatusReply = await ctx.reply(`⚠️ Stopped: ${result.error ?? result.status}`, {
+                reply_markup: { inline_keyboard: [[{ text: '🔄 New Opportunity', callback_data: 'ui:trade' }]] },
+            });
+            sentMessages.push(errStatusReply.message_id);
+            scheduleCleanup();
             return;
         }
 
@@ -334,7 +356,8 @@ async function runMartingale(
         if (round < MAX_ROUNDS) {
             if (round === 1) {
                 await sendRoundImage('L10.png');
-                await ctx.reply('SMART RECOVERY ACTIVATED\nBumping the next stake. Bot fights back.');
+                const recoveryReply = await ctx.reply('SMART RECOVERY ACTIVATED\nBumping the next stake. Bot fights back.');
+                sentMessages.push(recoveryReply.message_id);
             }
             currentAmount = currentAmount * 2;
             await new Promise(r => setTimeout(r, ROUND_COOLDOWN_MS));
@@ -344,7 +367,12 @@ async function runMartingale(
     const sign = totalPnl >= 0 ? '+' : '';
     // L11c = LOST, BUT THIS IS NOT THE END; replaces L10 if showing
     await sendRoundImage('L11c.png');
-    await ctx.reply(`Lost this one 💔! Remain confident! New setup loading 👾\n\nTotal: ${sign}$${totalPnl.toFixed(2)}`);
+    const lostReply = await ctx.reply(
+        `Lost this one 💔! Remain confident! New setup loading 👾\n\nTotal: ${sign}$${totalPnl.toFixed(2)}`,
+        { reply_markup: { inline_keyboard: [[{ text: '🔄 New Opportunity', callback_data: 'ui:trade' }]] } }
+    );
+    sentMessages.push(lostReply.message_id);
+    scheduleCleanup();
     if (balanceType === 'demo') await showDemoUpsell(ctx);
 }
 
