@@ -24,6 +24,7 @@ import { startKeyboard, backKeyboard, onboardKeyboard } from './ui/user.js';
 import {
     getAdminId, adminKeyboard, adminBackKeyboard,
     broadcastTargetKeyboard, broadcastLinkKeyboard, broadcastActionKeyboard, broadcastTimerKeyboard,
+    broadcastSendOrScheduleKeyboard, broadcastDelayKeyboard, scheduledBroadcastsKeyboard,
     tokenTierKeyboard, generateTokenKeyboard,
     topTradersAdminKeyboard, funnelKeyboard, memberManagementKeyboard,
 } from './ui/admin.js';
@@ -95,6 +96,7 @@ type AdminStep =
     | 'broadcast_link_url'
     | 'broadcast_link_label'
     | 'broadcast_custom_timer'
+    | 'broadcast_schedule_custom'
     | 'manual_add_id'
     | 'manual_add_profit'
     | 'funnel_url'
@@ -129,7 +131,35 @@ const pendingBroadcasts = new Map<number, {
     targetIds: number[];
     media?: { type: 'photo' | 'video'; fileId: string };
     button?: BroadcastButton;
+    deleteAfterMs?: number;
 }>();
+
+interface ScheduledBroadcast {
+    id: number;
+    message: string;
+    targetIds: number[];
+    button?: BroadcastButton;
+    media?: { type: 'photo' | 'video'; fileId: string };
+    deleteAfterMs: number;
+    scheduledAt: Date;
+    sent: boolean;
+    createdAt: Date;
+    timerId?: ReturnType<typeof setTimeout>;
+}
+
+const scheduledBroadcasts: ScheduledBroadcast[] = [];
+let nextScheduledId = 1;
+
+// Users currently running a martingale trade
+const activeTradeSessions = new Set<number>();
+
+// Messages queued for users who were trading when a broadcast was sent
+const pendingDeliveries = new Map<number, Array<{
+    message: string;
+    button?: BroadcastButton;
+    media?: { type: 'photo' | 'video'; fileId: string };
+    deleteAfterMs: number;
+}>>();
 
 function parseDuration(input: string): number | null {
     const match = input.trim().toLowerCase().match(/^(\d+)\s*(s|m|min|h)?$/);
@@ -142,23 +172,58 @@ function parseDuration(input: string): number | null {
     return null;
 }
 
-async function executeBroadcast(chatId: number, deleteAfterMs: number, ctx: Context): Promise<void> {
-    const pending = pendingBroadcasts.get(chatId);
-    pendingBroadcasts.delete(chatId);
-    if (!pending) { await ctx.reply('❌ Session expired.', { reply_markup: adminBackKeyboard() }); return; }
+async function flushPendingDeliveries(userId: number): Promise<void> {
+    const queue = pendingDeliveries.get(userId);
+    if (!queue || queue.length === 0) return;
+    pendingDeliveries.delete(userId);
+    for (const p of queue) {
+        try {
+            const rm = p.button ? { inline_keyboard: [[
+                p.button.type === 'url'
+                    ? { text: p.button.text, url: p.button.value }
+                    : { text: p.button.text, callback_data: p.button.value },
+            ]] } : undefined;
+            let m;
+            if (p.media?.type === 'photo') {
+                m = await bot.telegram.sendPhoto(userId, p.media.fileId, { caption: p.message, ...(rm ? { reply_markup: rm } : {}) });
+            } else if (p.media?.type === 'video') {
+                m = await bot.telegram.sendVideo(userId, p.media.fileId, { caption: p.message, ...(rm ? { reply_markup: rm } : {}) });
+            } else {
+                m = await bot.telegram.sendMessage(userId, p.message, rm ? { reply_markup: rm } : undefined);
+            }
+            if (p.deleteAfterMs > 0 && m) {
+                const msgId = m.message_id;
+                setTimeout(() => bot.telegram.deleteMessage(userId, msgId).catch(() => {}), p.deleteAfterMs);
+            }
+        } catch {}
+    }
+}
 
-    const { message, targetIds, media, button } = pending;
-    const replyMarkup = button
-        ? { inline_keyboard: [[
-            button.type === 'url'
-                ? { text: button.text, url: button.value }
-                : { text: button.text, callback_data: button.value },
-          ]] }
-        : undefined;
+async function dispatchBroadcastPayload(payload: {
+    message: string;
+    targetIds: number[];
+    button?: BroadcastButton;
+    media?: { type: 'photo' | 'video'; fileId: string };
+    deleteAfterMs: number;
+}): Promise<{ sent: number; deferred: number }> {
+    const { message, targetIds, media, button, deleteAfterMs } = payload;
+    const replyMarkup = button ? { inline_keyboard: [[
+        button.type === 'url'
+            ? { text: button.text, url: button.value }
+            : { text: button.text, callback_data: button.value },
+    ]] } : undefined;
     const sentMsgIds: Array<{ telegramId: number; msgId: number }> = [];
+    let deferredCount = 0;
 
     for (const uid of targetIds) {
         try {
+            if (activeTradeSessions.has(uid)) {
+                const q = pendingDeliveries.get(uid) ?? [];
+                q.push({ message, button, media, deleteAfterMs });
+                pendingDeliveries.set(uid, q);
+                deferredCount++;
+                continue;
+            }
             let m;
             if (media?.type === 'photo') {
                 m = await bot.telegram.sendPhoto(uid, media.fileId, { caption: message, ...(replyMarkup ? { reply_markup: replyMarkup } : {}) });
@@ -171,14 +236,6 @@ async function executeBroadcast(chatId: number, deleteAfterMs: number, ctx: Cont
         } catch {}
     }
 
-    const timerLabel = deleteAfterMs === 0 ? 'never' :
-        deleteAfterMs < 60_000 ? `${deleteAfterMs / 1_000}s` :
-        deleteAfterMs < 3_600_000 ? `${deleteAfterMs / 60_000}m` : `${deleteAfterMs / 3_600_000}h`;
-    await ctx.reply(
-        `✅ Broadcast sent to *${sentMsgIds.length}/${targetIds.length}* users. Auto-delete: ${timerLabel}`,
-        { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() }
-    );
-
     if (deleteAfterMs > 0) {
         setTimeout(() => {
             for (const { telegramId, msgId } of sentMsgIds) {
@@ -186,6 +243,34 @@ async function executeBroadcast(chatId: number, deleteAfterMs: number, ctx: Cont
             }
         }, deleteAfterMs);
     }
+
+    return { sent: sentMsgIds.length, deferred: deferredCount };
+}
+
+async function executeScheduledBroadcast(scheduled: ScheduledBroadcast): Promise<void> {
+    scheduled.sent = true;
+    const { sent, deferred } = await dispatchBroadcastPayload(scheduled);
+    const timerLabel = scheduled.deleteAfterMs === 0 ? 'never' :
+        scheduled.deleteAfterMs < 60_000 ? `${scheduled.deleteAfterMs / 1_000}s` :
+        scheduled.deleteAfterMs < 3_600_000 ? `${scheduled.deleteAfterMs / 60_000}m` : `${scheduled.deleteAfterMs / 3_600_000}h`;
+    let msg = `📅 Scheduled broadcast #${scheduled.id} sent to *${sent}/${scheduled.targetIds.length}* users. Auto-delete: ${timerLabel}`;
+    if (deferred > 0) msg += `\n⏳ *${deferred}* deferred (active traders — will deliver after trade ends)`;
+    try { await bot.telegram.sendMessage(getAdminId(), msg, { parse_mode: 'Markdown' }); } catch {}
+}
+
+async function executeBroadcast(chatId: number, deleteAfterMs: number, ctx: Context): Promise<void> {
+    const pending = pendingBroadcasts.get(chatId);
+    pendingBroadcasts.delete(chatId);
+    if (!pending) { await ctx.reply('❌ Session expired.', { reply_markup: adminBackKeyboard() }); return; }
+
+    const { sent, deferred } = await dispatchBroadcastPayload({ ...pending, deleteAfterMs });
+
+    const timerLabel = deleteAfterMs === 0 ? 'never' :
+        deleteAfterMs < 60_000 ? `${deleteAfterMs / 1_000}s` :
+        deleteAfterMs < 3_600_000 ? `${deleteAfterMs / 60_000}m` : `${deleteAfterMs / 3_600_000}h`;
+    let confirmMsg = `✅ Broadcast sent to *${sent}/${pending.targetIds.length}* users. Auto-delete: ${timerLabel}`;
+    if (deferred > 0) confirmMsg += `\n⏳ *${deferred}* deferred (active traders — will deliver after trade ends)`;
+    await ctx.reply(confirmMsg, { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -366,6 +451,9 @@ async function runMartingale(
     timeframeSec = 60,
     balanceType: 'demo' | 'live' = 'demo',
 ): Promise<void> {
+    const userId = ctx.from!.id;
+    activeTradeSessions.add(userId);
+    try {
     const runId = crypto.randomUUID();
     const roundTimeoutMs = (timeframeSec + 90) * 1000;
     let currentAmount = amount;
@@ -527,6 +615,10 @@ async function runMartingale(
     sentMessages.push(lostReply.message_id);
     scheduleCleanup();
     if (balanceType === 'demo') await showDemoUpsell(ctx);
+    } finally {
+        activeTradeSessions.delete(userId);
+        await flushPendingDeliveries(userId);
+    }
 }
 
 async function showDemoUpsell(ctx: Context): Promise<void> {
@@ -1115,7 +1207,90 @@ bot.action('broadcast:custom_timer', async ctx => {
 bot.action(/^bcast_timer:(\d+)$/, async ctx => {
     await ctx.answerCbQuery();
     adminSessions.delete(ctx.chat!.id);
-    await executeBroadcast(ctx.chat!.id, parseInt(ctx.match[1], 10), ctx);
+    const chatId = ctx.chat!.id;
+    const deleteAfterMs = parseInt(ctx.match[1], 10);
+    const pending = pendingBroadcasts.get(chatId);
+    if (!pending) { await ctx.reply('❌ Session expired.', { reply_markup: adminBackKeyboard() }); return; }
+    pendingBroadcasts.set(chatId, { ...pending, deleteAfterMs });
+    await ctx.reply('⏰ Send now or schedule?', { reply_markup: broadcastSendOrScheduleKeyboard() });
+});
+
+bot.action('broadcast:send_now', async ctx => {
+    await ctx.answerCbQuery();
+    const chatId = ctx.chat!.id;
+    const pending = pendingBroadcasts.get(chatId);
+    if (!pending) { await ctx.reply('❌ Session expired.', { reply_markup: adminBackKeyboard() }); return; }
+    await executeBroadcast(chatId, pending.deleteAfterMs ?? 0, ctx);
+});
+
+bot.action('broadcast:schedule', async ctx => {
+    await ctx.answerCbQuery();
+    if (!pendingBroadcasts.has(ctx.chat!.id)) { await ctx.reply('❌ Session expired.', { reply_markup: adminBackKeyboard() }); return; }
+    await ctx.reply('📅 When to send?', { reply_markup: broadcastDelayKeyboard() });
+});
+
+bot.action(/^bcast_delay:(\d+)$/, async ctx => {
+    await ctx.answerCbQuery();
+    const chatId = ctx.chat!.id;
+    const delayMs = parseInt(ctx.match[1], 10);
+    const pending = pendingBroadcasts.get(chatId);
+    if (!pending) { await ctx.reply('❌ Session expired.', { reply_markup: adminBackKeyboard() }); return; }
+    const activeCount = scheduledBroadcasts.filter(s => !s.sent).length;
+    if (activeCount >= 5) { await ctx.reply('❌ Max 5 scheduled broadcasts. Cancel one first.', { reply_markup: adminBackKeyboard() }); return; }
+    pendingBroadcasts.delete(chatId);
+    const scheduledAt = new Date(Date.now() + delayMs);
+    const id = nextScheduledId++;
+    const scheduled: ScheduledBroadcast = {
+        id, message: pending.message, targetIds: pending.targetIds,
+        button: pending.button, media: pending.media,
+        deleteAfterMs: pending.deleteAfterMs ?? 0,
+        scheduledAt, sent: false, createdAt: new Date(),
+    };
+    scheduled.timerId = setTimeout(() => { void executeScheduledBroadcast(scheduled); }, delayMs);
+    scheduledBroadcasts.push(scheduled);
+    const delayLabel = delayMs < 3_600_000 ? `${delayMs / 60_000}m` : `${delayMs / 3_600_000}h`;
+    await ctx.reply(
+        `✅ Broadcast scheduled in *${delayLabel}* (${scheduledAt.toLocaleTimeString()}) → ${pending.targetIds.length} users.`,
+        { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() }
+    );
+});
+
+bot.action('broadcast:custom_schedule', async ctx => {
+    await ctx.answerCbQuery();
+    if (!pendingBroadcasts.has(ctx.chat!.id)) { await ctx.reply('❌ Session expired.', { reply_markup: adminBackKeyboard() }); return; }
+    adminSessions.set(ctx.chat!.id, { step: 'broadcast_schedule_custom' });
+    await ctx.reply('⏱ Enter custom delay (e.g. 45m, 3h, 90m):');
+});
+
+bot.action('admin:scheduled', async ctx => {
+    await ctx.answerCbQuery();
+    const active = scheduledBroadcasts.filter(s => !s.sent);
+    if (active.length === 0) {
+        await ctx.reply('📅 *Scheduled Broadcasts*\n\nNo pending broadcasts.', { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
+        return;
+    }
+    const now = Date.now();
+    let msg = '📅 *Scheduled Broadcasts*\n\n';
+    const labels = active.map((s, i) => {
+        const msLeft = Math.max(0, s.scheduledAt.getTime() - now);
+        const timeLeft = msLeft < 3_600_000 ? `${Math.round(msLeft / 60_000)}m` : `${(msLeft / 3_600_000).toFixed(1)}h`;
+        const preview = s.message.length > 20 ? s.message.slice(0, 20) + '…' : s.message;
+        msg += `${i + 1}. "${preview}" — in ${timeLeft} (to ${s.targetIds.length} users)\n`;
+        const shortPreview = s.message.length > 15 ? s.message.slice(0, 15) + '…' : s.message;
+        return { id: s.id, label: `"${shortPreview}" in ${timeLeft}` };
+    });
+    await ctx.reply(msg, { parse_mode: 'Markdown', reply_markup: scheduledBroadcastsKeyboard(labels) });
+});
+
+bot.action(/^bcast_cancel:(\d+)$/, async ctx => {
+    await ctx.answerCbQuery();
+    const id = parseInt(ctx.match[1], 10);
+    const idx = scheduledBroadcasts.findIndex(s => s.id === id && !s.sent);
+    if (idx === -1) { await ctx.reply('❌ Broadcast not found or already sent.', { reply_markup: adminBackKeyboard() }); return; }
+    const s = scheduledBroadcasts[idx];
+    if (s.timerId) clearTimeout(s.timerId);
+    scheduledBroadcasts.splice(idx, 1);
+    await ctx.reply(`✅ Scheduled broadcast #${id} cancelled.`, { reply_markup: adminBackKeyboard() });
 });
 
 // ─── Module 7: Top Traders ────────────────────────────────────────────────────
@@ -1404,7 +1579,40 @@ bot.on('text', async ctx => {
                     await ctx.reply('❌ Invalid format. Use e.g. 30m, 2h, 45s:');
                     return;
                 }
-                await executeBroadcast(chatId, ms, ctx);
+                const pending = pendingBroadcasts.get(chatId);
+                if (!pending) { await ctx.reply('❌ Session expired.', { reply_markup: adminBackKeyboard() }); return; }
+                pendingBroadcasts.set(chatId, { ...pending, deleteAfterMs: ms });
+                await ctx.reply('⏰ Send now or schedule?', { reply_markup: broadcastSendOrScheduleKeyboard() });
+                return;
+            }
+
+            if (as.step === 'broadcast_schedule_custom') {
+                const delayMs = parseDuration(text);
+                if (delayMs === null) {
+                    adminSessions.set(chatId, as); // restore for retry
+                    await ctx.reply('❌ Invalid format. Use e.g. 45m, 3h, 90m:');
+                    return;
+                }
+                const pending = pendingBroadcasts.get(chatId);
+                if (!pending) { await ctx.reply('❌ Session expired.', { reply_markup: adminBackKeyboard() }); return; }
+                const activeCount = scheduledBroadcasts.filter(s => !s.sent).length;
+                if (activeCount >= 5) { await ctx.reply('❌ Max 5 scheduled broadcasts. Cancel one first.', { reply_markup: adminBackKeyboard() }); return; }
+                pendingBroadcasts.delete(chatId);
+                const scheduledAt = new Date(Date.now() + delayMs);
+                const id = nextScheduledId++;
+                const scheduled: ScheduledBroadcast = {
+                    id, message: pending.message, targetIds: pending.targetIds,
+                    button: pending.button, media: pending.media,
+                    deleteAfterMs: pending.deleteAfterMs ?? 0,
+                    scheduledAt, sent: false, createdAt: new Date(),
+                };
+                scheduled.timerId = setTimeout(() => { void executeScheduledBroadcast(scheduled); }, delayMs);
+                scheduledBroadcasts.push(scheduled);
+                const delayLabel = delayMs < 3_600_000 ? `${delayMs / 60_000}m` : `${delayMs / 3_600_000}h`;
+                await ctx.reply(
+                    `✅ Broadcast scheduled in *${delayLabel}* (${scheduledAt.toLocaleTimeString()}) → ${pending.targetIds.length} users.`,
+                    { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() }
+                );
                 return;
             }
 

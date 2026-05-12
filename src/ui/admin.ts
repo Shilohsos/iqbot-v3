@@ -44,9 +44,39 @@ export function broadcastTargetKeyboard(): IKMarkup {
             [{ text: '🟢 Active Traders (< 5h ago)',   callback_data: 'broadcast:active' }],
             [{ text: '🔴 Inactive Traders (5h+ idle)', callback_data: 'broadcast:inactive' }],
             [{ text: '👥 All Users',                   callback_data: 'broadcast:all' }],
+            [{ text: '📅 Scheduled',                   callback_data: 'admin:scheduled' }],
             [{ text: '🔙 Admin Menu',                  callback_data: 'admin:back' }],
         ],
     };
+}
+
+export function broadcastSendOrScheduleKeyboard(): IKMarkup {
+    return {
+        inline_keyboard: [[
+            { text: '📤 Send Now', callback_data: 'broadcast:send_now' },
+            { text: '⏰ Schedule', callback_data: 'broadcast:schedule' },
+        ]],
+    };
+}
+
+export function broadcastDelayKeyboard(): IKMarkup {
+    return {
+        inline_keyboard: [[
+            { text: '15m',       callback_data: 'bcast_delay:900000' },
+            { text: '30m',       callback_data: 'bcast_delay:1800000' },
+            { text: '1h',        callback_data: 'bcast_delay:3600000' },
+            { text: '2h',        callback_data: 'bcast_delay:7200000' },
+            { text: '✏️ Custom', callback_data: 'broadcast:custom_schedule' },
+        ]],
+    };
+}
+
+export function scheduledBroadcastsKeyboard(schedules: { id: number; label: string }[]): IKMarkup {
+    const rows: Btn[][] = schedules.map(s => [
+        { text: `❌ Cancel: ${s.label}`, callback_data: `bcast_cancel:${s.id}` },
+    ]);
+    rows.push([{ text: '🔙 Admin Menu', callback_data: 'admin:back' }]);
+    return { inline_keyboard: rows };
 }
 
 export function broadcastLinkKeyboard(): IKMarkup {
