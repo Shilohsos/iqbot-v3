@@ -40,7 +40,7 @@ db.exec(`
     approval_status TEXT    NOT NULL DEFAULT 'pending',
     approved_at     TEXT,
     affiliate_data  TEXT,
-    tier            TEXT    NOT NULL DEFAULT 'DEMO',
+    tier            TEXT    NOT NULL DEFAULT 'NEWBIE',
     created_at      TEXT    NOT NULL DEFAULT (datetime('now')),
     last_used       TEXT    NOT NULL DEFAULT (datetime('now'))
   )
@@ -62,7 +62,7 @@ if (ssidColNotNull) {
             approval_status TEXT    NOT NULL DEFAULT 'pending',
             approved_at     TEXT,
             affiliate_data  TEXT,
-            tier            TEXT    NOT NULL DEFAULT 'DEMO',
+            tier            TEXT    NOT NULL DEFAULT 'NEWBIE',
             created_at      TEXT    NOT NULL DEFAULT (datetime('now')),
             last_used       TEXT    NOT NULL DEFAULT (datetime('now'))
         );
@@ -81,7 +81,7 @@ if (ssidColNotNull) {
     if (!userColNames.includes('affiliate_data'))
         db.exec('ALTER TABLE users ADD COLUMN affiliate_data TEXT');
     if (!userColNames.includes('tier'))
-        db.exec("ALTER TABLE users ADD COLUMN tier TEXT NOT NULL DEFAULT 'DEMO'");
+        db.exec("ALTER TABLE users ADD COLUMN tier TEXT NOT NULL DEFAULT 'NEWBIE'");
 }
 
 // Additional column migrations (run after main table setup to get final state)
@@ -463,6 +463,8 @@ export function getTokens(): TokenRecord[] {
 
 export function updateLeaderboardAuto(telegramId: number, pnl: number): void {
     if (pnl <= 0) return;
+    const user = db.prepare('SELECT tier FROM users WHERE telegram_id = ?').get(telegramId) as { tier: string } | undefined;
+    if (!user || user.tier?.toUpperCase() !== 'PRO') return;
     const today = new Date().toISOString().split('T')[0];
     db.prepare(`
         INSERT INTO leaderboard (telegram_id, auto_profit, date)

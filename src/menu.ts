@@ -36,10 +36,13 @@ export function timeframeKeyboard(): IKMarkup {
     };
 }
 
-export function pairKeyboard(page = 0): IKMarkup {
+const NEWBIE_PAIRS = ['EURUSD-OTC', 'GBPUSD-OTC', 'AUDUSD-OTC'];
+
+export function pairKeyboard(page = 0, tier?: string): IKMarkup {
+    const available = (tier ?? '').toUpperCase() === 'PRO' ? OTC_PAIRS : NEWBIE_PAIRS;
     const PAGE_SIZE = 6;
     const start = page * PAGE_SIZE;
-    const pagePairs = OTC_PAIRS.slice(start, start + PAGE_SIZE);
+    const pagePairs = available.slice(start, start + PAGE_SIZE);
     const rows: Btn[][] = [];
 
     for (let i = 0; i < pagePairs.length; i += 2) {
@@ -50,7 +53,7 @@ export function pairKeyboard(page = 0): IKMarkup {
 
     const navRow: Btn[] = [];
     if (start > 0) navRow.push({ text: '⬅️ Back', callback_data: `page:${page - 1}` });
-    if (start + PAGE_SIZE < OTC_PAIRS.length) navRow.push({ text: 'More ➡️', callback_data: `page:${page + 1}` });
+    if (start + PAGE_SIZE < available.length) navRow.push({ text: 'More ➡️', callback_data: `page:${page + 1}` });
     if (navRow.length) rows.push(navRow);
 
     rows.push([{ text: '❌ Cancel', callback_data: 'wizard:cancel' }]);

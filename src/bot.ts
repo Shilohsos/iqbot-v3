@@ -153,8 +153,10 @@ interface ScheduledBroadcast {
 const scheduledBroadcasts: ScheduledBroadcast[] = [];
 let nextScheduledId = 1;
 
-// Users currently running a martingale trade
-const activeTradeSessions = new Set<number>();
+// userId → number of active martingale trades in flight
+const activeTradeSessions = new Map<number, number>();
+// per-user martingale config (Pro users can adjust)
+const userMartingaleSettings = new Map<number, { enabled: boolean; maxRounds: number }>();
 
 // Messages queued for users who were trading when a broadcast was sent
 const pendingDeliveries = new Map<number, Array<{
@@ -220,7 +222,7 @@ async function dispatchBroadcastPayload(payload: {
 
     for (const uid of targetIds) {
         try {
-            if (activeTradeSessions.has(uid)) {
+            if ((activeTradeSessions.get(uid) ?? 0) > 0) {
                 const q = pendingDeliveries.get(uid) ?? [];
                 q.push({ message, button, media, deleteAfterMs });
                 pendingDeliveries.set(uid, q);
@@ -453,9 +455,11 @@ async function runMartingale(
     amount: number,
     timeframeSec = 60,
     balanceType: 'demo' | 'live' = 'demo',
+    martingaleRounds?: number,
 ): Promise<void> {
     const userId = ctx.from!.id;
-    activeTradeSessions.add(userId);
+    const effectiveRounds = martingaleRounds ?? userMartingaleSettings.get(userId)?.maxRounds ?? MAX_ROUNDS;
+    activeTradeSessions.set(userId, (activeTradeSessions.get(userId) ?? 0) + 1);
     try {
     const runId = crypto.randomUUID();
     const roundTimeoutMs = (timeframeSec + 90) * 1000;
@@ -491,7 +495,7 @@ async function runMartingale(
         } catch {}
     };
 
-    for (let round = 1; round <= MAX_ROUNDS; round++) {
+    for (let round = 1; round <= effectiveRounds; round++) {
         logLines.push(`⚡ Trade 1|Step ${round}|🟡 $${currentAmount.toFixed(2)} → in flight`);
         await syncLog();
 
@@ -564,7 +568,7 @@ async function runMartingale(
             await sendRoundImage(round === 1 ? 'L11a.png' : 'L11b.png');
             const winReply = await ctx.reply(
                 `🏆 +$${result.pnl.toFixed(2)} added to your balance.\n\n` +
-                (round > 1 ? `Recovery complete on step ${round}/${MAX_ROUNDS}.\n\n` : '') +
+                (round > 1 ? `Recovery complete on step ${round}/${effectiveRounds}.\n\n` : '') +
                 `💸 You just made +$${result.pnl.toFixed(2)}`,
                 { reply_markup: { inline_keyboard: [[{ text: '🔄 New Opportunity', callback_data: 'ui:trade' }]] } }
             );
@@ -597,7 +601,7 @@ async function runMartingale(
         }
 
         // LOSS — next round
-        if (round < MAX_ROUNDS) {
+        if (round < effectiveRounds) {
             if (round === 1) {
                 await sendRoundImage('L10.png');
                 const recoveryReply = await ctx.reply('SMART RECOVERY ACTIVATED\nBumping the next stake. Bot fights back.');
@@ -619,7 +623,9 @@ async function runMartingale(
     scheduleCleanup();
     if (balanceType === 'demo') await showDemoUpsell(ctx);
     } finally {
-        activeTradeSessions.delete(userId);
+        const prev = activeTradeSessions.get(userId) ?? 1;
+        if (prev <= 1) activeTradeSessions.delete(userId);
+        else activeTradeSessions.set(userId, prev - 1);
         await flushPendingDeliveries(userId);
     }
 }
@@ -743,10 +749,12 @@ bot.action(/^tf:(\d+)$/, async ctx => {
         try { await ctx.telegram.deleteMessage(ctx.chat!.id, state.lastImageMsgId); } catch {}
     }
     try { const m = await ctx.replyWithPhoto(ASSET('L6.png')); state.lastImageMsgId = m.message_id; } catch {}
+    const tfUser = getUser(chatId);
+    const tfTier = tfUser?.tier ?? 'NEWBIE';
     try { await ctx.editMessageText(
         'Top picks ready 🎯\n\nHighest chance to win right now:\n\n' +
         '🏆 EUR/GBP OTC — Win rate ≈83%\n✅ EUR/USD OTC — Win rate ≈78%\n✅ AUD/USD OTC — Win rate ≈70%\n✅ USD/CAD OTC — Win rate ≈66%\n\n🚀 Make your choice below 👇',
-        { reply_markup: pairKeyboard(0) }
+        { reply_markup: pairKeyboard(0, tfTier) }
     ); } catch {}
     await ctx.answerCbQuery();
 });
@@ -757,7 +765,9 @@ bot.action(/^page:(\d+)$/, async ctx => {
     const chatId = ctx.chat!.id;
     const state = wizardSessions.get(chatId);
     if (!state || state.step !== 'pair') { await ctx.answerCbQuery('Session expired — start over.'); return; }
-    try { await ctx.editMessageReplyMarkup(pairKeyboard(parseInt(ctx.match[1], 10))); } catch {}
+    const pageUser = getUser(chatId);
+    const pageTier = pageUser?.tier ?? 'NEWBIE';
+    try { await ctx.editMessageReplyMarkup(pairKeyboard(parseInt(ctx.match[1], 10), pageTier)); } catch {}
     await ctx.answerCbQuery();
 });
 
@@ -819,8 +829,22 @@ bot.action(/^pair:(.+)$/, async ctx => {
         `🔷 Expiration: ${tfLabel(timeframe)}\n🔷 Strategy: High-Profit ⚡`
     );
 
+    const tradeUser = getUser(ctx.from!.id);
+    const tradeTier = (tradeUser?.tier ?? 'NEWBIE').toUpperCase();
+    const maxConcurrent = tradeTier === 'PRO' ? 3 : 1;
+    const currentCount = activeTradeSessions.get(ctx.from!.id) ?? 0;
+    if (currentCount >= maxConcurrent) {
+        await ctx.reply(
+            tradeTier === 'NEWBIE'
+                ? '⚠️ You already have an active trade. Newbie allows 1 trade at a time. Upgrade to PRO for up to 3 concurrent trades.'
+                : `⚠️ You already have ${currentCount} active trade(s). Max 3 concurrent trades reached. Wait for one to finish.`
+        );
+        return;
+    }
+
+    const martingaleRounds = userMartingaleSettings.get(ctx.from!.id)?.maxRounds;
     try {
-        await runMartingale(ctx, ssid, pair, analysis.direction, amount, timeframe, mode === 'live' ? 'live' : 'demo');
+        await runMartingale(ctx, ssid, pair, analysis.direction, amount, timeframe, mode === 'live' ? 'live' : 'demo', martingaleRounds);
     } catch (err: unknown) {
         console.error('[pair] runMartingale threw:', err);
         await ctx.reply('⚠️ Trade session ended unexpectedly. Please try again.').catch(() => {});
@@ -902,7 +926,7 @@ bot.action('ui:upgrade', async ctx => {
     await ctx.reply(
         `💡 *Upgrade Your Tier*\n\n` +
         `Enter your upgrade token below to unlock NEWBIE or PRO tier.\n\n` +
-        `Don't have a token? Contact the admin: ${ADMIN_CONTACT_LINK}`,
+        `Don't have a token? Contact support to get your token.`,
         { parse_mode: 'Markdown', reply_markup: backKeyboard() }
     );
 });
@@ -1778,7 +1802,7 @@ bot.on('text', async ctx => {
         const tokenInput = text.toUpperCase().trim();
         const result = validateToken(tokenInput);
         if (!result.valid) {
-            await ctx.reply(`❌ ${result.error}. Try again or contact the admin.`);
+            await ctx.reply(`❌ ${result.error}. Contact support to get a valid token.`);
             return;
         }
         if (useToken(tokenInput, ctx.from!.id)) {
