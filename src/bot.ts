@@ -23,7 +23,7 @@ import {
 import { startKeyboard, backKeyboard, onboardKeyboard } from './ui/user.js';
 import {
     getAdminId, adminKeyboard, adminBackKeyboard,
-    broadcastTargetKeyboard, broadcastLinkKeyboard, broadcastTimerKeyboard,
+    broadcastTargetKeyboard, broadcastLinkKeyboard, broadcastActionKeyboard, broadcastTimerKeyboard,
     tokenTierKeyboard, generateTokenKeyboard,
     topTradersAdminKeyboard, funnelKeyboard, memberManagementKeyboard,
 } from './ui/admin.js';
@@ -94,6 +94,7 @@ type AdminStep =
     | 'broadcast_media'
     | 'broadcast_link_url'
     | 'broadcast_link_label'
+    | 'broadcast_custom_timer'
     | 'manual_add_id'
     | 'manual_add_profit'
     | 'funnel_url'
@@ -116,13 +117,76 @@ const adminSessions = new Map<number, AdminSessionState>();
 // Users waiting to enter an upgrade token
 const upgradeSessions = new Set<number>();
 
+interface BroadcastButton {
+    text: string;
+    type: 'url' | 'callback';
+    value: string;
+}
+
 // In-flight broadcast payloads keyed by admin chat ID
 const pendingBroadcasts = new Map<number, {
     message: string;
     targetIds: number[];
     media?: { type: 'photo' | 'video'; fileId: string };
-    linkButton?: { text: string; url: string };
+    button?: BroadcastButton;
 }>();
+
+function parseDuration(input: string): number | null {
+    const match = input.trim().toLowerCase().match(/^(\d+)\s*(s|m|min|h)?$/);
+    if (!match) return null;
+    const num = parseInt(match[1], 10);
+    const unit = match[2] ?? 'm';
+    if (unit === 's') return num * 1_000;
+    if (unit === 'm' || unit === 'min') return num * 60_000;
+    if (unit === 'h') return num * 3_600_000;
+    return null;
+}
+
+async function executeBroadcast(chatId: number, deleteAfterMs: number, ctx: Context): Promise<void> {
+    const pending = pendingBroadcasts.get(chatId);
+    pendingBroadcasts.delete(chatId);
+    if (!pending) { await ctx.reply('❌ Session expired.', { reply_markup: adminBackKeyboard() }); return; }
+
+    const { message, targetIds, media, button } = pending;
+    const replyMarkup = button
+        ? { inline_keyboard: [[
+            button.type === 'url'
+                ? { text: button.text, url: button.value }
+                : { text: button.text, callback_data: button.value },
+          ]] }
+        : undefined;
+    const sentMsgIds: Array<{ telegramId: number; msgId: number }> = [];
+
+    for (const uid of targetIds) {
+        try {
+            let m;
+            if (media?.type === 'photo') {
+                m = await bot.telegram.sendPhoto(uid, media.fileId, { caption: message, ...(replyMarkup ? { reply_markup: replyMarkup } : {}) });
+            } else if (media?.type === 'video') {
+                m = await bot.telegram.sendVideo(uid, media.fileId, { caption: message, ...(replyMarkup ? { reply_markup: replyMarkup } : {}) });
+            } else {
+                m = await bot.telegram.sendMessage(uid, message, replyMarkup ? { reply_markup: replyMarkup } : undefined);
+            }
+            sentMsgIds.push({ telegramId: uid, msgId: m.message_id });
+        } catch {}
+    }
+
+    const timerLabel = deleteAfterMs === 0 ? 'never' :
+        deleteAfterMs < 60_000 ? `${deleteAfterMs / 1_000}s` :
+        deleteAfterMs < 3_600_000 ? `${deleteAfterMs / 60_000}m` : `${deleteAfterMs / 3_600_000}h`;
+    await ctx.reply(
+        `✅ Broadcast sent to *${sentMsgIds.length}/${targetIds.length}* users. Auto-delete: ${timerLabel}`,
+        { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() }
+    );
+
+    if (deleteAfterMs > 0) {
+        setTimeout(() => {
+            for (const { telegramId, msgId } of sentMsgIds) {
+                bot.telegram.deleteMessage(telegramId, msgId).catch(() => {});
+            }
+        }, deleteAfterMs);
+    }
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -977,59 +1041,54 @@ bot.action(/^broadcast:(active|inactive|all)$/, async ctx => {
     await ctx.reply(`📝 Send your broadcast message for *${target}* users:`, { parse_mode: 'Markdown' });
 });
 
-bot.action('broadcast_link:yes', async ctx => {
+// Button type selection
+bot.action('broadcast_btn:url', async ctx => {
     await ctx.answerCbQuery();
     adminSessions.set(ctx.chat!.id, { step: 'broadcast_link_url' });
     await ctx.reply('🔗 Enter the link URL (e.g. https://example.com):');
 });
 
-bot.action('broadcast_link:no', async ctx => {
+bot.action('broadcast_btn:action', async ctx => {
+    await ctx.answerCbQuery();
+    await ctx.reply('⚡ Select action for the button:', { reply_markup: broadcastActionKeyboard() });
+});
+
+bot.action('broadcast_btn:none', async ctx => {
     await ctx.answerCbQuery();
     await ctx.reply('⏱ Auto-delete after?', { reply_markup: broadcastTimerKeyboard() });
 });
 
+// Action button selection
+const ACTION_MAP: Record<string, { text: string; value: string }> = {
+    trade:       { text: '🎯 Trade Now',   value: 'ui:trade' },
+    stats:       { text: '📊 Stats',       value: 'ui:stats' },
+    history:     { text: '📆 History',     value: 'ui:history' },
+    leaderboard: { text: '🏆 Leaderboard', value: 'ui:leaderboard' },
+    menu:        { text: '📋 Menu',        value: 'ui:start' },
+};
+
+bot.action(/^broadcast_action:(trade|stats|history|leaderboard|menu)$/, async ctx => {
+    await ctx.answerCbQuery();
+    const key = ctx.match[1];
+    const action = ACTION_MAP[key];
+    const pending = pendingBroadcasts.get(ctx.chat!.id);
+    if (!pending || !action) { await ctx.reply('❌ Session expired.', { reply_markup: adminBackKeyboard() }); return; }
+    pendingBroadcasts.set(ctx.chat!.id, { ...pending, button: { text: action.text, type: 'callback', value: action.value } });
+    await ctx.reply(`✅ Button set: *${action.text}*\n\n⏱ Auto-delete after?`, { parse_mode: 'Markdown', reply_markup: broadcastTimerKeyboard() });
+});
+
+// Custom timer
+bot.action('broadcast:custom_timer', async ctx => {
+    await ctx.answerCbQuery();
+    if (!pendingBroadcasts.has(ctx.chat!.id)) { await ctx.reply('❌ Session expired.', { reply_markup: adminBackKeyboard() }); return; }
+    adminSessions.set(ctx.chat!.id, { step: 'broadcast_custom_timer' });
+    await ctx.reply('⏱ Enter custom duration (e.g. 30m, 2h, 45s):');
+});
+
 bot.action(/^bcast_timer:(\d+)$/, async ctx => {
     await ctx.answerCbQuery();
-    const deleteAfterMs = parseInt(ctx.match[1], 10);
-    const pending = pendingBroadcasts.get(ctx.chat!.id);
-    pendingBroadcasts.delete(ctx.chat!.id);
     adminSessions.delete(ctx.chat!.id);
-    if (!pending) { await ctx.reply('❌ Session expired.', { reply_markup: adminBackKeyboard() }); return; }
-
-    const { message, targetIds, media, linkButton } = pending;
-    const sentMsgIds: Array<{ telegramId: number; msgId: number }> = [];
-    const replyMarkup = linkButton
-        ? { inline_keyboard: [[{ text: linkButton.text, url: linkButton.url }]] }
-        : undefined;
-
-    for (const uid of targetIds) {
-        try {
-            let m;
-            if (media?.type === 'photo') {
-                m = await bot.telegram.sendPhoto(uid, media.fileId, { caption: message, ...(replyMarkup ? { reply_markup: replyMarkup } : {}) });
-            } else if (media?.type === 'video') {
-                m = await bot.telegram.sendVideo(uid, media.fileId, { caption: message, ...(replyMarkup ? { reply_markup: replyMarkup } : {}) });
-            } else {
-                m = await bot.telegram.sendMessage(uid, message, replyMarkup ? { reply_markup: replyMarkup } : undefined);
-            }
-            sentMsgIds.push({ telegramId: uid, msgId: m.message_id });
-        } catch {}
-    }
-
-    const timerLabel = deleteAfterMs === 0 ? 'never' :
-        deleteAfterMs < 3_600_000 ? `${deleteAfterMs / 60_000}m` : '1h';
-    await ctx.reply(
-        `✅ Broadcast sent to *${sentMsgIds.length}/${targetIds.length}* users. Auto-delete: ${timerLabel}`,
-        { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() }
-    );
-
-    if (deleteAfterMs > 0) {
-        setTimeout(() => {
-            for (const { telegramId, msgId } of sentMsgIds) {
-                bot.telegram.deleteMessage(telegramId, msgId).catch(() => {});
-            }
-        }, deleteAfterMs);
-    }
+    await executeBroadcast(ctx.chat!.id, parseInt(ctx.match[1], 10), ctx);
 });
 
 // ─── Module 7: Top Traders ────────────────────────────────────────────────────
@@ -1303,11 +1362,22 @@ bot.on('text', async ctx => {
             if (as.step === 'broadcast_link_label') {
                 const pending = pendingBroadcasts.get(chatId);
                 if (!pending) { await ctx.reply('❌ Session expired.', { reply_markup: adminBackKeyboard() }); return; }
-                pendingBroadcasts.set(chatId, { ...pending, linkButton: { text, url: as.broadcastLinkUrl! } });
+                pendingBroadcasts.set(chatId, { ...pending, button: { text, type: 'url', value: as.broadcastLinkUrl! } });
                 await ctx.reply(
                     `🔗 Button set: *${text}* → ${as.broadcastLinkUrl}\n\nAuto-delete after?`,
                     { parse_mode: 'Markdown', reply_markup: broadcastTimerKeyboard() }
                 );
+                return;
+            }
+
+            if (as.step === 'broadcast_custom_timer') {
+                const ms = parseDuration(text);
+                if (ms === null) {
+                    adminSessions.set(chatId, as); // restore for retry
+                    await ctx.reply('❌ Invalid format. Use e.g. 30m, 2h, 45s:');
+                    return;
+                }
+                await executeBroadcast(chatId, ms, ctx);
                 return;
             }
 

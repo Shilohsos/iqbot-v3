@@ -51,20 +51,36 @@ export function broadcastTargetKeyboard(): IKMarkup {
 
 export function broadcastLinkKeyboard(): IKMarkup {
     return {
-        inline_keyboard: [[
-            { text: '🔗 Yes, add a button', callback_data: 'broadcast_link:yes' },
-            { text: '✖️ No thanks',         callback_data: 'broadcast_link:no' },
-        ]],
+        inline_keyboard: [
+            [
+                { text: '🔗 URL link',          callback_data: 'broadcast_btn:url' },
+                { text: '⚡ Action',            callback_data: 'broadcast_btn:action' },
+                { text: '✖️ No button',         callback_data: 'broadcast_btn:none' },
+            ],
+        ],
+    };
+}
+
+export function broadcastActionKeyboard(): IKMarkup {
+    return {
+        inline_keyboard: [
+            [{ text: '🎯 Trade Now',    callback_data: 'broadcast_action:trade' }],
+            [{ text: '📊 Stats',        callback_data: 'broadcast_action:stats' }],
+            [{ text: '📆 History',      callback_data: 'broadcast_action:history' }],
+            [{ text: '🏆 Leaderboard',  callback_data: 'broadcast_action:leaderboard' }],
+            [{ text: '📋 Menu',         callback_data: 'broadcast_action:menu' }],
+        ],
     };
 }
 
 export function broadcastTimerKeyboard(): IKMarkup {
     return {
         inline_keyboard: [[
-            { text: '5m',    callback_data: 'bcast_timer:300000' },
-            { text: '15m',   callback_data: 'bcast_timer:900000' },
-            { text: '1h',    callback_data: 'bcast_timer:3600000' },
-            { text: 'Never', callback_data: 'bcast_timer:0' },
+            { text: '5m',        callback_data: 'bcast_timer:300000' },
+            { text: '15m',       callback_data: 'bcast_timer:900000' },
+            { text: '1h',        callback_data: 'bcast_timer:3600000' },
+            { text: '✏️ Custom', callback_data: 'broadcast:custom_timer' },
+            { text: 'Never',     callback_data: 'bcast_timer:0' },
         ]],
     };
 }
