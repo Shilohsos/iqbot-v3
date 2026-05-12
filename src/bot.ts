@@ -912,7 +912,7 @@ bot.on('text', async ctx => {
 
     wiz.amount = amount;
     wiz.step = 'timeframe';
-    try { await ctx.replyWithPhoto(ASSET('L6.png')); } catch {}
+    try { await ctx.replyWithPhoto(ASSET('L5.png')); } catch {}
     await ctx.reply(
         '⏱ Pick your expiry timeframe 👇\n⏱ Faster timeframes settle quicker.\n🐢 Longer timeframes ride bigger moves.',
         { reply_markup: timeframeKeyboard() }
