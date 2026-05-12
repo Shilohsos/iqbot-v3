@@ -768,31 +768,45 @@ bot.action(/^pair:(.+)$/, async ctx => {
     const pair = ctx.match[1];
     const { amount, timeframe, mode, lastImageMsgId: prevImgId } = state;
     wizardSessions.delete(chatId);
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery();  // stops spinner immediately — no more 30s dead wait
 
-    if (!amount || !timeframe) { try { await ctx.editMessageText('❌ Session error — start over.'); } catch { await ctx.reply('❌ Session error — start over.'); } return; }
+    if (!amount || !timeframe) { await ctx.reply('❌ Session error — start over.'); return; }
 
     const ssid = getSsidForUser(ctx.from!.id);
-    if (!ssid) { try { await ctx.editMessageText('❌ Not connected. Use /connect to link your IQ Option account.'); } catch { await ctx.reply('❌ Not connected. Use /connect to link your IQ Option account.'); } return; }
+    if (!ssid) { await ctx.reply('❌ Not connected. Use /connect to link your IQ Option account.'); return; }
 
-    // Delete L6 (pair selection image) then send L7 (analyzing radar)
+    // Clean up: delete the pair keyboard message and L6 image
+    try { await ctx.deleteMessage(); } catch {}
     if (prevImgId) { try { await ctx.telegram.deleteMessage(chatId, prevImgId); } catch {} }
+
+    // Send L7 (analyzing radar) then a progress reply — user sees feedback immediately
     let l7MsgId: number | undefined;
     try { const m = await ctx.replyWithPhoto(ASSET('L7.png')); l7MsgId = m.message_id; } catch {}
-    try { await ctx.editMessageText(`Selected: ${pair}\n\n🔍 Scanning markets...`); } catch {}
+    const progressMsg = await ctx.reply(
+        `Selected: ${pair}\n\n🔍 Scanning markets...\n⏱ This takes about 10–30 seconds...`
+    );
 
+    // Heavy SDK call — progress message is already visible, no dead silence
     let analysis: AnalysisResult;
     try {
         analysis = await analyzePair(ssid, pair, timeframe);
     } catch (err: unknown) {
-        await ctx.reply(`❌ Analysis failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
+        if (l7MsgId) { try { await ctx.telegram.deleteMessage(chatId, l7MsgId); } catch {} }
+        await ctx.telegram.editMessageText(
+            chatId, progressMsg.message_id, undefined,
+            `❌ Analysis failed: ${err instanceof Error ? err.message : 'Unknown error'}`
+        ).catch(() => ctx.reply(`❌ Analysis failed: ${err instanceof Error ? err.message : 'Unknown error'}`));
         return;
     }
 
-    // Delete L7 (analyzing) then send L8 (opportunity found)
+    // Replace progress message with completion note, then deliver results
     if (l7MsgId) { try { await ctx.telegram.deleteMessage(chatId, l7MsgId); } catch {} }
+    await ctx.telegram.editMessageText(
+        chatId, progressMsg.message_id, undefined,
+        `✅ Market scanned — signal found for ${pair}`
+    ).catch(() => {});
+
     try { await ctx.replyWithPhoto(ASSET('L8.png')); } catch {}
-    // F: call = bullish = L9b (upward trend); put = bearish = L9a (downward trend)
     const signalImg = analysis.direction === 'call' ? 'L9b.png' : 'L9a.png';
     const dirStr = analysis.direction === 'call' ? '🟢 CALL SIGNAL' : '🔴 PUT SIGNAL';
     try { await ctx.replyWithPhoto(ASSET(signalImg)); } catch {}
