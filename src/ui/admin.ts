@@ -49,6 +49,15 @@ export function broadcastTargetKeyboard(): IKMarkup {
     };
 }
 
+export function broadcastLinkKeyboard(): IKMarkup {
+    return {
+        inline_keyboard: [[
+            { text: '🔗 Yes, add a button', callback_data: 'broadcast_link:yes' },
+            { text: '✖️ No thanks',         callback_data: 'broadcast_link:no' },
+        ]],
+    };
+}
+
 export function broadcastTimerKeyboard(): IKMarkup {
     return {
         inline_keyboard: [[
