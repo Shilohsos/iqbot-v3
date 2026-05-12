@@ -550,12 +550,12 @@ bot.action(/^pair:(.+)$/, async ctx => {
     // F: call = bullish = L9b (upward trend); put = bearish = L9a (downward trend)
     const signalImg = analysis.direction === 'call' ? 'L9b.png' : 'L9a.png';
     const dirStr = analysis.direction === 'call' ? '🟢 CALL SIGNAL' : '🔴 PUT SIGNAL';
+    try { await ctx.replyWithPhoto(ASSET(signalImg)); } catch {}
     await ctx.reply(
         `OPPORTUNITY FOUND\nConfidence: 78% · Bot is ready to execute.\n\n${dirStr}\n\n` +
         `🔷 Trading pair: ${pair}\n🔷 Amount: $${amount.toFixed(2)} USD\n` +
         `🔷 Expiration: ${tfLabel(timeframe)}\n🔷 Strategy: High-Profit ⚡`
     );
-    try { await ctx.replyWithPhoto(ASSET(signalImg)); } catch {}
 
     await runMartingale(ctx, ssid, pair, analysis.direction, amount, timeframe, mode === 'live' ? 'live' : 'demo');
 });
