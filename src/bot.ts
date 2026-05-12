@@ -813,7 +813,7 @@ bot.on('text', async ctx => {
     });
 });
 
-bot.launch();
+bot.launch({ dropPendingUpdates: true });
 console.log('[iqbot-v3] running');
 
 process.once('SIGINT', () => bot.stop('SIGINT'));
