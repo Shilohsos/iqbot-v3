@@ -148,7 +148,7 @@ async function sendStartMenu(ctx: Context): Promise<void> {
     }
 
     const lines = [
-        `MoneyGBT — Home`,
+        `10x — Home`,
         ``,
         `Tier: ${tierEmoji} ${tier}`,
         balanceLine ? `Balance: ${balanceLine}` : '',
@@ -314,8 +314,8 @@ async function runMartingale(
         }
 
         if (result.status === 'WIN' || result.status === 'TIE') {
-            // L11b = MAJOR WIN / COMEBACK ACHIEVED; replaces L10 if it's still showing
-            await sendRoundImage('L11b.png');
+            // Round 1 = direct win (L11a); round 2+ = comeback (L11b)
+            await sendRoundImage(round === 1 ? 'L11a.png' : 'L11b.png');
             await ctx.reply(
                 `🏆 +$${result.pnl.toFixed(2)} added to your balance.\n\n` +
                 (round > 1 ? `Recovery complete on step ${round}/${MAX_ROUNDS}.\n\n` : '') +
