@@ -828,14 +828,20 @@ bot.action(/^pair:(.+)$/, async ctx => {
 
 bot.action('upsell:live', async ctx => {
     await ctx.answerCbQuery();
-    try { await ctx.editMessageText('✅ Switched to Live mode! Your next trade will use your real balance.'); }
-    catch { await ctx.reply('✅ Switched to Live mode! Your next trade will use your real balance.').catch(() => {}); }
+    const chatId = ctx.chat!.id;
+    const state: WizardState = { step: 'amount', mode: 'live' };
+    try { const m = await ctx.replyWithPhoto(ASSET('L5.png')); state.lastImageMsgId = m.message_id; } catch {}
+    wizardSessions.set(chatId, state);
+    await ctx.reply('💰 Enter amount for Live trade:', { reply_markup: amountKeyboard() });
 });
 
 bot.action('upsell:demo', async ctx => {
     await ctx.answerCbQuery();
-    try { await ctx.editMessageText('🪫 Continuing on Demo. Next trade stays in practice mode.'); }
-    catch { await ctx.reply('🪫 Continuing on Demo. Next trade stays in practice mode.').catch(() => {}); }
+    const chatId = ctx.chat!.id;
+    const state: WizardState = { step: 'amount', mode: 'demo' };
+    try { const m = await ctx.replyWithPhoto(ASSET('L5.png')); state.lastImageMsgId = m.message_id; } catch {}
+    wizardSessions.set(chatId, state);
+    await ctx.reply('💰 Enter amount for Demo trade:', { reply_markup: amountKeyboard() });
 });
 
 // ─── User menu actions ────────────────────────────────────────────────────────
