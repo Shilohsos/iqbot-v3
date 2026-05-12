@@ -140,6 +140,7 @@ function waitForResult(
             if (done) return;
             done = true;
             clearTimeout(timer);
+            clearInterval(poll);
             positions.unsubscribeOnUpdatePosition(callback);
             resolve(result);
         };
@@ -148,7 +149,7 @@ function waitForResult(
             finish({ status: 'TIMEOUT', pnl: 0, error: 'Result timeout' });
         }, timeoutSeconds * 1000);
 
-        // Check if position is already synced (in case we missed the open event)
+        // Initial sync: capture externalId if the position is already in the opened list
         const existing = positions.getOpenedPositions().find(p => p.orderIds.includes(optionId));
         if (existing) externalId = existing.externalId;
 
@@ -165,6 +166,28 @@ function waitForResult(
         };
 
         positions.subscribeOnUpdatePosition(callback);
+
+        // Polling fallback every 5s:
+        // - Captures externalId if the websocket open event was missed
+        // - Detects close if the websocket close event is never delivered
+        const poll = setInterval(() => {
+            const opened = positions.getOpenedPositions();
+
+            if (externalId === undefined) {
+                const match = opened.find(p => p.orderIds.includes(optionId));
+                if (match) externalId = match.externalId;
+            }
+
+            if (externalId !== undefined) {
+                const pos = opened.find(p => p.externalId === externalId);
+                if (pos?.status === 'closed') {
+                    const pnl = pos.closeProfit ?? 0;
+                    const reason = pos.closeReason ?? '';
+                    const status: TradeResult['status'] = reason === 'win' ? 'WIN' : reason === 'equal' ? 'TIE' : 'LOSS';
+                    finish({ status, pnl });
+                }
+            }
+        }, 5_000);
     });
 }
 
