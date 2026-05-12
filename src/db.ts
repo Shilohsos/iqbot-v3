@@ -9,6 +9,7 @@ db.pragma('journal_mode = WAL');
 db.exec(`
   CREATE TABLE IF NOT EXISTS trades (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    telegram_id     INTEGER,
     pair            TEXT    NOT NULL,
     direction       TEXT    NOT NULL,
     amount          REAL    NOT NULL,
@@ -21,10 +22,13 @@ db.exec(`
   )
 `);
 
-// Migration: add martingale_run column to databases created before Section 3
+// Migrations for the trades table
 const existingCols = (db.prepare('PRAGMA table_info(trades)').all() as { name: string }[]).map(c => c.name);
 if (!existingCols.includes('martingale_run')) {
     db.exec('ALTER TABLE trades ADD COLUMN martingale_run TEXT');
+}
+if (!existingCols.includes('telegram_id')) {
+    db.exec('ALTER TABLE trades ADD COLUMN telegram_id INTEGER');
 }
 
 // Users table with full onboarding columns (ssid nullable — user may onboard before /connect)
@@ -84,6 +88,7 @@ if (ssidColNotNull) {
 
 export interface TradeRecord {
     id?: number;
+    telegram_id?: number;
     pair: string;
     direction: string;
     amount: number;
@@ -104,12 +109,13 @@ export interface TradeStats {
 }
 
 const insertStmt = db.prepare(`
-    INSERT INTO trades (pair, direction, amount, status, pnl, trade_id, error, martingale_run)
-    VALUES (@pair, @direction, @amount, @status, @pnl, @trade_id, @error, @martingale_run)
+    INSERT INTO trades (telegram_id, pair, direction, amount, status, pnl, trade_id, error, martingale_run)
+    VALUES (@telegram_id, @pair, @direction, @amount, @status, @pnl, @trade_id, @error, @martingale_run)
 `);
 
 export function insertTrade(t: TradeRecord): void {
     insertStmt.run({
+        telegram_id: t.telegram_id ?? null,
         pair: t.pair,
         direction: t.direction,
         amount: t.amount,
@@ -121,14 +127,19 @@ export function insertTrade(t: TradeRecord): void {
     });
 }
 
-export function getRecentTrades(limit = 10): TradeRecord[] {
+export function getRecentTrades(limit = 10, telegramId?: number): TradeRecord[] {
+    if (telegramId !== undefined) {
+        return db.prepare(
+            'SELECT * FROM trades WHERE telegram_id = ? ORDER BY created_at DESC LIMIT ?'
+        ).all(telegramId, limit) as TradeRecord[];
+    }
     return db.prepare(
         'SELECT * FROM trades ORDER BY created_at DESC LIMIT ?'
     ).all(limit) as TradeRecord[];
 }
 
-export function getTradeStats(): TradeStats {
-    const row = db.prepare(`
+export function getTradeStats(telegramId?: number): TradeStats {
+    const sql = `
         SELECT
             COUNT(*)                                          AS total,
             SUM(CASE WHEN status = 'WIN'  THEN 1 ELSE 0 END) AS wins,
@@ -136,7 +147,12 @@ export function getTradeStats(): TradeStats {
             SUM(CASE WHEN status = 'TIE'  THEN 1 ELSE 0 END) AS ties,
             COALESCE(SUM(pnl), 0)                             AS totalPnl
         FROM trades
-    `).get() as { total: number; wins: number; losses: number; ties: number; totalPnl: number };
+        ${telegramId !== undefined ? 'WHERE telegram_id = ?' : ''}
+    `;
+    const row = (telegramId !== undefined
+        ? db.prepare(sql).get(telegramId)
+        : db.prepare(sql).get()
+    ) as { total: number; wins: number; losses: number; ties: number; totalPnl: number };
 
     return {
         total: row.total ?? 0,

@@ -16,6 +16,7 @@ export interface TradeRequest {
     martingaleRunId?: string;
     timeframeSec?: number;
     balanceType?: 'demo' | 'live';
+    telegramId?: number;
 }
 
 export interface TradeResult {
@@ -76,6 +77,7 @@ export async function executeTradeWithSdk(sdk: ClientSdk, trade: TradeRequest): 
         };
 
         insertTrade({
+            telegram_id: trade.telegramId,
             pair: tradeResult.pair,
             direction: tradeResult.direction,
             amount: tradeResult.amount,

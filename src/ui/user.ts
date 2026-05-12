@@ -1,7 +1,8 @@
-type Btn = { text: string; callback_data: string };
+type Btn = { text: string; callback_data: string } | { text: string; url: string };
 type IKMarkup = { inline_keyboard: Btn[][] };
 
 export function startKeyboard(): IKMarkup {
+    const supportUrl = process.env.ADMIN_CONTACT_LINK ?? 'https://t.me/shiloh_is_10xing';
     return {
         inline_keyboard: [
             [{ text: 'Take a trade 👾', callback_data: 'ui:trade' }],
@@ -13,7 +14,7 @@ export function startKeyboard(): IKMarkup {
                 { text: 'Upgrade 💡',    callback_data: 'ui:upgrade' },
                 { text: 'Help & FAQ ❓', callback_data: 'ui:help' },
             ],
-            [{ text: 'Support 🔋', callback_data: 'ui:support' }],
+            [{ text: 'Support 🔋', url: supportUrl }],
         ],
     };
 }
