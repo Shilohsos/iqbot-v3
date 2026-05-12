@@ -4,14 +4,16 @@ type IKMarkup = { inline_keyboard: Btn[][] };
 export function startKeyboard(): IKMarkup {
     return {
         inline_keyboard: [
+            [{ text: 'Take a trade 👾', callback_data: 'ui:trade' }],
             [
-                { text: '📊 Trade',   callback_data: 'ui:trade' },
-                { text: '📈 History', callback_data: 'ui:history' },
+                { text: 'History 📆',  callback_data: 'ui:history' },
+                { text: 'Stats 📈',    callback_data: 'ui:stats' },
             ],
             [
-                { text: '💰 Balance',  callback_data: 'ui:balance' },
-                { text: '⚙️ Settings', callback_data: 'ui:settings' },
+                { text: 'Upgrade 💡',    callback_data: 'ui:upgrade' },
+                { text: 'Help & FAQ ❓', callback_data: 'ui:help' },
             ],
+            [{ text: 'Support 🔋', callback_data: 'ui:support' }],
         ],
     };
 }
@@ -24,9 +26,9 @@ export function backKeyboard(): IKMarkup {
 
 export function onboardKeyboard(): IKMarkup {
     return {
-        inline_keyboard: [[
-            { text: '✅ Yes, I have one', callback_data: 'onboard:yes' },
-            { text: '➕ No, create one',  callback_data: 'onboard:no' },
-        ]],
+        inline_keyboard: [
+            [{ text: '✅ I have an IQ Option account', callback_data: 'onboard:yes' }],
+            [{ text: '🆕 Create one free (takes 2 min)',  callback_data: 'onboard:no' }],
+        ],
     };
 }
