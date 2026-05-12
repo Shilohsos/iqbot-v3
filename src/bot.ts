@@ -419,9 +419,23 @@ async function runMartingale(
             const errMsg = err instanceof Error ? err.message : 'Unknown error';
             logLines[logLines.length - 1] = `⚡ Trade 1|Step ${round}|⚠️ $${currentAmount.toFixed(2)} → error`;
             await syncLog();
-            const catchReply = await ctx.reply(`⚠️ Stopped: ${errMsg}`, {
-                reply_markup: { inline_keyboard: [[{ text: '🔄 New Opportunity', callback_data: 'ui:trade' }]] },
-            });
+            
+            // FRIENDLY BALANCE ERROR
+            const isBalanceError = /4112|investment amount|smaller.*minimum|insufficient.*balance/i.test(errMsg);
+            const catchReply = isBalanceError
+                ? await ctx.reply(
+                    '🚫 *You do not have an active balance*\n\nFund your account now with as little as $10 to start trading.',
+                    {
+                        parse_mode: 'Markdown',
+                        reply_markup: { inline_keyboard: [
+                            [{ text: '💳 Fund Account', url: 'https://iqoption.com/pwa/payments/deposit' }],
+                            [{ text: '🔄 New Opportunity', callback_data: 'ui:trade' }],
+                        ]},
+                    }
+                )
+                : await ctx.reply(`⚠️ Stopped: ${errMsg}`, {
+                    reply_markup: { inline_keyboard: [[{ text: '🔄 New Opportunity', callback_data: 'ui:trade' }]] },
+                });
             sentMessages.push(catchReply.message_id);
             scheduleCleanup();
             return;
