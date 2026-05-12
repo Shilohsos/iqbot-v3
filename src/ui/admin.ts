@@ -143,6 +143,21 @@ export function topTradersAdminKeyboard(editableEntries: Array<{ telegram_id: nu
     return { inline_keyboard: rows };
 }
 
+export function activationsKeyboard(
+    pendingUsers: Array<{ telegram_id: number; username: string | null }>
+): IKMarkup {
+    const rows: Btn[][] = [];
+    for (const u of pendingUsers) {
+        const label = u.username ?? String(u.telegram_id);
+        rows.push([
+            { text: `✅ Approve ${label}`, callback_data: `activation:approve:${u.telegram_id}` },
+            { text: `❌ Reject ${label}`,  callback_data: `activation:reject:${u.telegram_id}` },
+        ]);
+    }
+    rows.push([{ text: '🔙 Admin Menu', callback_data: 'admin:back' }]);
+    return { inline_keyboard: rows };
+}
+
 export function funnelKeyboard(): IKMarkup {
     return {
         inline_keyboard: [

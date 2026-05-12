@@ -27,7 +27,7 @@ import {
     broadcastTargetKeyboard, broadcastLinkKeyboard, broadcastActionKeyboard, broadcastTimerKeyboard,
     broadcastSendOrScheduleKeyboard, broadcastDelayKeyboard, scheduledBroadcastsKeyboard,
     tokenTierKeyboard, generateTokenKeyboard,
-    topTradersAdminKeyboard, funnelKeyboard, memberManagementKeyboard,
+    topTradersAdminKeyboard, funnelKeyboard, memberManagementKeyboard, activationsKeyboard,
 } from './ui/admin.js';
 import { checkAffiliate } from './affiliate.js';
 
@@ -1108,7 +1108,22 @@ bot.action('admin:activations', async ctx => {
     } else {
         msg += '✅ *Approved (24h):* None';
     }
-    await ctx.reply(msg, { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
+    await ctx.reply(msg, { parse_mode: 'Markdown', reply_markup: activationsKeyboard(pending) });
+});
+
+bot.action(/^activation:approve:(\d+)$/, async ctx => {
+    await ctx.answerCbQuery();
+    const uid = parseInt(ctx.match[1], 10);
+    approveUser(uid);
+    try { await ctx.editMessageText(`✅ User ${maskUserId(uid)} approved.`); } catch {}
+    try { await bot.telegram.sendMessage(uid, '✅ *Your account has been approved!* You can now start trading.', { parse_mode: 'Markdown' }); } catch {}
+});
+
+bot.action(/^activation:reject:(\d+)$/, async ctx => {
+    await ctx.answerCbQuery();
+    const uid = parseInt(ctx.match[1], 10);
+    rejectUser(uid);
+    try { await ctx.editMessageText(`❌ User ${maskUserId(uid)} rejected.`); } catch {}
 });
 
 // ─── Module 3: Find Users ─────────────────────────────────────────────────────
