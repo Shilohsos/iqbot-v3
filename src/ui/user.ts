@@ -3,7 +3,6 @@ type IKMarkup = { inline_keyboard: Btn[][] };
 
 export function startKeyboard(tier?: string): IKMarkup {
     const supportUrl = process.env.ADMIN_CONTACT_LINK ?? 'https://t.me/shiloh_is_10xing';
-    const isPro = (tier ?? '').toUpperCase() === 'PRO';
     const rows: Btn[][] = [
         [{ text: 'Take a trade 👾', callback_data: 'ui:trade' }],
         [
@@ -14,10 +13,8 @@ export function startKeyboard(tier?: string): IKMarkup {
             { text: 'Upgrade 💡',     callback_data: 'ui:upgrade' },
             { text: 'Leaderboard 🏆', callback_data: 'ui:leaderboard' },
         ],
+        [{ text: '⚙️ Smart Recovery Settings', callback_data: 'ui:martingale_settings' }],
     ];
-    if (isPro) {
-        rows.push([{ text: '⚙️ Martingale Settings', callback_data: 'ui:martingale_settings' }]);
-    }
     rows.push(
         [{ text: 'Help & FAQ ❓', callback_data: 'ui:help' }],
         [{ text: 'Support 🔋', url: supportUrl }],

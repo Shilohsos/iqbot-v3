@@ -638,6 +638,14 @@ async function runMartingale(
     );
     sentMessages.push(lostReply.message_id);
     scheduleCleanup();
+    const mgPromoSettings = userMartingaleSettings.get(userId);
+    if (mgPromoSettings && !mgPromoSettings.enabled) {
+        await ctx.replyWithPhoto(ASSET('L11a.png')).catch(() => {});
+        await ctx.reply(
+            `🏆 90% of trades recover and make more money using SMART RECOVERY 👾\n\nENABLE SMART RECOVERY 👇🔋`,
+            { reply_markup: { inline_keyboard: [[{ text: 'Enable Smart Recovery', callback_data: 'martingale:6' }]] } }
+        );
+    }
     if (balanceType === 'demo') await showDemoUpsell(ctx);
     } finally {
         const prev = activeTradeSessions.get(userId) ?? 1;
@@ -959,9 +967,9 @@ bot.action('ui:martingale_settings', async ctx => {
     const userId = ctx.from!.id;
     const settings = userMartingaleSettings.get(userId) ?? { enabled: true, maxRounds: 6 };
     await ctx.reply(
-        `⚙️ *Martingale Settings*\n\n` +
+        `⚙️ *Smart Recovery Settings*\n\n` +
         `Current: ${settings.enabled ? 'ON' : 'OFF'} · ${settings.maxRounds} rounds max\n\n` +
-        `Choose your preferred martingale strategy:`,
+        `Choose your Smart Recovery strategy:`,
         {
             parse_mode: 'Markdown',
             reply_markup: { inline_keyboard: [
@@ -969,8 +977,8 @@ bot.action('ui:martingale_settings', async ctx => {
                     { text: '🔁 Full (6 rounds)',   callback_data: 'martingale:6' },
                     { text: '🔁 Medium (3 rounds)', callback_data: 'martingale:3' },
                 ],
-                [{ text: '⛔ Disable gale', callback_data: 'martingale:off' }],
-                [{ text: '🔙 Back',         callback_data: 'ui:start' }],
+                [{ text: '⛔ Disable Smart Recovery', callback_data: 'martingale:off' }],
+                [{ text: '🔙 Back',                   callback_data: 'ui:start' }],
             ]},
         }
     );
@@ -982,11 +990,11 @@ bot.action(/^martingale:(\d+|off)$/, async ctx => {
     const val = ctx.match[1];
     if (val === 'off') {
         userMartingaleSettings.set(userId, { enabled: false, maxRounds: 1 });
-        await ctx.editMessageText('⛔ Gale disabled. Trades will run a single round with no recovery.').catch(() => {});
+        await ctx.editMessageText('⛔ Smart Recovery disabled. Trades will run a single round with no recovery.').catch(() => {});
     } else {
         const rounds = parseInt(val, 10);
         userMartingaleSettings.set(userId, { enabled: true, maxRounds: rounds });
-        await ctx.editMessageText(`✅ Martingale set to ${rounds} rounds.`).catch(() => {});
+        await ctx.editMessageText(`✅ Smart Recovery set to ${rounds} rounds.`).catch(() => {});
     }
 });
 
@@ -1010,8 +1018,8 @@ bot.action('ui:help', async ctx => {
     await ctx.answerCbQuery();
     await ctx.reply(
         `❓ *Help & FAQ*\n\n` +
-        `*How does the bot work?*\nAnalyzes OTC pairs and places trades via Smart Gale (Martingale) recovery.\n\n` +
-        `*What is Martingale?*\nIf a trade loses, the next bet doubles to recover the loss. Up to 6 rounds.\n\n` +
+        `*How does the bot work?*\nAnalyzes OTC pairs and places trades via Smart Recovery.\n\n` +
+        `*What is Smart Recovery?*\nIf a trade loses, the next bet doubles to recover the loss. Up to 6 rounds.\n\n` +
         `*Demo vs Live?*\nDemo uses practice balance. Live uses your real account balance.\n\n` +
         `*How to withdraw?*\nAll funds stay in your IQ Option account — withdraw directly from there.`,
         { parse_mode: 'Markdown', reply_markup: backKeyboard() }
