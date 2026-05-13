@@ -58,6 +58,15 @@ const ROUND_COOLDOWN_MS = 5_000;
 
 function escapeMd(s: string): string { return s.replace(/[_*[\]()~`>#+=|{}.!-]/g, '\\$&'); }
 
+function withTimeout<T>(promise: Promise<T>, ms: number, label?: string): Promise<T> {
+    return Promise.race([
+        promise,
+        new Promise<T>((_, reject) =>
+            setTimeout(() => reject(new Error(`SDK timeout${label ? `: ${label}` : ''}`)), ms)
+        ),
+    ]);
+}
+
 function ASSET(f: string): { source: string } {
     return { source: `${ASSETS_DIR}/${f}` };
 }
@@ -403,10 +412,7 @@ async function sendStartMenu(ctx: Context): Promise<void> {
                         ].filter(Boolean).join(' | ');
                     } finally { await sdk.shutdown(); }
                 };
-                const timeout = new Promise<string>((_, reject) =>
-                    setTimeout(() => reject(new Error('timeout')), 5_000)
-                );
-                balanceLine = await Promise.race([fetchBalance(), timeout]);
+                balanceLine = await withTimeout(fetchBalance(), 5_000, 'balance');
                 balanceCache.set(telegramId, { line: balanceLine, ts: Date.now() });
             } catch {}
         }
@@ -547,14 +553,8 @@ async function runMartingale(
         const roundTrade: TradeRequest = { pair, direction, amount: currentAmount, martingaleRunId: runId, timeframeSec, balanceType, telegramId: ctx.from!.id };
 
         let result: TradeResult;
-        let roundTimer: ReturnType<typeof setTimeout> | undefined;
         try {
-            result = await Promise.race([
-                executeTrade(ssid, roundTrade),
-                new Promise<never>((_, reject) => {
-                    roundTimer = setTimeout(() => reject(new Error('Round timeout')), roundTimeoutMs);
-                }),
-            ]);
+            result = await withTimeout(executeTrade(ssid, roundTrade), roundTimeoutMs, 'trade');
         } catch (err: unknown) {
             const errMsg = err instanceof Error ? err.message : 'Unknown error';
             logLines[logLines.length - 1] = `⚡ Trade 1|⚠️ $${currentAmount.toFixed(2)} → error`;
@@ -579,8 +579,6 @@ async function runMartingale(
             sentMessages.push(catchReply.message_id);
             scheduleCleanup();
             return;
-        } finally {
-            clearTimeout(roundTimer);
         }
 
         const roundPnl = result.status === 'WIN' ? result.pnl : result.status === 'TIE' ? 0 : -currentAmount;
@@ -1108,9 +1106,12 @@ bot.command('balance', async ctx => {
     const ssid = getSsidForUser(ctx.from!.id);
     if (!ssid) { await ctx.reply('❌ Not connected. Use /connect first.', { reply_markup: backKeyboard() }); return; }
     try {
-        const sdk = await ClientSdk.create(WS_URL, PLATFORM_ID, new SsidAuthMethod(ssid), { host: IQ_HOST });
+        const sdk = await withTimeout(
+            ClientSdk.create(WS_URL, PLATFORM_ID, new SsidAuthMethod(ssid), { host: IQ_HOST }),
+            5_000, 'balance'
+        );
         try {
-            const all = (await sdk.balances()).getBalances();
+            const all = (await withTimeout(sdk.balances(), 5_000, 'balance')).getBalances();
             const demo = all.find(b => b.type === BalanceType.Demo);
             const real = all.find(b => b.type === BalanceType.Real);
             let msg = '💰 *Balances*\n\n';
@@ -1120,7 +1121,11 @@ bot.command('balance', async ctx => {
             await ctx.reply(msg, { parse_mode: 'Markdown', reply_markup: backKeyboard() });
         } finally { await sdk.shutdown(); }
     } catch (err: unknown) {
-        await ctx.reply(`❌ Balance fetch failed: ${err instanceof Error ? err.message : 'Unknown error'}`, { reply_markup: backKeyboard() });
+        const isTimeout = err instanceof Error && err.message.startsWith('SDK timeout');
+        await ctx.reply(
+            isTimeout ? '⚠️ IQ Option is taking too long. Try again in a moment.' : `❌ Balance fetch failed: ${err instanceof Error ? err.message : 'Unknown error'}`,
+            { reply_markup: backKeyboard() }
+        );
     }
 });
 
@@ -1638,9 +1643,9 @@ bot.command('pairs', async ctx => {
     const ssid = getSsidForUser(ctx.from!.id);
     if (!ssid) { await ctx.reply('❌ Not connected. Use /connect first.'); return; }
     try {
-        const sdk = await createSdk(ssid);
+        const sdk = await withTimeout(createSdk(ssid), 10_000, 'pairs');
         try {
-            const actives = (await sdk.turboOptions()).getActives();
+            const actives = (await withTimeout(sdk.turboOptions(), 10_000, 'pairs')).getActives();
             const normTicker = (s: string) => s.toUpperCase().replace(/^front\./i, '').replace(/[-/\s]/g, '');
             const otcNorms = OTC_PAIRS.map(p => normTicker(p));
             let msg = '📋 *Turbo Actives*\n\n';
@@ -1651,7 +1656,8 @@ bot.command('pairs', async ctx => {
             await ctx.reply(msg, { parse_mode: 'Markdown' });
         } finally { await sdk.shutdown(); }
     } catch (err: unknown) {
-        await ctx.reply(`❌ Failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
+        const isTimeout = err instanceof Error && err.message.startsWith('SDK timeout');
+        await ctx.reply(isTimeout ? '⚠️ IQ Option is taking too long. Try again in a moment.' : `❌ Failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
     }
 });
 
@@ -2020,10 +2026,10 @@ bot.on('text', async ctx => {
             try { await ctx.deleteMessage(); } catch {}
             await ctx.reply('🔐 Logging in...');
             try {
-                const { ssid, sdk } = await loginAndCaptureSsid(email, text);
+                const { ssid, sdk } = await withTimeout(loginAndCaptureSsid(email, text), 10_000, 'login');
                 saveUser({ telegram_id: ctx.from!.id, ssid });
                 try {
-                    const all = (await sdk.balances()).getBalances();
+                    const all = (await withTimeout(sdk.balances(), 5_000, 'balance')).getBalances();
                     const demo = all.find(b => b.type === BalanceType.Demo);
                     const real = all.find(b => b.type === BalanceType.Real);
                     let msg = '✅ Connected!\n\n';
@@ -2068,10 +2074,10 @@ bot.on('text', async ctx => {
             try { await ctx.deleteMessage(); } catch {}
             await ctx.reply('🔐 Logging in...');
             try {
-                const { ssid, sdk } = await loginAndCaptureSsid(email, text);
+                const { ssid, sdk } = await withTimeout(loginAndCaptureSsid(email, text), 10_000, 'login');
                 saveUser({ telegram_id: ctx.from!.id, ssid });
                 try {
-                    const all = (await sdk.balances()).getBalances();
+                    const all = (await withTimeout(sdk.balances(), 5_000, 'balance')).getBalances();
                     const demo = all.find(b => b.type === BalanceType.Demo);
                     const real = all.find(b => b.type === BalanceType.Real);
                     let msg = '✅ *Connected!*\n\n';
@@ -2080,7 +2086,11 @@ bot.on('text', async ctx => {
                     await ctx.reply(msg, { parse_mode: 'Markdown' });
                 } finally { await sdk.shutdown(); }
             } catch (err: unknown) {
-                await ctx.reply(`❌ Connection failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
+                const isTimeout = err instanceof Error && err.message.startsWith('SDK timeout');
+                await ctx.reply(isTimeout
+                    ? '⚠️ IQ Option is taking too long. Please try again.'
+                    : `❌ Connection failed: ${err instanceof Error ? err.message : 'Unknown error'}`
+                );
             }
         }
         return;
