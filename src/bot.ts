@@ -642,7 +642,7 @@ async function runMartingale(
     scheduleCleanup();
     const mgPromoSettings = userMartingaleSettings.get(userId);
     if (mgPromoSettings && !mgPromoSettings.enabled) {
-        const promoImg = await ctx.replyWithPhoto(ASSET('L11a.png')).catch(() => undefined);
+        const promoImg = await ctx.replyWithPhoto(ASSET('recovery-promo.png')).catch(() => undefined);
         if (promoImg) sentMessages.push(promoImg.message_id);
         const promoText = await ctx.reply(
             `🏆 90% of trades recover and make more money using SMART RECOVERY 👾\n\nENABLE SMART RECOVERY 👇🔋`,
