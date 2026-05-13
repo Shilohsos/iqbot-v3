@@ -1208,7 +1208,7 @@ bot.action('admin:today', async ctx => {
     }
     let msg = '📊 *Today\'s Top Traders*\n\n';
     traders.forEach((t, i) => {
-        const name = t.username ? `@${t.username}` : `ID: ${maskUserId(t.telegram_id)}`;
+        const name = t.username ? `@${escapeMd(t.username)}` : `ID: ${maskUserId(t.telegram_id)}`;
         msg += `${i + 1}. ${name} — ${t.trade_count} trades\n`;
     });
     await ctx.reply(msg, { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
@@ -1224,7 +1224,7 @@ bot.action('admin:activations', async ctx => {
     if (pending.length > 0) {
         msg += `⏳ *Pending Manual Approval (${pending.length}):*\n`;
         for (const u of pending) {
-            const name = u.username ? `@${u.username}` : `[User ${String(u.telegram_id).slice(-4)}](tg://user?id=${u.telegram_id})`;
+            const name = u.username ? `@${escapeMd(u.username)}` : `[User ${String(u.telegram_id).slice(-4)}](tg://user?id=${u.telegram_id})`;
             msg += `${name}\n`;
         }
         msg += '\n';
@@ -1232,7 +1232,7 @@ bot.action('admin:activations', async ctx => {
         msg += '⏳ *Pending:* None\n\n';
     }
     if (recent.length > 0) {
-        msg += `✅ *Recently Approved (24h):*\n`;
+        msg += '✅ *Recently Approved (24h):*\n';
         for (const u of recent) {
             const name = u.username ? `@${escapeMd(u.username)}` : `ID: ${maskUserId(u.telegram_id)}`;
             msg += `${name}\n`;
