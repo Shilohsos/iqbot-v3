@@ -335,6 +335,10 @@ export function rejectUser(telegramId: number): void {
     db.prepare(`UPDATE users SET approval_status = 'rejected' WHERE telegram_id = ?`).run(telegramId);
 }
 
+export function resetUser(telegramId: number): void {
+    db.prepare(`UPDATE users SET ssid = NULL, iq_user_id = NULL, approval_status = 'pending' WHERE telegram_id = ?`).run(telegramId);
+}
+
 export function pauseUser(telegramId: number): void {
     db.prepare(`UPDATE users SET approval_status = 'paused' WHERE telegram_id = ?`).run(telegramId);
 }
