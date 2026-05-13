@@ -1642,6 +1642,15 @@ bot.command('pairs', async ctx => {
 
 bot.command('ping', ctx => ctx.reply('pong'));
 
+bot.command('refresh', async ctx => {
+    const chatId = ctx.chat.id;
+    onboardSessions.delete(chatId);
+    wizardSessions.delete(chatId);
+    connectSessions.delete(chatId);
+    upgradeSessionsMap.delete(chatId);
+    await startOnboarding(ctx);
+});
+
 // ─── Broadcast media handlers ─────────────────────────────────────────────────
 
 bot.on('photo', async ctx => {
@@ -1936,6 +1945,7 @@ bot.on('text', async ctx => {
                     approveUser(ctx.from!.id, result.data ? JSON.stringify(result.data) : undefined);
                     ob.iqUserId = iqUserId;
                     ob.step = 'connect_email';
+                    onboardSessions.set(chatId, ob);
                     await ctx.reply('✅ Account verified! You\'re all set.\n\n📧 Enter your IQ Option email:');
                 } else {
                     setManualApproval(ctx.from!.id);
@@ -1979,6 +1989,7 @@ bot.on('text', async ctx => {
         if (ob.step === 'connect_email') {
             ob.email = text;
             ob.step = 'connect_password';
+            onboardSessions.set(chatId, ob);
             await ctx.reply('🛡️ Your password is safe\n\nWe use the official IQ Option API.\nWe can\'t read or store it.\nYour message auto-deletes from this chat in 10 seconds.');
             await ctx.reply('🔑 Enter your IQ Option password:');
             return;
@@ -2004,6 +2015,7 @@ bot.on('text', async ctx => {
             } catch (err: unknown) {
                 console.error('[connect fail]', err instanceof Error ? err.message : err);
                 ob.loginFailCount = (ob.loginFailCount ?? 0) + 1;
+                onboardSessions.set(chatId, ob);
                 if ((ob.loginFailCount ?? 0) >= 2) {
                     onboardSessions.delete(chatId);
                     await ctx.reply(
@@ -2013,6 +2025,7 @@ bot.on('text', async ctx => {
                 } else {
                     ob.step = 'connect_email';
                     ob.email = undefined;
+                    onboardSessions.set(chatId, ob);
                     await ctx.reply('Sorry we\'re unable to retrieve your account details 😨\n\nPlease re-check your account email or password and try again 👇\n\n📧 Enter your IQ Option email:');
                 }
             }
@@ -2027,6 +2040,7 @@ bot.on('text', async ctx => {
         if (conn.step === 'email') {
             conn.email = text;
             conn.step = 'password';
+            connectSessions.set(chatId, conn);
             await ctx.reply('🔑 Enter your password:');
         } else if (conn.step === 'password' && conn.email) {
             const email = conn.email;
