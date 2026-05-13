@@ -15,6 +15,7 @@ import {
     getLeaderboardDetailed, updateLeaderboardManual,
     getFunnelStats, getConfig, setConfig,
     getAuditReport, maskUserId,
+    calculatePairWinRates, selectTopPicks, type PairWinRate,
 } from './db.js';
 import { analyzePair, type AnalysisResult } from './analysis.js';
 import {
@@ -157,6 +158,22 @@ let nextScheduledId = 1;
 const activeTradeSessions = new Map<number, number>();
 // per-user martingale config (Pro users can adjust)
 const userMartingaleSettings = new Map<number, { enabled: boolean; maxRounds: number }>();
+
+// Top picks cache — refreshed every 2 hours
+const PICKS_REFRESH_MS = 2 * 60 * 60 * 1000;
+let cachedTopPicks: PairWinRate[] = [];
+let lastPicksRefresh = 0;
+function getTopPicks(): PairWinRate[] {
+    const now = Date.now();
+    if (cachedTopPicks.length === 0 || now - lastPicksRefresh > PICKS_REFRESH_MS) {
+        const rates = calculatePairWinRates();
+        cachedTopPicks = selectTopPicks(rates);
+        lastPicksRefresh = now;
+        if (cachedTopPicks.length > 0)
+            console.log('[topPicks] refreshed:', cachedTopPicks.map(p => `${p.pair}=${p.winRate}%`).join(', '));
+    }
+    return cachedTopPicks;
+}
 
 // Messages queued for users who were trading when a broadcast was sent
 const pendingDeliveries = new Map<number, Array<{
@@ -752,11 +769,16 @@ bot.action(/^tf:(\d+)$/, async ctx => {
     try { const m = await ctx.replyWithPhoto(ASSET('L6.png')); state.lastImageMsgId = m.message_id; } catch {}
     const tfUser = getUser(chatId);
     const tfTier = tfUser?.tier ?? 'NEWBIE';
-    try { await ctx.editMessageText(
-        'Top picks ready 🎯\n\nHighest chance to win right now:\n\n' +
-        '🏆 EUR/GBP OTC — Win rate ≈83%\n✅ EUR/USD OTC — Win rate ≈78%\n✅ AUD/USD OTC — Win rate ≈70%\n✅ USD/CAD OTC — Win rate ≈66%\n\n🚀 Make your choice below 👇',
-        { reply_markup: pairKeyboard(0, tfTier) }
-    ); } catch {}
+    const picks = getTopPicks();
+    const medals = ['🏆', '🥇', '🥈', '🥉', '4️⃣'];
+    let picksMsg = 'Top picks ready 🎯\n\nHighest chance to win right now:\n\n';
+    if (picks.length > 0) {
+        picks.forEach((p, i) => { picksMsg += `${medals[i] ?? `${i + 1}.`} ${p.pair} — Win rate ≈${p.winRate}%\n`; });
+    } else {
+        picksMsg += '🏆 EUR/USD OTC\n🥇 GBP/USD OTC\n🥈 EUR/JPY OTC\n';
+    }
+    picksMsg += '\n🚀 Make your choice below 👇';
+    try { await ctx.editMessageText(picksMsg, { reply_markup: pairKeyboard(0, tfTier) }); } catch {}
 });
 
 // ─── Trade wizard — pair pagination ──────────────────────────────────────────

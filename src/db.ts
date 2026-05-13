@@ -559,6 +559,59 @@ export function setConfig(key: string, value: string): void {
     `).run(key, value);
 }
 
+// ─── Pair win rates ───────────────────────────────────────────────────────────
+
+export interface PairWinRate {
+    pair: string;
+    winRate: number;
+    totalCircles: number;
+}
+
+export function calculatePairWinRates(): PairWinRate[] {
+    return db.prepare(`
+        WITH circle_results AS (
+            SELECT
+                martingale_run,
+                (SELECT status FROM trades t2 WHERE t2.martingale_run = t1.martingale_run ORDER BY t2.created_at DESC LIMIT 1) AS final_status,
+                (SELECT pair   FROM trades t2 WHERE t2.martingale_run = t1.martingale_run ORDER BY t2.created_at DESC LIMIT 1) AS pair
+            FROM trades t1 WHERE martingale_run IS NOT NULL GROUP BY martingale_run
+            UNION ALL
+            SELECT CAST(id AS TEXT), status, pair FROM trades WHERE martingale_run IS NULL
+        )
+        SELECT
+            pair,
+            ROUND(CAST(SUM(CASE WHEN final_status = 'WIN' THEN 1 ELSE 0 END) AS REAL) / MAX(COUNT(*), 1) * 100, 1) AS winRate,
+            COUNT(*) AS totalCircles
+        FROM circle_results
+        WHERE pair IS NOT NULL
+        GROUP BY pair
+        ORDER BY winRate DESC
+    `).all() as PairWinRate[];
+}
+
+export function selectTopPicks(rates: PairWinRate[]): PairWinRate[] {
+    const picks: PairWinRate[] = [];
+
+    const top90 = rates.find(r => r.winRate >= 90);
+    if (top90) picks.push(top90);
+
+    const top80 = rates.filter(r => !picks.includes(r) && r.winRate >= 80).slice(0, 2);
+    picks.push(...top80);
+
+    const top70 = rates.find(r => !picks.includes(r) && r.winRate >= 70);
+    if (top70) picks.push(top70);
+
+    const below70 = rates.find(r => !picks.includes(r) && r.winRate < 70);
+    if (below70) picks.push(below70);
+
+    const remaining = rates.filter(r => !picks.includes(r));
+    while (picks.length < 5 && remaining.length > 0) {
+        picks.push(remaining.shift()!);
+    }
+
+    return picks;
+}
+
 // ─── Audit report ─────────────────────────────────────────────────────────────
 
 export interface AuditReport {
