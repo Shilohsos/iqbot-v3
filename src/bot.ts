@@ -2082,7 +2082,7 @@ bot.catch((err: unknown, ctx) => {
 });
 
 cleanStaleSessions();
-bot.launch({ dropPendingUpdates: true });
+bot.launch();
 console.log('[iqbot-v3] running');
 
 setInterval(async () => {
