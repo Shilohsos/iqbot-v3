@@ -56,6 +56,8 @@ bot.use(async (ctx, next) => {
 const MAX_ROUNDS       = 6;
 const ROUND_COOLDOWN_MS = 5_000;
 
+function escapeMd(s: string): string { return s.replace(/[_*[\]()~`>#+=|{}.!-]/g, '\\$&'); }
+
 function ASSET(f: string): { source: string } {
     return { source: `${ASSETS_DIR}/${f}` };
 }
@@ -434,7 +436,7 @@ async function startOnboarding(ctx: Context): Promise<void> {
         `I scan markets. I read signals. I place trades.\n` +
         `You sit back and watch the wins land.`
     );
-    // L3 — Link Your Account (connect step comes before tier selection)
+    // L3 — Link Your Account
     try { await ctx.replyWithPhoto(ASSET('L3.png')); } catch {}
     await ctx.reply(
         `Connect your IQ Option account.\n\n` +
@@ -442,19 +444,6 @@ async function startOnboarding(ctx: Context): Promise<void> {
         `Bot trades on your account. Money stays yours.\n\n` +
         `Pick what fits 👇`,
         { reply_markup: onboardKeyboard() }
-    );
-    // L2 — Three Ways to Begin (tier selection)
-    try { await ctx.replyWithPhoto(ASSET('L2.png')); } catch {}
-    await ctx.reply(
-        `Three ways to start 👾\n\n` +
-        `✅ The bot itself is completely free.\n\n` +
-        `What you fund is your own IQ Option trading capital.\n` +
-        `It stays in your account, you trade with it, you withdraw it.\n\n` +
-        `🧪 DEMO — try the bot risk-free\n` +
-        `🚀 Newbie — trade with $20+ capital\n` +
-        `⚡ PRO — trade with $100+ capital\n\n` +
-        `How are you starting? 👇`,
-        { reply_markup: tierKeyboard() }
     );
 }
 
@@ -1245,7 +1234,7 @@ bot.action('admin:activations', async ctx => {
     if (recent.length > 0) {
         msg += `✅ *Recently Approved (24h):*\n`;
         for (const u of recent) {
-            const name = u.username ? `@${u.username}` : `ID: ${maskUserId(u.telegram_id)}`;
+            const name = u.username ? `@${escapeMd(u.username)}` : `ID: ${maskUserId(u.telegram_id)}`;
             msg += `${name}\n`;
         }
     } else {
@@ -1979,7 +1968,7 @@ bot.on('text', async ctx => {
                     );
                     try {
                         const userTag = ctx.from!.username
-                            ? `@${ctx.from!.username}`
+                            ? `@${escapeMd(ctx.from!.username)}`
                             : `[User](tg://user?id=${ctx.from!.id})`;
                         await bot.telegram.sendMessage(
                             getAdminId(),
@@ -1995,7 +1984,7 @@ bot.on('text', async ctx => {
                 await ctx.reply('⏳ Your User ID has been submitted for manual review.\nYou\'ll be notified once the admin approves your account.');
                 try {
                     const userTag2 = ctx.from!.username
-                        ? `@${ctx.from!.username}`
+                        ? `@${escapeMd(ctx.from!.username)}`
                         : `[User](tg://user?id=${ctx.from!.id})`;
                     await bot.telegram.sendMessage(
                         getAdminId(),
