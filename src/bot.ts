@@ -196,6 +196,10 @@ function getTopPicks(): PairWinRate[] {
     return cachedTopPicks;
 }
 
+// Balance cache — avoids a fresh WS connection on every /start
+const BALANCE_CACHE_TTL = 60_000;
+const balanceCache = new Map<number, { line: string; ts: number }>();
+
 // Messages queued for users who were trading when a broadcast was sent
 const pendingDeliveries = new Map<number, Array<{
     message: string;
@@ -380,18 +384,30 @@ async function sendStartMenu(ctx: Context): Promise<void> {
     let balanceLine = '';
     const ssid = getSsidForUser(telegramId);
     if (ssid) {
-        try {
-            const sdk = await ClientSdk.create(WS_URL, PLATFORM_ID, new SsidAuthMethod(ssid), { host: IQ_HOST });
+        const cached = balanceCache.get(telegramId);
+        if (cached && Date.now() - cached.ts < BALANCE_CACHE_TTL) {
+            balanceLine = cached.line;
+        } else {
             try {
-                const all = (await sdk.balances()).getBalances();
-                const demo = all.find(b => b.type === BalanceType.Demo);
-                const real = all.find(b => b.type === BalanceType.Real);
-                balanceLine = [
-                    demo ? `Practice $${demo.amount.toFixed(2)}` : '',
-                    real ? `Real $${real.amount.toFixed(2)}` : '',
-                ].filter(Boolean).join(' | ');
-            } finally { await sdk.shutdown(); }
-        } catch {}
+                const fetchBalance = async () => {
+                    const sdk = await ClientSdk.create(WS_URL, PLATFORM_ID, new SsidAuthMethod(ssid), { host: IQ_HOST });
+                    try {
+                        const all = (await sdk.balances()).getBalances();
+                        const demo = all.find(b => b.type === BalanceType.Demo);
+                        const real = all.find(b => b.type === BalanceType.Real);
+                        return [
+                            demo ? `Practice $${demo.amount.toFixed(2)}` : '',
+                            real ? `Real $${real.amount.toFixed(2)}` : '',
+                        ].filter(Boolean).join(' | ');
+                    } finally { await sdk.shutdown(); }
+                };
+                const timeout = new Promise<string>((_, reject) =>
+                    setTimeout(() => reject(new Error('timeout')), 5_000)
+                );
+                balanceLine = await Promise.race([fetchBalance(), timeout]);
+                balanceCache.set(telegramId, { line: balanceLine, ts: Date.now() });
+            } catch {}
+        }
     }
 
     const lines = [
@@ -1646,6 +1662,7 @@ bot.command('refresh', async ctx => {
     const chatId = ctx.chat.id;
     const userId = ctx.from!.id;
     resetUser(userId);
+    balanceCache.delete(userId);
     onboardSessions.delete(chatId);
     wizardSessions.delete(chatId);
     connectSessions.delete(chatId);
