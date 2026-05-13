@@ -148,7 +148,7 @@ export function activationsKeyboard(
 ): IKMarkup {
     const rows: Btn[][] = [];
     for (const u of pendingUsers) {
-        const label = u.username ?? String(u.telegram_id);
+        const label = u.username ?? `ID: ${String(u.telegram_id).slice(-4)}`;
         rows.push([
             { text: `✅ Approve ${label}`, callback_data: `activation:approve:${u.telegram_id}` },
             { text: `❌ Reject ${label}`,  callback_data: `activation:reject:${u.telegram_id}` },

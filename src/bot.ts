@@ -1198,7 +1198,7 @@ bot.action('admin:activations', async ctx => {
     if (pending.length > 0) {
         msg += `⏳ *Pending Manual Approval (${pending.length}):*\n`;
         for (const u of pending) {
-            const name = u.username ? `@${u.username}` : `ID: ${maskUserId(u.telegram_id)}`;
+            const name = u.username ? `@${u.username}` : `[User ${String(u.telegram_id).slice(-4)}](tg://user?id=${u.telegram_id})`;
             msg += `${name}\n`;
         }
         msg += '\n';
