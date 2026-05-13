@@ -7,7 +7,7 @@ import {
     getRecentTrades, getTradeStats, getTopTradersToday,
     getUser, saveUser, saveUsername, deleteUser, getAllUsers, getAllUserIds,
     getActiveTraderIds, getInactiveTraderIds, findUsersByUsername,
-    upsertOnboardingUser, approveUser, setManualApproval, rejectUser, getApprovalStats,
+    upsertOnboardingUser, approveUser, setManualApproval, rejectUser, resetUser, getApprovalStats,
     getRecentApprovals, getPendingManualUsers,
     setUserTier, pauseUser, resumeUser,
     generateToken, validateToken, useToken, getTokens,
@@ -1644,10 +1644,14 @@ bot.command('ping', ctx => ctx.reply('pong'));
 
 bot.command('refresh', async ctx => {
     const chatId = ctx.chat.id;
+    const userId = ctx.from!.id;
+    resetUser(userId);
     onboardSessions.delete(chatId);
     wizardSessions.delete(chatId);
     connectSessions.delete(chatId);
+    adminSessions.delete(chatId);
     upgradeSessionsMap.delete(chatId);
+    userMartingaleSettings.delete(userId);
     await startOnboarding(ctx);
 });
 
