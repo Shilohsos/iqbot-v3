@@ -16,6 +16,7 @@ import {
     getFunnelStats, getConfig, setConfig,
     getAuditReport, maskUserId,
     calculatePairWinRates, selectTopPicks, type PairWinRate,
+    setSession, getSession, deleteSession, cleanStaleSessions,
 } from './db.js';
 import { analyzePair, type AnalysisResult } from './analysis.js';
 import {
@@ -67,6 +68,21 @@ function getSessionStats(uid: number) {
     return sessionStats.get(uid)!;
 }
 
+function makeSessionMap<T>(prefix: string) {
+    const cache = new Map<number, T>();
+    return {
+        get: (k: number): T | undefined => {
+            if (cache.has(k)) return cache.get(k);
+            const fromDb = getSession<T>(`session:${prefix}:${k}`);
+            if (fromDb !== undefined) cache.set(k, fromDb);
+            return fromDb;
+        },
+        set: (k: number, v: T): void => { cache.set(k, v); setSession(`session:${prefix}:${k}`, v); },
+        delete: (k: number): void => { cache.delete(k); deleteSession(`session:${prefix}:${k}`); },
+        has: (k: number): boolean => cache.has(k) || getSession<T>(`session:${prefix}:${k}`) !== undefined,
+    };
+}
+
 type WizardStep = 'mode' | 'amount' | 'timeframe' | 'pair' | 'custom_amount';
 interface WizardState {
     step: WizardStep;
@@ -75,7 +91,7 @@ interface WizardState {
     timeframe?: number;
     lastImageMsgId?: number;
 }
-const wizardSessions = new Map<number, WizardState>();
+const wizardSessions = makeSessionMap<WizardState>('wizard');
 
 type OnboardStep = 'user_id' | 'create_user_id' | 'connect_email' | 'connect_password';
 interface OnboardState {
@@ -85,11 +101,11 @@ interface OnboardState {
     email?: string;
     loginFailCount?: number;
 }
-const onboardSessions = new Map<number, OnboardState>();
+const onboardSessions = makeSessionMap<OnboardState>('onboard');
 
 type ConnectStep = 'email' | 'password';
 interface ConnectState { step: ConnectStep; email?: string; }
-const connectSessions = new Map<number, ConnectState>();
+const connectSessions = makeSessionMap<ConnectState>('connect');
 
 type AdminStep =
     | 'find_users'
@@ -118,10 +134,15 @@ interface AdminSessionState {
     editTraderTelegramId?: number;
     memberMessageUserId?: number;
 }
-const adminSessions = new Map<number, AdminSessionState>();
+const adminSessions = makeSessionMap<AdminSessionState>('admin');
 
 // Users waiting to enter an upgrade token
-const upgradeSessions = new Set<number>();
+const upgradeSessionsMap = makeSessionMap<true>('upgrade');
+const upgradeSessions = {
+    has: (k: number) => upgradeSessionsMap.has(k),
+    add: (k: number) => upgradeSessionsMap.set(k, true),
+    delete: (k: number) => upgradeSessionsMap.delete(k),
+};
 
 interface BroadcastButton {
     text: string;
@@ -157,7 +178,7 @@ let nextScheduledId = 1;
 // userId → number of active martingale trades in flight
 const activeTradeSessions = new Map<number, number>();
 // per-user martingale config (Pro users can adjust)
-const userMartingaleSettings = new Map<number, { enabled: boolean; maxRounds: number }>();
+const userMartingaleSettings = makeSessionMap<{ enabled: boolean; maxRounds: number }>('mg');
 
 // Top picks cache — refreshed every 2 hours
 const PICKS_REFRESH_MS = 2 * 60 * 60 * 1000;
@@ -2060,6 +2081,7 @@ bot.catch((err: unknown, ctx) => {
     }
 });
 
+cleanStaleSessions();
 bot.launch({ dropPendingUpdates: true });
 console.log('[iqbot-v3] running');
 

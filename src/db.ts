@@ -684,3 +684,42 @@ export function getAuditReport(): AuditReport {
         topPerformerProfit: topRow?.total_pnl,
     };
 }
+
+// ─── Session persistence ──────────────────────────────────────────────────────
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS sessions (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  )
+`);
+
+const stmtSetSession = db.prepare(
+    `INSERT INTO sessions (key, value, updated_at)
+     VALUES (?, ?, datetime('now'))
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
+);
+const stmtGetSession = db.prepare(`SELECT value FROM sessions WHERE key = ?`);
+const stmtDelSession = db.prepare(`DELETE FROM sessions WHERE key = ?`);
+const stmtCleanSessions = db.prepare(
+    `DELETE FROM sessions WHERE updated_at < datetime('now', '-7 days')`
+);
+
+export function setSession(key: string, value: unknown): void {
+    stmtSetSession.run(key, JSON.stringify(value));
+}
+
+export function getSession<T>(key: string): T | undefined {
+    const row = stmtGetSession.get(key) as { value: string } | undefined;
+    if (!row) return undefined;
+    try { return JSON.parse(row.value) as T; } catch { return undefined; }
+}
+
+export function deleteSession(key: string): void {
+    stmtDelSession.run(key);
+}
+
+export function cleanStaleSessions(): void {
+    stmtCleanSessions.run();
+}
