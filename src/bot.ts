@@ -496,7 +496,7 @@ async function runMartingale(
     };
 
     for (let round = 1; round <= effectiveRounds; round++) {
-        logLines.push(`⚡ Trade 1|Step ${round}|🟡 $${currentAmount.toFixed(2)} → in flight`);
+        logLines.push(`⚡ Trade 1|🟡 $${currentAmount.toFixed(2)} → in flight`);
         await syncLog();
 
         const roundTrade: TradeRequest = { pair, direction, amount: currentAmount, martingaleRunId: runId, timeframeSec, balanceType, telegramId: ctx.from!.id };
@@ -512,7 +512,7 @@ async function runMartingale(
             ]);
         } catch (err: unknown) {
             const errMsg = err instanceof Error ? err.message : 'Unknown error';
-            logLines[logLines.length - 1] = `⚡ Trade 1|Step ${round}|⚠️ $${currentAmount.toFixed(2)} → error`;
+            logLines[logLines.length - 1] = `⚡ Trade 1|⚠️ $${currentAmount.toFixed(2)} → error`;
             await syncLog();
             
             // FRIENDLY BALANCE ERROR
@@ -543,13 +543,13 @@ async function runMartingale(
 
         const lastIdx = logLines.length - 1;
         if (result.status === 'WIN') {
-            logLines[lastIdx] = `⚡ Trade 1|Step ${round}|🟢 $${currentAmount.toFixed(2)} → +$${result.pnl.toFixed(2)}`;
+            logLines[lastIdx] = `⚡ Trade 1|🟢 $${currentAmount.toFixed(2)} → +$${result.pnl.toFixed(2)}`;
         } else if (result.status === 'LOSS') {
-            logLines[lastIdx] = `⚡ Trade 1|Step ${round}|🔴 $${currentAmount.toFixed(2)} → -$${currentAmount.toFixed(2)}`;
+            logLines[lastIdx] = `⚡ Trade 1|🔴 $${currentAmount.toFixed(2)} → -$${currentAmount.toFixed(2)}`;
         } else if (result.status === 'TIE') {
-            logLines[lastIdx] = `⚡ Trade 1|Step ${round}|⚪ $${currentAmount.toFixed(2)} → $0.00`;
+            logLines[lastIdx] = `⚡ Trade 1|⚪ $${currentAmount.toFixed(2)} → $0.00`;
         } else {
-            logLines[lastIdx] = `⚡ Trade 1|Step ${round}|⚠️ $${currentAmount.toFixed(2)} → ${result.error ?? result.status}`;
+            logLines[lastIdx] = `⚡ Trade 1|⚠️ $${currentAmount.toFixed(2)} → ${result.error ?? result.status}`;
         }
         await syncLog();
 
@@ -568,7 +568,7 @@ async function runMartingale(
             await sendRoundImage(round === 1 ? 'L11a.png' : 'L11b.png');
             const winReply = await ctx.reply(
                 `🏆 +$${result.pnl.toFixed(2)} added to your balance.\n\n` +
-                (round > 1 ? `Recovery complete on step ${round}/${effectiveRounds}.\n\n` : '') +
+                (round > 1 ? `Recovery complete.\n\n` : '') +
                 `💸 You just made +$${result.pnl.toFixed(2)}`,
                 { reply_markup: { inline_keyboard: [[{ text: '🔄 New Opportunity', callback_data: 'ui:trade' }]] } }
             );
@@ -743,6 +743,7 @@ bot.action(/^tf:(\d+)$/, async ctx => {
     const chatId = ctx.chat!.id;
     const state = wizardSessions.get(chatId);
     if (!state || state.step !== 'timeframe') { await ctx.answerCbQuery('Session expired — start over.'); return; }
+    await ctx.answerCbQuery(); // stop spinner immediately before slow image upload
     state.timeframe = parseInt(ctx.match[1], 10);
     state.step = 'pair';
     if (state.lastImageMsgId) {
@@ -756,7 +757,6 @@ bot.action(/^tf:(\d+)$/, async ctx => {
         '🏆 EUR/GBP OTC — Win rate ≈83%\n✅ EUR/USD OTC — Win rate ≈78%\n✅ AUD/USD OTC — Win rate ≈70%\n✅ USD/CAD OTC — Win rate ≈66%\n\n🚀 Make your choice below 👇',
         { reply_markup: pairKeyboard(0, tfTier) }
     ); } catch {}
-    await ctx.answerCbQuery();
 });
 
 // ─── Trade wizard — pair pagination ──────────────────────────────────────────
