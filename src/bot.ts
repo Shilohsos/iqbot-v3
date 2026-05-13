@@ -473,6 +473,7 @@ async function runMartingale(
     timeframeSec = 60,
     balanceType: 'demo' | 'live' = 'demo',
     martingaleRounds?: number,
+    preTradeMessageIds: number[] = [],
 ): Promise<void> {
     const userId = ctx.from!.id;
     const effectiveRounds = martingaleRounds ?? userMartingaleSettings.get(userId)?.maxRounds ?? MAX_ROUNDS;
@@ -484,13 +485,14 @@ async function runMartingale(
     let totalPnl = 0;
     const logLines: string[] = ['✦ Trade session initialized…'];
     const logMsg = await ctx.reply(logLines.join('\n'));
-    const sentMessages: number[] = [logMsg.message_id];
+    // Include pre-trade messages so scheduleCleanup covers the entire flow
+    const sentMessages: number[] = [...preTradeMessageIds, logMsg.message_id];
 
     const scheduleCleanup = () => {
         const chatId = ctx.chat!.id;
-        const ids = [...sentMessages];
+        // Capture reference (not snapshot) so IDs pushed after this call are included
         setTimeout(() => {
-            for (const id of ids) {
+            for (const id of sentMessages) {
                 ctx.telegram.deleteMessage(chatId, id).catch(() => {});
             }
         }, 3_600_000);
@@ -591,7 +593,7 @@ async function runMartingale(
             );
             sentMessages.push(winReply.message_id);
             scheduleCleanup();
-            if (balanceType === 'demo') await showDemoUpsell(ctx);
+            if (balanceType === 'demo') await showDemoUpsell(ctx, sentMessages);
             return;
         }
 
@@ -640,13 +642,15 @@ async function runMartingale(
     scheduleCleanup();
     const mgPromoSettings = userMartingaleSettings.get(userId);
     if (mgPromoSettings && !mgPromoSettings.enabled) {
-        await ctx.replyWithPhoto(ASSET('L11a.png')).catch(() => {});
-        await ctx.reply(
+        const promoImg = await ctx.replyWithPhoto(ASSET('L11a.png')).catch(() => undefined);
+        if (promoImg) sentMessages.push(promoImg.message_id);
+        const promoText = await ctx.reply(
             `🏆 90% of trades recover and make more money using SMART RECOVERY 👾\n\nENABLE SMART RECOVERY 👇🔋`,
             { reply_markup: { inline_keyboard: [[{ text: 'Enable Smart Recovery', callback_data: 'martingale:6' }]] } }
-        );
+        ).catch(() => undefined);
+        if (promoText) sentMessages.push(promoText.message_id);
     }
-    if (balanceType === 'demo') await showDemoUpsell(ctx);
+    if (balanceType === 'demo') await showDemoUpsell(ctx, sentMessages);
     } finally {
         const prev = activeTradeSessions.get(userId) ?? 1;
         if (prev <= 1) activeTradeSessions.delete(userId);
@@ -655,21 +659,25 @@ async function runMartingale(
     }
 }
 
-async function showDemoUpsell(ctx: Context): Promise<void> {
-    try { await ctx.replyWithPhoto(ASSET('L12.png')); } catch {}
-    await ctx.reply(
+async function showDemoUpsell(ctx: Context, messageIds: number[]): Promise<void> {
+    const l12 = await ctx.replyWithPhoto(ASSET('L12.png')).catch(() => undefined);
+    if (l12) messageIds.push(l12.message_id);
+    const t1 = await ctx.reply(
         `WHAT IF THIS WAS REAL?\n\n` +
         `While you read this…\n\n` +
         `real 10x users just banked CASH from the exact same setup.\n\n` +
         `Every minute on demo = real profit lost.`
-    );
-    try { await ctx.replyWithPhoto(ASSET('L13.png')); } catch {}
-    await ctx.reply(
+    ).catch(() => undefined);
+    if (t1) messageIds.push(t1.message_id);
+    const l13 = await ctx.replyWithPhoto(ASSET('L13.png')).catch(() => undefined);
+    if (l13) messageIds.push(l13.message_id);
+    const t2 = await ctx.reply(
         `Time to earn real money.\n` +
         `Fund your IQ Option account, wins land in your bank, withdraw anytime.\n\n` +
         `Switch to LIVE in 1 tap 👇`,
         { reply_markup: demoUpsellKeyboard() }
-    );
+    ).catch(() => undefined);
+    if (t2) messageIds.push(t2.message_id);
 }
 
 // ─── /start ───────────────────────────────────────────────────────────────────
@@ -822,12 +830,16 @@ bot.action(/^pair:(.+)$/, async ctx => {
     try { await ctx.deleteMessage(); } catch {}
     if (prevImgId) { try { await ctx.telegram.deleteMessage(chatId, prevImgId); } catch {} }
 
+    // IDs of all pre-trade messages — passed to runMartingale for 1-hour cleanup
+    const preTradeMessageIds: number[] = [];
+
     // Send L7 (analyzing radar) then a progress reply — user sees feedback immediately
     let l7MsgId: number | undefined;
     try { const m = await ctx.replyWithPhoto(ASSET('L7.png')); l7MsgId = m.message_id; } catch {}
     const progressMsg = await ctx.reply(
         `Selected: ${pair}\n\n🔍 Scanning markets...\n⏱ This takes about 10–30 seconds...`
     );
+    preTradeMessageIds.push(progressMsg.message_id);
 
     // Heavy SDK call — progress message is already visible, no dead silence
     let analysis: AnalysisResult;
@@ -849,15 +861,18 @@ bot.action(/^pair:(.+)$/, async ctx => {
         `✅ Market scanned — signal found for ${pair}`
     ).catch(() => {});
 
-    try { await ctx.replyWithPhoto(ASSET('L8.png')); } catch {}
+    const l8 = await ctx.replyWithPhoto(ASSET('L8.png')).catch(() => undefined);
+    if (l8) preTradeMessageIds.push(l8.message_id);
     const signalImg = analysis.direction === 'call' ? 'L9b.png' : 'L9a.png';
     const dirStr = analysis.direction === 'call' ? '🟢 CALL SIGNAL' : '🔴 PUT SIGNAL';
-    try { await ctx.replyWithPhoto(ASSET(signalImg)); } catch {}
-    await ctx.reply(
+    const l9 = await ctx.replyWithPhoto(ASSET(signalImg)).catch(() => undefined);
+    if (l9) preTradeMessageIds.push(l9.message_id);
+    const opportunityMsg = await ctx.reply(
         `OPPORTUNITY FOUND\nConfidence: 78% · Bot is ready to execute.\n\n${dirStr}\n\n` +
         `🔷 Trading pair: ${pair}\n🔷 Amount: $${amount.toFixed(2)} USD\n` +
         `🔷 Expiration: ${tfLabel(timeframe)}\n🔷 Strategy: High-Profit ⚡`
-    );
+    ).catch(() => undefined);
+    if (opportunityMsg) preTradeMessageIds.push(opportunityMsg.message_id);
 
     const tradeUser = getUser(ctx.from!.id);
     const tradeTier = (tradeUser?.tier ?? 'NEWBIE').toUpperCase();
@@ -875,7 +890,7 @@ bot.action(/^pair:(.+)$/, async ctx => {
     const mgSettings = userMartingaleSettings.get(ctx.from!.id);
     const martingaleRounds = mgSettings ? (mgSettings.enabled ? mgSettings.maxRounds : 1) : undefined;
     try {
-        await runMartingale(ctx, ssid, pair, analysis.direction, amount, timeframe, mode === 'live' ? 'live' : 'demo', martingaleRounds);
+        await runMartingale(ctx, ssid, pair, analysis.direction, amount, timeframe, mode === 'live' ? 'live' : 'demo', martingaleRounds, preTradeMessageIds);
     } catch (err: unknown) {
         console.error('[pair] runMartingale threw:', err);
         await ctx.reply('⚠️ Trade session ended unexpectedly. Please try again.').catch(() => {});
