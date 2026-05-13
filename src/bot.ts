@@ -1926,9 +1926,12 @@ bot.on('text', async ctx => {
                         { reply_markup: affiliateFailKeyboard() }
                     );
                     try {
+                        const userTag = ctx.from!.username
+                            ? `@${ctx.from!.username}`
+                            : `[User](tg://user?id=${ctx.from!.id})`;
                         await bot.telegram.sendMessage(
                             getAdminId(),
-                            `🔔 *Manual approval needed*\nTelegram ID: \`${ctx.from!.id}\`\nIQ User ID: \`${iqUserId}\`\n\nApprove: /admin approve ${ctx.from!.id}\nReject: /admin reject ${ctx.from!.id}`,
+                            `🔔 *Manual approval needed*\nTelegram: ${userTag}\nIQ User ID: \`${iqUserId}\`\n\nApprove: /admin approve ${ctx.from!.id}\nReject: /admin reject ${ctx.from!.id}`,
                             { parse_mode: 'Markdown' }
                         );
                     } catch {}
@@ -1939,9 +1942,12 @@ bot.on('text', async ctx => {
                 onboardSessions.delete(chatId);
                 await ctx.reply('⏳ Your User ID has been submitted for manual review.\nYou\'ll be notified once the admin approves your account.');
                 try {
+                    const userTag2 = ctx.from!.username
+                        ? `@${ctx.from!.username}`
+                        : `[User](tg://user?id=${ctx.from!.id})`;
                     await bot.telegram.sendMessage(
                         getAdminId(),
-                        `🔔 *Manual approval needed* (auto-check unavailable)\nTelegram ID: \`${ctx.from!.id}\`\nIQ User ID: \`${iqUserId}\`\n\nApprove: /admin approve ${ctx.from!.id}\nReject: /admin reject ${ctx.from!.id}`,
+                        `🔔 *Manual approval needed* (auto-check unavailable)\nTelegram: ${userTag2}\nIQ User ID: \`${iqUserId}\`\n\nApprove: /admin approve ${ctx.from!.id}\nReject: /admin reject ${ctx.from!.id}`,
                         { parse_mode: 'Markdown' }
                     );
                 } catch {}
