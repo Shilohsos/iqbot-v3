@@ -42,3 +42,22 @@ Key changes:
 **Additional cleanup (if any of these now go unused):**
 - In `src/bot.ts`: remove `tierKeyboard` from the import at line 23
 - In `src/menu.ts`: `tierKeyboard()` can remain (it's used by the admin panel for manual tier assignment elsewhere, check first)
+
+---
+
+## Bonus fix — Admin buttons broken by usernames with underscores
+
+**Problem:** When the admin clicks "Today" or "Activations", the bot replies with Markdown-formatted text that includes `@usernames`. If a username contains `_` (e.g. `@morgan_wellan0`), Telegram's Markdown parser treats `_` as italic formatting and crashes with "Can't find end of the entity" error. The button shows a spinner then fails silently.
+
+**Fix in `src/bot.ts`:**
+
+In the `admin:today` handler (line 1222) and `admin:activations` handler (line 1238/1248), escape underscores in usernames before including them in the message:
+
+```typescript
+const safeUsername = t.username?.replace(/_/g, '\\_');
+const name = safeUsername ? `@${safeUsername}` : `ID: ${maskUserId(t.telegram_id)}`;
+```
+
+Apply this pattern wherever usernames are interpolated into Markdown-formatted strings.
+
+**Alternative:** Remove `parse_mode: 'Markdown'` from these admin messages entirely — they work fine as plain text without bold formatting.
