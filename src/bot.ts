@@ -1248,7 +1248,17 @@ bot.action(/^activation:approve:(\d+)$/, async ctx => {
     const uid = parseInt(ctx.match[1], 10);
     approveUser(uid);
     try { await ctx.editMessageText(`✅ User ${maskUserId(uid)} approved.`); } catch {}
-    try { await bot.telegram.sendMessage(uid, '✅ *Your account has been approved!* You can now start trading.', { parse_mode: 'Markdown' }); } catch {}
+    try {
+        await bot.telegram.sendMessage(uid,
+            '✅ *Your account has been approved!*\n\n' +
+            'Now link your IQ Option account to start trading:\n\n' +
+            '1. Use /connect\n' +
+            '2. Enter your IQ Option email\n' +
+            '3. Enter your IQ Option password (auto-deleted after 10s)\n\n' +
+            'Your credentials are safe — we use the official IQ Option API.',
+            { parse_mode: 'Markdown' }
+        );
+    } catch {}
 });
 
 bot.action(/^activation:reject:(\d+)$/, async ctx => {

@@ -1,0 +1,3364 @@
+(node:1637508) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+[unhandledRejection] TelegramError: 404: Not Found
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async Telegraf.launch (/root/iqbot-v3/node_modules/telegraf/lib/telegraf.js:188:78) {
+  response: { ok: false, error_code: 404, description: 'Not Found' },
+  on: { method: 'getMe', payload: {} }
+}
+(node:1637508) PromiseRejectionHandledWarning: Promise rejection was handled asynchronously (rejection id: 3)
+(node:1637549) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+[unhandledRejection] TelegramError: 404: Not Found
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async Telegraf.launch (/root/iqbot-v3/node_modules/telegraf/lib/telegraf.js:188:78) {
+  response: { ok: false, error_code: 404, description: 'Not Found' },
+  on: { method: 'getMe', payload: {} }
+}
+(node:1637549) PromiseRejectionHandledWarning: Promise rejection was handled asynchronously (rejection id: 3)
+(node:1637607) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+[unhandledRejection] TelegramError: 404: Not Found
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async Telegraf.launch (/root/iqbot-v3/node_modules/telegraf/lib/telegraf.js:188:78) {
+  response: { ok: false, error_code: 404, description: 'Not Found' },
+  on: { method: 'getMe', payload: {} }
+}
+(node:1637607) PromiseRejectionHandledWarning: Promise rejection was handled asynchronously (rejection id: 3)
+(node:1637641) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+[unhandledRejection] TelegramError: 404: Not Found
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async Telegraf.launch (/root/iqbot-v3/node_modules/telegraf/lib/telegraf.js:188:78) {
+  response: { ok: false, error_code: 404, description: 'Not Found' },
+  on: { method: 'getMe', payload: {} }
+}
+(node:1637641) PromiseRejectionHandledWarning: Promise rejection was handled asynchronously (rejection id: 3)
+(node:1637694) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+[unhandledRejection] TelegramError: 404: Not Found
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async Telegraf.launch (/root/iqbot-v3/node_modules/telegraf/lib/telegraf.js:188:78) {
+  response: { ok: false, error_code: 404, description: 'Not Found' },
+  on: { method: 'getMe', payload: {} }
+}
+(node:1637694) PromiseRejectionHandledWarning: Promise rejection was handled asynchronously (rejection id: 3)
+(node:1637744) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+[unhandledRejection] TelegramError: 404: Not Found
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async Telegraf.launch (/root/iqbot-v3/node_modules/telegraf/lib/telegraf.js:188:78) {
+  response: { ok: false, error_code: 404, description: 'Not Found' },
+  on: { method: 'getMe', payload: {} }
+}
+(node:1637744) PromiseRejectionHandledWarning: Promise rejection was handled asynchronously (rejection id: 3)
+(node:1637773) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+[unhandledRejection] TelegramError: 404: Not Found
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async Telegraf.launch (/root/iqbot-v3/node_modules/telegraf/lib/telegraf.js:188:78) {
+  response: { ok: false, error_code: 404, description: 'Not Found' },
+  on: { method: 'getMe', payload: {} }
+}
+(node:1637773) PromiseRejectionHandledWarning: Promise rejection was handled asynchronously (rejection id: 3)
+(node:1637816) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+[unhandledRejection] TelegramError: 404: Not Found
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async Telegraf.launch (/root/iqbot-v3/node_modules/telegraf/lib/telegraf.js:188:78) {
+  response: { ok: false, error_code: 404, description: 'Not Found' },
+  on: { method: 'getMe', payload: {} }
+}
+(node:1637816) PromiseRejectionHandledWarning: Promise rejection was handled asynchronously (rejection id: 3)
+(node:1637846) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+[unhandledRejection] TelegramError: 404: Not Found
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async Telegraf.launch (/root/iqbot-v3/node_modules/telegraf/lib/telegraf.js:188:78) {
+  response: { ok: false, error_code: 404, description: 'Not Found' },
+  on: { method: 'getMe', payload: {} }
+}
+(node:1637846) PromiseRejectionHandledWarning: Promise rejection was handled asynchronously (rejection id: 3)
+(node:1637900) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+[unhandledRejection] TelegramError: 404: Not Found
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async Telegraf.launch (/root/iqbot-v3/node_modules/telegraf/lib/telegraf.js:188:78) {
+  response: { ok: false, error_code: 404, description: 'Not Found' },
+  on: { method: 'getMe', payload: {} }
+}
+(node:1637900) PromiseRejectionHandledWarning: Promise rejection was handled asynchronously (rejection id: 3)
+(node:1637928) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+[unhandledRejection] TelegramError: 404: Not Found
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async Telegraf.launch (/root/iqbot-v3/node_modules/telegraf/lib/telegraf.js:188:78) {
+  response: { ok: false, error_code: 404, description: 'Not Found' },
+  on: { method: 'getMe', payload: {} }
+}
+(node:1637928) PromiseRejectionHandledWarning: Promise rejection was handled asynchronously (rejection id: 3)
+(node:1637976) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+[unhandledRejection] TelegramError: 404: Not Found
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async Telegraf.launch (/root/iqbot-v3/node_modules/telegraf/lib/telegraf.js:188:78) {
+  response: { ok: false, error_code: 404, description: 'Not Found' },
+  on: { method: 'getMe', payload: {} }
+}
+(node:1637976) PromiseRejectionHandledWarning: Promise rejection was handled asynchronously (rejection id: 3)
+(node:1638011) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+[unhandledRejection] TelegramError: 404: Not Found
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async Telegraf.launch (/root/iqbot-v3/node_modules/telegraf/lib/telegraf.js:188:78) {
+  response: { ok: false, error_code: 404, description: 'Not Found' },
+  on: { method: 'getMe', payload: {} }
+}
+(node:1638011) PromiseRejectionHandledWarning: Promise rejection was handled asynchronously (rejection id: 3)
+(node:1638063) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+[unhandledRejection] TelegramError: 404: Not Found
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async Telegraf.launch (/root/iqbot-v3/node_modules/telegraf/lib/telegraf.js:188:78) {
+  response: { ok: false, error_code: 404, description: 'Not Found' },
+  on: { method: 'getMe', payload: {} }
+}
+(node:1638063) PromiseRejectionHandledWarning: Promise rejection was handled asynchronously (rejection id: 3)
+(node:1638112) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+[unhandledRejection] TelegramError: 404: Not Found
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async Telegraf.launch (/root/iqbot-v3/node_modules/telegraf/lib/telegraf.js:188:78) {
+  response: { ok: false, error_code: 404, description: 'Not Found' },
+  on: { method: 'getMe', payload: {} }
+}
+(node:1638112) PromiseRejectionHandledWarning: Promise rejection was handled asynchronously (rejection id: 3)
+(node:1638144) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+[unhandledRejection] TelegramError: 404: Not Found
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async Telegraf.launch (/root/iqbot-v3/node_modules/telegraf/lib/telegraf.js:188:78) {
+  response: { ok: false, error_code: 404, description: 'Not Found' },
+  on: { method: 'getMe', payload: {} }
+}
+(node:1638144) PromiseRejectionHandledWarning: Promise rejection was handled asynchronously (rejection id: 3)
+(node:1638189) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+[unhandledRejection] TelegramError: 404: Not Found
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async Telegraf.launch (/root/iqbot-v3/node_modules/telegraf/lib/telegraf.js:188:78) {
+  response: { ok: false, error_code: 404, description: 'Not Found' },
+  on: { method: 'getMe', payload: {} }
+}
+(node:1638189) PromiseRejectionHandledWarning: Promise rejection was handled asynchronously (rejection id: 3)
+(node:1638218) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+[unhandledRejection] TelegramError: 404: Not Found
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async Telegraf.launch (/root/iqbot-v3/node_modules/telegraf/lib/telegraf.js:188:78) {
+  response: { ok: false, error_code: 404, description: 'Not Found' },
+  on: { method: 'getMe', payload: {} }
+}
+(node:1638218) PromiseRejectionHandledWarning: Promise rejection was handled asynchronously (rejection id: 3)
+(node:1638262) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+[unhandledRejection] TelegramError: 404: Not Found
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async Telegraf.launch (/root/iqbot-v3/node_modules/telegraf/lib/telegraf.js:188:78) {
+  response: { ok: false, error_code: 404, description: 'Not Found' },
+  on: { method: 'getMe', payload: {} }
+}
+(node:1638262) PromiseRejectionHandledWarning: Promise rejection was handled asynchronously (rejection id: 3)
+(node:1638295) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+[unhandledRejection] TelegramError: 404: Not Found
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async Telegraf.launch (/root/iqbot-v3/node_modules/telegraf/lib/telegraf.js:188:78) {
+  response: { ok: false, error_code: 404, description: 'Not Found' },
+  on: { method: 'getMe', payload: {} }
+}
+(node:1638295) PromiseRejectionHandledWarning: Promise rejection was handled asynchronously (rejection id: 3)
+(node:1638336) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+[unhandledRejection] TelegramError: 404: Not Found
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async Telegraf.launch (/root/iqbot-v3/node_modules/telegraf/lib/telegraf.js:188:78) {
+  response: { ok: false, error_code: 404, description: 'Not Found' },
+  on: { method: 'getMe', payload: {} }
+}
+(node:1638336) PromiseRejectionHandledWarning: Promise rejection was handled asynchronously (rejection id: 3)
+(node:1638367) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+[unhandledRejection] TelegramError: 404: Not Found
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async Telegraf.launch (/root/iqbot-v3/node_modules/telegraf/lib/telegraf.js:188:78) {
+  response: { ok: false, error_code: 404, description: 'Not Found' },
+  on: { method: 'getMe', payload: {} }
+}
+(node:1638367) PromiseRejectionHandledWarning: Promise rejection was handled asynchronously (rejection id: 3)
+(node:1638409) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+[unhandledRejection] TelegramError: 404: Not Found
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async Telegraf.launch (/root/iqbot-v3/node_modules/telegraf/lib/telegraf.js:188:78) {
+  response: { ok: false, error_code: 404, description: 'Not Found' },
+  on: { method: 'getMe', payload: {} }
+}
+(node:1638409) PromiseRejectionHandledWarning: Promise rejection was handled asynchronously (rejection id: 3)
+(node:1638437) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+[unhandledRejection] TelegramError: 404: Not Found
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async Telegraf.launch (/root/iqbot-v3/node_modules/telegraf/lib/telegraf.js:188:78) {
+  response: { ok: false, error_code: 404, description: 'Not Found' },
+  on: { method: 'getMe', payload: {} }
+}
+(node:1638437) PromiseRejectionHandledWarning: Promise rejection was handled asynchronously (rejection id: 3)
+(node:1638471) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+[unhandledRejection] TelegramError: 404: Not Found
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async Telegraf.launch (/root/iqbot-v3/node_modules/telegraf/lib/telegraf.js:188:78) {
+  response: { ok: false, error_code: 404, description: 'Not Found' },
+  on: { method: 'getMe', payload: {} }
+}
+(node:1638471) PromiseRejectionHandledWarning: Promise rejection was handled asynchronously (rejection id: 3)
+(node:1638513) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+[unhandledRejection] TelegramError: 404: Not Found
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async Telegraf.launch (/root/iqbot-v3/node_modules/telegraf/lib/telegraf.js:188:78) {
+  response: { ok: false, error_code: 404, description: 'Not Found' },
+  on: { method: 'getMe', payload: {} }
+}
+(node:1638513) PromiseRejectionHandledWarning: Promise rejection was handled asynchronously (rejection id: 3)
+(node:1638548) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+[unhandledRejection] TelegramError: 404: Not Found
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async Telegraf.launch (/root/iqbot-v3/node_modules/telegraf/lib/telegraf.js:188:78) {
+  response: { ok: false, error_code: 404, description: 'Not Found' },
+  on: { method: 'getMe', payload: {} }
+}
+(node:1638548) PromiseRejectionHandledWarning: Promise rejection was handled asynchronously (rejection id: 3)
+(node:1638594) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+[unhandledRejection] TelegramError: 404: Not Found
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async Telegraf.launch (/root/iqbot-v3/node_modules/telegraf/lib/telegraf.js:188:78) {
+  response: { ok: false, error_code: 404, description: 'Not Found' },
+  on: { method: 'getMe', payload: {} }
+}
+(node:1638594) PromiseRejectionHandledWarning: Promise rejection was handled asynchronously (rejection id: 3)
+(node:1638642) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+[unhandledRejection] TelegramError: 404: Not Found
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async Telegraf.launch (/root/iqbot-v3/node_modules/telegraf/lib/telegraf.js:188:78) {
+  response: { ok: false, error_code: 404, description: 'Not Found' },
+  on: { method: 'getMe', payload: {} }
+}
+(node:1638642) PromiseRejectionHandledWarning: Promise rejection was handled asynchronously (rejection id: 3)
+(node:1638691) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+[unhandledRejection] TelegramError: 404: Not Found
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async Telegraf.launch (/root/iqbot-v3/node_modules/telegraf/lib/telegraf.js:188:78) {
+  response: { ok: false, error_code: 404, description: 'Not Found' },
+  on: { method: 'getMe', payload: {} }
+}
+(node:1638691) PromiseRejectionHandledWarning: Promise rejection was handled asynchronously (rejection id: 3)
+(node:1638726) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+(node:1638803) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+(node:1638958) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+Unhandled error while processing {
+  update_id: 806288585,
+  callback_query: {
+    id: '773682667868361000',
+    from: {
+      id: 6622587977,
+      is_bot: false,
+      first_name: 'Shay',
+      username: 'Thatgirlshay237',
+      language_code: 'en'
+    },
+    message: {
+      message_id: 303,
+      from: [Object],
+      chat: [Object],
+      date: 1778515065,
+      edit_date: 1778515068,
+      text: '📈 Pick pair:',
+      entities: [Array],
+      reply_markup: [Object]
+    },
+    chat_instance: '3614327441116076708',
+    data: 'pair:EURUSD-OTC'
+  }
+}
+[unhandledRejection] TimeoutError: Promise timed out after 90000 milliseconds
+    at Timeout._onTimeout (/root/iqbot-v3/node_modules/p-timeout/index.js:39:64)
+    at listOnTimeout (node:internal/timers:585:17)
+    at process.processTimers (node:internal/timers:521:7)
+(node:1638958) PromiseRejectionHandledWarning: Promise rejection was handled asynchronously (rejection id: 3)
+(node:1758948) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+(node:1764335) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+(node:1769268) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+(node:1780319) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+Unhandled error while processing {
+  update_id: 806288619,
+  callback_query: {
+    id: '5314039084496707048',
+    from: {
+      id: 7679722084,
+      is_bot: false,
+      first_name: 'A',
+      last_name: 'Tega',
+      username: 'abijahtega',
+      language_code: 'en'
+    },
+    message: {
+      message_id: 370,
+      from: [Object],
+      chat: [Object],
+      date: 1778568482,
+      edit_date: 1778568493,
+      text: 'Top picks ready 🎯\n' +
+        '\n' +
+        'Highest chance to win right now:\n' +
+        '\n' +
+        '🏆 EUR/GBP OTC — Win rate ≈83%\n' +
+        '✅ EUR/USD OTC — Win rate ≈78%\n' +
+        '✅ AUD/USD OTC — Win rate ≈70%\n' +
+        '✅ USD/CAD OTC — Win rate ≈66%\n' +
+        '\n' +
+        '🚀 Make your choice below 👇',
+      reply_markup: [Object]
+    },
+    chat_instance: '-4542966310128918625',
+    data: 'pair:EURUSD-OTC'
+  }
+}
+[unhandledRejection] TimeoutError: Promise timed out after 90000 milliseconds
+    at Timeout._onTimeout (/root/iqbot-v3/node_modules/p-timeout/index.js:39:64)
+    at listOnTimeout (node:internal/timers:585:17)
+    at process.processTimers (node:internal/timers:521:7)
+(node:1785684) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+(node:1796241) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+(node:1799548) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+(node:1800764) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+(node:1809309) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+Unhandled error while processing {
+  update_id: 806288644,
+  callback_query: {
+    id: '773682667376172363',
+    from: {
+      id: 6622587977,
+      is_bot: false,
+      first_name: 'Shay',
+      username: 'Thatgirlshay237',
+      language_code: 'en'
+    },
+    message: {
+      message_id: 429,
+      from: [Object],
+      chat: [Object],
+      date: 1778580451,
+      edit_date: 1778580458,
+      text: 'Top picks ready 🎯\n' +
+        '\n' +
+        'Highest chance to win right now:\n' +
+        '\n' +
+        '🏆 EUR/GBP OTC — Win rate ≈83%\n' +
+        '✅ EUR/USD OTC — Win rate ≈78%\n' +
+        '✅ AUD/USD OTC — Win rate ≈70%\n' +
+        '✅ USD/CAD OTC — Win rate ≈66%\n' +
+        '\n' +
+        '🚀 Make your choice below 👇',
+      reply_markup: [Object]
+    },
+    chat_instance: '3614327441116076708',
+    data: 'pair:USDCAD-OTC'
+  }
+}
+[unhandledRejection] TimeoutError: Promise timed out after 90000 milliseconds
+    at Timeout._onTimeout (/root/iqbot-v3/node_modules/p-timeout/index.js:39:64)
+    at listOnTimeout (node:internal/timers:585:17)
+    at process.processTimers (node:internal/timers:521:7)
+(node:1811142) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+(node:1816873) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+Unhandled error while processing {
+  update_id: 806288664,
+  callback_query: {
+    id: '773682665541966203',
+    from: {
+      id: 6622587977,
+      is_bot: false,
+      first_name: 'Shay',
+      username: 'Thatgirlshay237',
+      language_code: 'en'
+    },
+    message: {
+      message_id: 467,
+      from: [Object],
+      chat: [Object],
+      date: 1778584102,
+      edit_date: 1778584112,
+      text: 'Top picks ready 🎯\n' +
+        '\n' +
+        'Highest chance to win right now:\n' +
+        '\n' +
+        '🏆 EUR/GBP OTC — Win rate ≈83%\n' +
+        '✅ EUR/USD OTC — Win rate ≈78%\n' +
+        '✅ AUD/USD OTC — Win rate ≈70%\n' +
+        '✅ USD/CAD OTC — Win rate ≈66%\n' +
+        '\n' +
+        '🚀 Make your choice below 👇',
+      reply_markup: [Object]
+    },
+    chat_instance: '3614327441116076708',
+    data: 'pair:GBPJPY-OTC'
+  }
+}
+[unhandledRejection] TimeoutError: Promise timed out after 90000 milliseconds
+    at Timeout._onTimeout (/root/iqbot-v3/node_modules/p-timeout/index.js:39:64)
+    at listOnTimeout (node:internal/timers:585:17)
+    at process.processTimers (node:internal/timers:521:7)
+(node:1817870) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+(node:1818973) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+(node:1819755) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+(node:1820812) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+(node:1822970) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+(node:1827175) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+(node:1827955) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+Unhandled error while processing {
+  update_id: 806288767,
+  callback_query: {
+    id: '773682668359088401',
+    from: {
+      id: 6622587977,
+      is_bot: false,
+      first_name: 'Shay',
+      username: 'Thatgirlshay237',
+      language_code: 'en'
+    },
+    message: {
+      message_id: 624,
+      from: [Object],
+      chat: [Object],
+      date: 1778591054,
+      edit_date: 1778591064,
+      text: 'Top picks ready 🎯\n' +
+        '\n' +
+        'Highest chance to win right now:\n' +
+        '\n' +
+        '🏆 EUR/GBP OTC — Win rate ≈83%\n' +
+        '✅ EUR/USD OTC — Win rate ≈78%\n' +
+        '✅ AUD/USD OTC — Win rate ≈70%\n' +
+        '✅ USD/CAD OTC — Win rate ≈66%\n' +
+        '\n' +
+        '🚀 Make your choice below 👇',
+      reply_markup: [Object]
+    },
+    chat_instance: '3614327441116076708',
+    data: 'pair:GBPUSD-OTC'
+  }
+}
+[unhandledRejection] TimeoutError: Promise timed out after 90000 milliseconds
+    at Timeout._onTimeout (/root/iqbot-v3/node_modules/p-timeout/index.js:39:64)
+    at listOnTimeout (node:internal/timers:585:17)
+    at process.processTimers (node:internal/timers:521:7)
+(node:1845136) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+Unhandled error while processing {
+  update_id: 806288795,
+  callback_query: {
+    id: '773682665830768379',
+    from: {
+      id: 6622587977,
+      is_bot: false,
+      first_name: 'Shay',
+      username: 'Thatgirlshay237',
+      language_code: 'en'
+    },
+    message: {
+      message_id: 671,
+      from: [Object],
+      chat: [Object],
+      date: 1778598643,
+      edit_date: 1778598650,
+      text: 'Top picks ready 🎯\n' +
+        '\n' +
+        'Highest chance to win right now:\n' +
+        '\n' +
+        '🏆 EUR/GBP OTC — Win rate ≈83%\n' +
+        '✅ EUR/USD OTC — Win rate ≈78%\n' +
+        '✅ AUD/USD OTC — Win rate ≈70%\n' +
+        '✅ USD/CAD OTC — Win rate ≈66%\n' +
+        '\n' +
+        '🚀 Make your choice below 👇',
+      reply_markup: [Object]
+    },
+    chat_instance: '3614327441116076708',
+    data: 'pair:AUDUSD-OTC'
+  }
+}
+[unhandledRejection] TimeoutError: Promise timed out after 90000 milliseconds
+    at Timeout._onTimeout (/root/iqbot-v3/node_modules/p-timeout/index.js:39:64)
+    at listOnTimeout (node:internal/timers:585:17)
+    at process.processTimers (node:internal/timers:521:7)
+(node:1851885) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+[bot.catch] callback_query: TimeoutError: Promise timed out after 90000 milliseconds
+    at Timeout._onTimeout (/root/iqbot-v3/node_modules/p-timeout/index.js:39:64)
+    at listOnTimeout (node:internal/timers:585:17)
+    at process.processTimers (node:internal/timers:521:7)
+(node:1853568) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+(node:1856926) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+[bot.catch] callback_query: TimeoutError: Promise timed out after 90000 milliseconds
+    at Timeout._onTimeout (/root/iqbot-v3/node_modules/p-timeout/index.js:39:64)
+    at listOnTimeout (node:internal/timers:585:17)
+    at process.processTimers (node:internal/timers:521:7)
+[bot.catch] callback_query: TimeoutError: Promise timed out after 90000 milliseconds
+    at Timeout._onTimeout (/root/iqbot-v3/node_modules/p-timeout/index.js:39:64)
+    at listOnTimeout (node:internal/timers:585:17)
+    at process.processTimers (node:internal/timers:521:7)
+(node:1863379) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+[bot.catch] callback_query: TimeoutError: Promise timed out after 90000 milliseconds
+    at Timeout._onTimeout (/root/iqbot-v3/node_modules/p-timeout/index.js:39:64)
+    at listOnTimeout (node:internal/timers:585:17)
+    at process.processTimers (node:internal/timers:521:7)
+(node:1870658) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+(node:1871701) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+[bot.catch] callback_query: TimeoutError: Promise timed out after 90000 milliseconds
+    at Timeout._onTimeout (/root/iqbot-v3/node_modules/p-timeout/index.js:39:64)
+    at listOnTimeout (node:internal/timers:585:17)
+    at process.processTimers (node:internal/timers:521:7)
+[bot.catch] callback_query: TimeoutError: Promise timed out after 90000 milliseconds
+    at Timeout._onTimeout (/root/iqbot-v3/node_modules/p-timeout/index.js:39:64)
+    at listOnTimeout (node:internal/timers:585:17)
+    at process.processTimers (node:internal/timers:521:7)
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:658:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: {
+      text: '✅ DEMO selected',
+      callback_query_id: '360173111000537651'
+    }
+  }
+}
+[bot.catch] callback_query: TimeoutError: Promise timed out after 90000 milliseconds
+    at Timeout._onTimeout (/root/iqbot-v3/node_modules/p-timeout/index.js:39:64)
+    at listOnTimeout (node:internal/timers:585:17)
+    at process.processTimers (node:internal/timers:521:7)
+[bot.catch] callback_query: TimeoutError: Promise timed out after 90000 milliseconds
+    at Timeout._onTimeout (/root/iqbot-v3/node_modules/p-timeout/index.js:39:64)
+    at listOnTimeout (node:internal/timers:585:17)
+    at process.processTimers (node:internal/timers:521:7)
+[bot.catch] callback_query: TimeoutError: Promise timed out after 90000 milliseconds
+    at Timeout._onTimeout (/root/iqbot-v3/node_modules/p-timeout/index.js:39:64)
+    at listOnTimeout (node:internal/timers:585:17)
+    at process.processTimers (node:internal/timers:521:7)
+[bot.catch] callback_query: TimeoutError: Promise timed out after 90000 milliseconds
+    at Timeout._onTimeout (/root/iqbot-v3/node_modules/p-timeout/index.js:39:64)
+    at listOnTimeout (node:internal/timers:585:17)
+    at process.processTimers (node:internal/timers:521:7)
+[bot.catch] callback_query: TimeoutError: Promise timed out after 90000 milliseconds
+    at Timeout._onTimeout (/root/iqbot-v3/node_modules/p-timeout/index.js:39:64)
+    at listOnTimeout (node:internal/timers:585:17)
+    at process.processTimers (node:internal/timers:521:7)
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:855:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '7719153560801836655' }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:855:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '7719153563746825602' }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:855:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '7719153562045608043' }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:855:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '7719153562259131944' }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:855:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '7719153562694112491' }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:855:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '7719153561646772218' }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:855:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '7719153564407250896' }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:855:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '7719153563930314100' }
+  }
+}
+(node:1893747) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:693:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '7719153561685214862' }
+  }
+}
+[bot.catch] callback_query: TimeoutError: Promise timed out after 90000 milliseconds
+    at Timeout._onTimeout (/root/iqbot-v3/node_modules/p-timeout/index.js:39:64)
+    at listOnTimeout (node:internal/timers:585:17)
+    at process.processTimers (node:internal/timers:521:7)
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:693:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '7719153562300673195' }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:705:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '7719153564748639307' }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:705:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '7719153564919525510' }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:705:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '7719153564126154727' }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:705:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '7719153564174564137' }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:779:44)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: {
+      text: 'Session expired — start over.',
+      callback_query_id: '7719153561678048339'
+    }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:705:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '7719153562840221631' }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:879:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '7719153560990021735' }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:779:44)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: {
+      text: 'Session expired — start over.',
+      callback_query_id: '7719153564854416721'
+    }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:879:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '7719153563820040506' }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:705:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '7719153562061746032' }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:879:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '7719153562514786714' }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:784:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '7719153563164054246' }
+  }
+}
+(node:1897394) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:693:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '7719153564314090189' }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:759:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '773682667130756890' }
+  }
+}
+[bot.catch] callback_query: TimeoutError: Promise timed out after 90000 milliseconds
+    at Timeout._onTimeout (/root/iqbot-v3/node_modules/p-timeout/index.js:39:64)
+    at listOnTimeout (node:internal/timers:585:17)
+    at process.processTimers (node:internal/timers:521:7)
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:880:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '7719153561425722725' }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:880:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '7719153564491252803' }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:880:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '7719153561361348048' }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:880:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '7719153560999941450' }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:880:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '7719153564400294905' }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:880:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '7719153563346012997' }
+  }
+}
+(node:1965993) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+[bot.catch] callback_query: TimeoutError: Promise timed out after 90000 milliseconds
+    at Timeout._onTimeout (/root/iqbot-v3/node_modules/p-timeout/index.js:39:64)
+    at listOnTimeout (node:internal/timers:585:17)
+    at process.processTimers (node:internal/timers:521:7)
+[bot.catch] callback_query: TimeoutError: Promise timed out after 90000 milliseconds
+    at Timeout._onTimeout (/root/iqbot-v3/node_modules/p-timeout/index.js:39:64)
+    at listOnTimeout (node:internal/timers:585:17)
+    at process.processTimers (node:internal/timers:521:7)
+[bot.catch] callback_query: TimeoutError: Promise timed out after 90000 milliseconds
+    at Timeout._onTimeout (/root/iqbot-v3/node_modules/p-timeout/index.js:39:64)
+    at listOnTimeout (node:internal/timers:585:17)
+    at process.processTimers (node:internal/timers:521:7)
+[bot.catch] callback_query: TimeoutError: Promise timed out after 90000 milliseconds
+    at Timeout._onTimeout (/root/iqbot-v3/node_modules/p-timeout/index.js:39:64)
+    at listOnTimeout (node:internal/timers:585:17)
+    at process.processTimers (node:internal/timers:521:7)
+[bot.catch] callback_query: TimeoutError: Promise timed out after 90000 milliseconds
+    at Timeout._onTimeout (/root/iqbot-v3/node_modules/p-timeout/index.js:39:64)
+    at listOnTimeout (node:internal/timers:585:17)
+    at process.processTimers (node:internal/timers:521:7)
+[bot.catch] callback_query: TimeoutError: Promise timed out after 90000 milliseconds
+    at Timeout._onTimeout (/root/iqbot-v3/node_modules/p-timeout/index.js:39:64)
+    at listOnTimeout (node:internal/timers:585:17)
+    at process.processTimers (node:internal/timers:521:7)
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:880:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '7719153563976821647' }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:880:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '7719153561841792765' }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:880:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '7719153562741788391' }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:880:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '7719153561560647194' }
+  }
+}
+[bot.catch] callback_query: TimeoutError: Promise timed out after 90000 milliseconds
+    at Timeout._onTimeout (/root/iqbot-v3/node_modules/p-timeout/index.js:39:64)
+    at listOnTimeout (node:internal/timers:585:17)
+    at process.processTimers (node:internal/timers:521:7)
+(node:1974361) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+[bot.catch] callback_query: TimeoutError: Promise timed out after 90000 milliseconds
+    at Timeout._onTimeout (/root/iqbot-v3/node_modules/p-timeout/index.js:39:64)
+    at listOnTimeout (node:internal/timers:585:17)
+    at process.processTimers (node:internal/timers:521:7)
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:902:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '7719153560784088720' }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:902:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '7719153561123172564' }
+  }
+}
+[bot.catch] callback_query: TimeoutError: Promise timed out after 90000 milliseconds
+    at Timeout._onTimeout (/root/iqbot-v3/node_modules/p-timeout/index.js:39:64)
+    at listOnTimeout (node:internal/timers:585:17)
+    at process.processTimers (node:internal/timers:521:7)
+[bot.catch] callback_query: TimeoutError: Promise timed out after 90000 milliseconds
+    at Timeout._onTimeout (/root/iqbot-v3/node_modules/p-timeout/index.js:39:64)
+    at listOnTimeout (node:internal/timers:585:17)
+    at process.processTimers (node:internal/timers:521:7)
+(node:1983498) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+(node:1986618) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+(node:1987983) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+(node:1992248) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+(node:1993620) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+(node:1997772) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+(node:2000412) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+(node:2002171) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+(node:2003120) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:718:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: {
+      text: '✅ DEMO selected',
+      callback_query_id: '8071543976408145017'
+    }
+  }
+}
+[bot.catch] callback_query: TimeoutError: Promise timed out after 90000 milliseconds
+    at Timeout._onTimeout (/root/iqbot-v3/node_modules/p-timeout/index.js:39:64)
+    at listOnTimeout (node:internal/timers:585:17)
+    at process.processTimers (node:internal/timers:521:7)
+[bot.catch] callback_query: TimeoutError: Promise timed out after 90000 milliseconds
+    at Timeout._onTimeout (/root/iqbot-v3/node_modules/p-timeout/index.js:39:64)
+    at listOnTimeout (node:internal/timers:585:17)
+    at process.processTimers (node:internal/timers:521:7)
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:1185:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '6939173535368472592' }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:1198:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '6939173536227293883' }
+  }
+}
+[connect fail] You entered the wrong credentials. Please ensure that your login/password is correct.
+[bot.catch] callback_query: TelegramError: 400: Bad Request: can't parse entities: Can't find end of the entity starting at byte offset 138
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:1238:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: "Bad Request: can't parse entities: Can't find end of the entity starting at byte offset 138"
+  },
+  on: {
+    method: 'sendMessage',
+    payload: {
+      chat_id: 1615652240,
+      message_thread_id: undefined,
+      parse_mode: 'Markdown',
+      reply_markup: [Object],
+      text: '🔌 *Activations*\n' +
+        '\n' +
+        '⏳ *Pending Manual Approval (2):*\n' +
+        '@bluwigosupport\n' +
+        '@Amara6442\n' +
+        '\n' +
+        '✅ *Recently Approved (24h):*\n' +
+        '@Samuelakinyemis\n' +
+        '@morgan_wellan0\n' +
+        '@Isaacdman\n' +
+        '@abijahtega\n' +
+        'ID: 66080XXXXX\n' +
+        'ID: 86737XXXXX\n' +
+        'ID: 87145XXXXX\n' +
+        '@arielletradess\n'
+    }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: can't parse entities: Can't find end of the entity starting at byte offset 138
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:1238:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: "Bad Request: can't parse entities: Can't find end of the entity starting at byte offset 138"
+  },
+  on: {
+    method: 'sendMessage',
+    payload: {
+      chat_id: 1615652240,
+      message_thread_id: undefined,
+      parse_mode: 'Markdown',
+      reply_markup: [Object],
+      text: '🔌 *Activations*\n' +
+        '\n' +
+        '⏳ *Pending Manual Approval (2):*\n' +
+        '@bluwigosupport\n' +
+        '@Amara6442\n' +
+        '\n' +
+        '✅ *Recently Approved (24h):*\n' +
+        '@Samuelakinyemis\n' +
+        '@morgan_wellan0\n' +
+        '@Isaacdman\n' +
+        '@abijahtega\n' +
+        'ID: 66080XXXXX\n' +
+        'ID: 86737XXXXX\n' +
+        'ID: 87145XXXXX\n' +
+        '@arielletradess\n'
+    }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: can't parse entities: Can't find end of the entity starting at byte offset 138
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:1238:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: "Bad Request: can't parse entities: Can't find end of the entity starting at byte offset 138"
+  },
+  on: {
+    method: 'sendMessage',
+    payload: {
+      chat_id: 1615652240,
+      message_thread_id: undefined,
+      parse_mode: 'Markdown',
+      reply_markup: [Object],
+      text: '🔌 *Activations*\n' +
+        '\n' +
+        '⏳ *Pending Manual Approval (2):*\n' +
+        '@bluwigosupport\n' +
+        '@Amara6442\n' +
+        '\n' +
+        '✅ *Recently Approved (24h):*\n' +
+        '@Samuelakinyemis\n' +
+        '@morgan_wellan0\n' +
+        '@Isaacdman\n' +
+        '@abijahtega\n' +
+        'ID: 66080XXXXX\n' +
+        'ID: 86737XXXXX\n' +
+        'ID: 87145XXXXX\n' +
+        '@arielletradess\n'
+    }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: can't parse entities: Can't find end of the entity starting at byte offset 138
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:1238:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: "Bad Request: can't parse entities: Can't find end of the entity starting at byte offset 138"
+  },
+  on: {
+    method: 'sendMessage',
+    payload: {
+      chat_id: 1615652240,
+      message_thread_id: undefined,
+      parse_mode: 'Markdown',
+      reply_markup: [Object],
+      text: '🔌 *Activations*\n' +
+        '\n' +
+        '⏳ *Pending Manual Approval (2):*\n' +
+        '@bluwigosupport\n' +
+        '@Amara6442\n' +
+        '\n' +
+        '✅ *Recently Approved (24h):*\n' +
+        '@Samuelakinyemis\n' +
+        '@morgan_wellan0\n' +
+        '@Isaacdman\n' +
+        '@abijahtega\n' +
+        'ID: 66080XXXXX\n' +
+        'ID: 86737XXXXX\n' +
+        'ID: 87145XXXXX\n' +
+        '@arielletradess\n'
+    }
+  }
+}
+[bot.catch] callback_query: TimeoutError: Promise timed out after 90000 milliseconds
+    at Timeout._onTimeout (/root/iqbot-v3/node_modules/p-timeout/index.js:39:64)
+    at listOnTimeout (node:internal/timers:585:17)
+    at process.processTimers (node:internal/timers:521:7)
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:933:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '4671235276541190737' }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:1215:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '6939173535519891025' }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:1198:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '6939173535418483247' }
+  }
+}
+[bot.catch] callback_query: TimeoutError: Promise timed out after 90000 milliseconds
+    at Timeout._onTimeout (/root/iqbot-v3/node_modules/p-timeout/index.js:39:64)
+    at listOnTimeout (node:internal/timers:585:17)
+    at process.processTimers (node:internal/timers:521:7)
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:946:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '8202418316960769962' }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:946:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '8202418316300163012' }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:724:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '7951593142440815646' }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:946:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '8202418318712352024' }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:933:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '8202418319823319719' }
+  }
+}
+(node:2013929) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+[bot.catch] callback_query: TelegramError: 400: Bad Request: can't parse entities: Can't find end of the entity starting at byte offset 138
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:1254:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: "Bad Request: can't parse entities: Can't find end of the entity starting at byte offset 138"
+  },
+  on: {
+    method: 'sendMessage',
+    payload: {
+      chat_id: 1615652240,
+      message_thread_id: undefined,
+      parse_mode: 'Markdown',
+      reply_markup: [Object],
+      text: '🔌 *Activations*\n' +
+        '\n' +
+        '⏳ *Pending Manual Approval (2):*\n' +
+        '@bluwigosupport\n' +
+        '@Amara6442\n' +
+        '\n' +
+        '✅ *Recently Approved (24h):*\n' +
+        '@Samuelakinyemis\n' +
+        '@morgan_wellan0\n' +
+        '@Isaacdman\n' +
+        '@abijahtega\n' +
+        'ID: 66080XXXXX\n' +
+        'ID: 86737XXXXX\n' +
+        'ID: 87145XXXXX\n' +
+        '@arielletradess\n'
+    }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: can't parse entities: Can't find end of the entity starting at byte offset 138
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:1254:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: "Bad Request: can't parse entities: Can't find end of the entity starting at byte offset 138"
+  },
+  on: {
+    method: 'sendMessage',
+    payload: {
+      chat_id: 1615652240,
+      message_thread_id: undefined,
+      parse_mode: 'Markdown',
+      reply_markup: [Object],
+      text: '🔌 *Activations*\n' +
+        '\n' +
+        '⏳ *Pending Manual Approval (2):*\n' +
+        '@bluwigosupport\n' +
+        '@Amara6442\n' +
+        '\n' +
+        '✅ *Recently Approved (24h):*\n' +
+        '@Samuelakinyemis\n' +
+        '@morgan_wellan0\n' +
+        '@Isaacdman\n' +
+        '@abijahtega\n' +
+        'ID: 66080XXXXX\n' +
+        'ID: 86737XXXXX\n' +
+        'ID: 87145XXXXX\n' +
+        '@arielletradess\n'
+    }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: can't parse entities: Can't find end of the entity starting at byte offset 190
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:1225:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: "Bad Request: can't parse entities: Can't find end of the entity starting at byte offset 190"
+  },
+  on: {
+    method: 'sendMessage',
+    payload: {
+      chat_id: 1615652240,
+      message_thread_id: undefined,
+      parse_mode: 'Markdown',
+      reply_markup: [Object],
+      text: "📊 *Today's Top Traders*\n" +
+        '\n' +
+        '1. @arielletradess — 56 trades\n' +
+        '2. @Sharaflowerr — 19 trades\n' +
+        '3. @Isaacdman — 8 trades\n' +
+        '4. @abijahtega — 5 trades\n' +
+        '5. @Samuelakinyemis — 3 trades\n' +
+        '6. @morgan_wellan0 — 2 trades\n'
+    }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: can't parse entities: Can't find end of the entity starting at byte offset 138
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:1254:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: "Bad Request: can't parse entities: Can't find end of the entity starting at byte offset 138"
+  },
+  on: {
+    method: 'sendMessage',
+    payload: {
+      chat_id: 1615652240,
+      message_thread_id: undefined,
+      parse_mode: 'Markdown',
+      reply_markup: [Object],
+      text: '🔌 *Activations*\n' +
+        '\n' +
+        '⏳ *Pending Manual Approval (2):*\n' +
+        '@bluwigosupport\n' +
+        '@Amara6442\n' +
+        '\n' +
+        '✅ *Recently Approved (24h):*\n' +
+        '@Samuelakinyemis\n' +
+        '@morgan_wellan0\n' +
+        '@Isaacdman\n' +
+        '@abijahtega\n' +
+        'ID: 66080XXXXX\n' +
+        'ID: 86737XXXXX\n' +
+        'ID: 87145XXXXX\n' +
+        '@arielletradess\n'
+    }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: can't parse entities: Can't find end of the entity starting at byte offset 190
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:1225:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: "Bad Request: can't parse entities: Can't find end of the entity starting at byte offset 190"
+  },
+  on: {
+    method: 'sendMessage',
+    payload: {
+      chat_id: 1615652240,
+      message_thread_id: undefined,
+      parse_mode: 'Markdown',
+      reply_markup: [Object],
+      text: "📊 *Today's Top Traders*\n" +
+        '\n' +
+        '1. @arielletradess — 56 trades\n' +
+        '2. @Sharaflowerr — 19 trades\n' +
+        '3. @Isaacdman — 8 trades\n' +
+        '4. @abijahtega — 5 trades\n' +
+        '5. @Samuelakinyemis — 3 trades\n' +
+        '6. @morgan_wellan0 — 2 trades\n'
+    }
+  }
+}
+[bot.catch] callback_query: TimeoutError: Promise timed out after 90000 milliseconds
+    at Timeout._onTimeout (/root/iqbot-v3/node_modules/p-timeout/index.js:39:64)
+    at listOnTimeout (node:internal/timers:585:17)
+    at process.processTimers (node:internal/timers:521:7)
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:949:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '8071543977142913117' }
+  }
+}
+(node:2015195) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+[bot.catch] callback_query: TelegramError: 400: Bad Request: can't parse entities: Can't find end of the entity starting at byte offset 157
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:1214:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: "Bad Request: can't parse entities: Can't find end of the entity starting at byte offset 157"
+  },
+  on: {
+    method: 'sendMessage',
+    payload: {
+      chat_id: 1615652240,
+      message_thread_id: undefined,
+      parse_mode: 'Markdown',
+      reply_markup: [Object],
+      text: "📊 *Today's Top Traders*\n" +
+        '\n' +
+        '1. @arielletradess — 56 trades\n' +
+        '2. @Sharaflowerr — 19 trades\n' +
+        '3. @Isaacdman — 9 trades\n' +
+        '4. @abijahtega — 5 trades\n' +
+        '5. @morgan_wellan0 — 4 trades\n' +
+        '6. @Samuelakinyemis — 3 trades\n'
+    }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: can't parse entities: Can't find end of the entity starting at byte offset 157
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:1214:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: "Bad Request: can't parse entities: Can't find end of the entity starting at byte offset 157"
+  },
+  on: {
+    method: 'sendMessage',
+    payload: {
+      chat_id: 1615652240,
+      message_thread_id: undefined,
+      parse_mode: 'Markdown',
+      reply_markup: [Object],
+      text: "📊 *Today's Top Traders*\n" +
+        '\n' +
+        '1. @arielletradess — 56 trades\n' +
+        '2. @Sharaflowerr — 19 trades\n' +
+        '3. @Isaacdman — 9 trades\n' +
+        '4. @abijahtega — 5 trades\n' +
+        '5. @morgan_wellan0 — 4 trades\n' +
+        '6. @Samuelakinyemis — 3 trades\n'
+    }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: can't parse entities: Can't find end of the entity starting at byte offset 157
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:1214:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: "Bad Request: can't parse entities: Can't find end of the entity starting at byte offset 157"
+  },
+  on: {
+    method: 'sendMessage',
+    payload: {
+      chat_id: 1615652240,
+      message_thread_id: undefined,
+      parse_mode: 'Markdown',
+      reply_markup: [Object],
+      text: "📊 *Today's Top Traders*\n" +
+        '\n' +
+        '1. @arielletradess — 56 trades\n' +
+        '2. @Sharaflowerr — 19 trades\n' +
+        '3. @Isaacdman — 9 trades\n' +
+        '4. @abijahtega — 5 trades\n' +
+        '5. @morgan_wellan0 — 4 trades\n' +
+        '6. @Samuelakinyemis — 3 trades\n'
+    }
+  }
+}
+(node:2015882) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:752:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '4671235279143492719' }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:938:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '5314039082867047938' }
+  }
+}
+[bot.catch] callback_query: TimeoutError: Promise timed out after 90000 milliseconds
+    at Timeout._onTimeout (/root/iqbot-v3/node_modules/p-timeout/index.js:39:64)
+    at listOnTimeout (node:internal/timers:585:17)
+    at process.processTimers (node:internal/timers:521:7)
+[bot.catch] callback_query: TimeoutError: Promise timed out after 90000 milliseconds
+    at Timeout._onTimeout (/root/iqbot-v3/node_modules/p-timeout/index.js:39:64)
+    at listOnTimeout (node:internal/timers:585:17)
+    at process.processTimers (node:internal/timers:521:7)
+[bot.catch] callback_query: TimeoutError: Promise timed out after 90000 milliseconds
+    at Timeout._onTimeout (/root/iqbot-v3/node_modules/p-timeout/index.js:39:64)
+    at listOnTimeout (node:internal/timers:585:17)
+    at process.processTimers (node:internal/timers:521:7)
+[bot.catch] callback_query: TimeoutError: Promise timed out after 90000 milliseconds
+    at Timeout._onTimeout (/root/iqbot-v3/node_modules/p-timeout/index.js:39:64)
+    at listOnTimeout (node:internal/timers:585:17)
+    at process.processTimers (node:internal/timers:521:7)
+[bot.catch] callback_query: TimeoutError: Promise timed out after 90000 milliseconds
+    at Timeout._onTimeout (/root/iqbot-v3/node_modules/p-timeout/index.js:39:64)
+    at listOnTimeout (node:internal/timers:585:17)
+    at process.processTimers (node:internal/timers:521:7)
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:776:46)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: {
+      text: 'Session expired — start over.',
+      callback_query_id: '3746241160986747247'
+    }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:796:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '3746241160770799023' }
+  }
+}
+[bot.catch] callback_query: TimeoutError: Promise timed out after 90000 milliseconds
+    at Timeout._onTimeout (/root/iqbot-v3/node_modules/p-timeout/index.js:39:64)
+    at listOnTimeout (node:internal/timers:585:17)
+    at process.processTimers (node:internal/timers:521:7)
+[bot.catch] callback_query: TimeoutError: Promise timed out after 90000 milliseconds
+    at Timeout._onTimeout (/root/iqbot-v3/node_modules/p-timeout/index.js:39:64)
+    at listOnTimeout (node:internal/timers:585:17)
+    at process.processTimers (node:internal/timers:521:7)
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:805:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '4671235278350267904' }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:805:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '4671235280421140775' }
+  }
+}
+[bot.catch] callback_query: TimeoutError: Promise timed out after 90000 milliseconds
+    at Timeout._onTimeout (/root/iqbot-v3/node_modules/p-timeout/index.js:39:64)
+    at listOnTimeout (node:internal/timers:585:17)
+    at process.processTimers (node:internal/timers:521:7)
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:929:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '3746241161389623197' }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:938:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '3746241160089330786' }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:929:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '3746241158669270078' }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:938:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '3746241160572639349' }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:929:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '3746241160998947928' }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:929:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '3746241160772174377' }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:938:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '3746241158841598709' }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:729:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '7443316151608068665' }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:729:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '7443316149670205354' }
+  }
+}
+[bot.catch] callback_query: TimeoutError: Promise timed out after 90000 milliseconds
+    at Timeout._onTimeout (/root/iqbot-v3/node_modules/p-timeout/index.js:39:64)
+    at listOnTimeout (node:internal/timers:585:17)
+    at process.processTimers (node:internal/timers:521:7)
+(node:2033686) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+[connect fail] You entered the wrong credentials. Please ensure that your login/password is correct.
+[connect fail] You entered the wrong credentials. Please ensure that your login/password is correct.
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:729:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '572440541185884759' }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:729:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '572440542273789697' }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:938:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '4671235278422661512' }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:938:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '4671235277738288265' }
+  }
+}
+[bot.catch] callback_query: TimeoutError: Promise timed out after 90000 milliseconds
+    at Timeout._onTimeout (/root/iqbot-v3/node_modules/p-timeout/index.js:39:64)
+    at listOnTimeout (node:internal/timers:585:17)
+    at process.processTimers (node:internal/timers:521:7)
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:805:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '7443316150137843653' }
+  }
+}
+[bot.catch] callback_query: TimeoutError: Promise timed out after 90000 milliseconds
+    at Timeout._onTimeout (/root/iqbot-v3/node_modules/p-timeout/index.js:39:64)
+    at listOnTimeout (node:internal/timers:585:17)
+    at process.processTimers (node:internal/timers:521:7)
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:764:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '7443316151203399688' }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:843:44)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: {
+      text: 'Session expired — start over.',
+      callback_query_id: '7443316151778987593'
+    }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:843:44)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: {
+      text: 'Session expired — start over.',
+      callback_query_id: '7443316152308762869'
+    }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:848:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '7443316149594345036' }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:843:44)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: {
+      text: 'Session expired — start over.',
+      callback_query_id: '7443316151148618991'
+    }
+  }
+}
+[bot.catch] callback_query: TimeoutError: Promise timed out after 90000 milliseconds
+    at Timeout._onTimeout (/root/iqbot-v3/node_modules/p-timeout/index.js:39:64)
+    at listOnTimeout (node:internal/timers:585:17)
+    at process.processTimers (node:internal/timers:521:7)
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:938:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '8071543977999284551' }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:1220:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '6939173533716400560' }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:805:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '8071543975348869810' }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:805:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '8071543975378055184' }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:805:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '8071543976373541699' }
+  }
+}
+[bot.catch] callback_query: TimeoutError: Promise timed out after 90000 milliseconds
+    at Timeout._onTimeout (/root/iqbot-v3/node_modules/p-timeout/index.js:39:64)
+    at listOnTimeout (node:internal/timers:585:17)
+    at process.processTimers (node:internal/timers:521:7)
+[bot.catch] callback_query: TimeoutError: Promise timed out after 90000 milliseconds
+    at Timeout._onTimeout (/root/iqbot-v3/node_modules/p-timeout/index.js:39:64)
+    at listOnTimeout (node:internal/timers:585:17)
+    at process.processTimers (node:internal/timers:521:7)
+[bot.catch] callback_query: TimeoutError: Promise timed out after 90000 milliseconds
+    at Timeout._onTimeout (/root/iqbot-v3/node_modules/p-timeout/index.js:39:64)
+    at listOnTimeout (node:internal/timers:585:17)
+    at process.processTimers (node:internal/timers:521:7)
+[bot.catch] callback_query: TimeoutError: Promise timed out after 90000 milliseconds
+    at Timeout._onTimeout (/root/iqbot-v3/node_modules/p-timeout/index.js:39:64)
+    at listOnTimeout (node:internal/timers:585:17)
+    at process.processTimers (node:internal/timers:521:7)
+[bot.catch] callback_query: TimeoutError: Promise timed out after 90000 milliseconds
+    at Timeout._onTimeout (/root/iqbot-v3/node_modules/p-timeout/index.js:39:64)
+    at listOnTimeout (node:internal/timers:585:17)
+    at process.processTimers (node:internal/timers:521:7)
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:951:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '7342185850186667281' }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:938:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '7342185850530330587' }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:948:39)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '7342185850951793939' }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:948:39)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '7342185849812644267' }
+  }
+}
+[bot.catch] callback_query: TimeoutError: Promise timed out after 90000 milliseconds
+    at Timeout._onTimeout (/root/iqbot-v3/node_modules/p-timeout/index.js:39:64)
+    at listOnTimeout (node:internal/timers:585:17)
+    at process.processTimers (node:internal/timers:521:7)
+[bot.catch] callback_query: TimeoutError: Promise timed out after 90000 milliseconds
+    at Timeout._onTimeout (/root/iqbot-v3/node_modules/p-timeout/index.js:39:64)
+    at listOnTimeout (node:internal/timers:585:17)
+    at process.processTimers (node:internal/timers:521:7)
+[bot.catch] callback_query: TimeoutError: Promise timed out after 90000 milliseconds
+    at Timeout._onTimeout (/root/iqbot-v3/node_modules/p-timeout/index.js:39:64)
+    at listOnTimeout (node:internal/timers:585:17)
+    at process.processTimers (node:internal/timers:521:7)
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:938:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '7951593141926481764' }
+  }
+}
+[bot.catch] callback_query: TimeoutError: Promise timed out after 90000 milliseconds
+    at Timeout._onTimeout (/root/iqbot-v3/node_modules/p-timeout/index.js:39:64)
+    at listOnTimeout (node:internal/timers:585:17)
+    at process.processTimers (node:internal/timers:521:7)
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:723:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: {
+      text: '✅ PRO selected',
+      callback_query_id: '7342185852326330897'
+    }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:723:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: {
+      text: '✅ PRO selected',
+      callback_query_id: '7342185853039518225'
+    }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:723:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: {
+      text: '✅ NEWBIE selected',
+      callback_query_id: '7342185852890613635'
+    }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:723:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: {
+      text: '✅ PRO selected',
+      callback_query_id: '7342185850108286991'
+    }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:723:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: {
+      text: '✅ DEMO selected',
+      callback_query_id: '7342185848892701804'
+    }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:723:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: {
+      text: '✅ PRO selected',
+      callback_query_id: '7342185850456714370'
+    }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:723:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: {
+      text: '✅ NEWBIE selected',
+      callback_query_id: '7342185849746480558'
+    }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:752:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '7342185848971935708' }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:752:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '7342185852799782440' }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:752:5)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: { text: undefined, callback_query_id: '7342185849088216173' }
+  }
+}
+[bot.catch] callback_query: TimeoutError: Promise timed out after 90000 milliseconds
+    at Timeout._onTimeout (/root/iqbot-v3/node_modules/p-timeout/index.js:39:64)
+    at listOnTimeout (node:internal/timers:585:17)
+    at process.processTimers (node:internal/timers:521:7)
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:776:46)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: {
+      text: 'Session expired — start over.',
+      callback_query_id: '7342185849638926884'
+    }
+  }
+}
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:776:46)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: {
+      text: 'Session expired — start over.',
+      callback_query_id: '7342185850309129516'
+    }
+  }
+}
+[connect fail] You entered the wrong credentials. Please ensure that your login/password is correct.
+[bot.catch] callback_query: TimeoutError: Promise timed out after 90000 milliseconds
+    at Timeout._onTimeout (/root/iqbot-v3/node_modules/p-timeout/index.js:39:64)
+    at listOnTimeout (node:internal/timers:585:17)
+    at process.processTimers (node:internal/timers:521:7)
+(node:2059886) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+[bot.catch] callback_query: TelegramError: 400: Bad Request: query is too old and response timeout expired or query ID is invalid
+    at Telegram.callApi (/root/iqbot-v3/node_modules/telegraf/lib/core/network/client.js:315:19)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <anonymous> (/root/iqbot-v3/src/bot.ts:843:44)
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17)
+    at async /root/iqbot-v3/node_modules/telegraf/lib/composer.js:519:21
+    at async execute (/root/iqbot-v3/node_modules/telegraf/lib/composer.js:518:17) {
+  response: {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  },
+  on: {
+    method: 'answerCallbackQuery',
+    payload: {
+      text: 'Session expired — start over.',
+      callback_query_id: '6250840544831543128'
+    }
+  }
+}
