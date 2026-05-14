@@ -412,7 +412,7 @@ async function sendStartMenu(ctx: Context): Promise<void> {
                         ].filter(Boolean).join(' | ');
                     } finally { await sdk.shutdown(); }
                 };
-                balanceLine = await withTimeout(fetchBalance(), 5_000, 'balance');
+                balanceLine = await withTimeout(fetchBalance(), 3_000, 'balance');
                 balanceCache.set(telegramId, { line: balanceLine, ts: Date.now() });
             } catch {}
         }
@@ -712,13 +712,12 @@ bot.command('start', sendStartMenu);
 
 bot.action(/^tier:(demo|newbie|pro)$/, async ctx => {
     const tier = ctx.match[1].toUpperCase();
+    await ctx.answerCbQuery(`✅ ${tier} selected`);
     const chatId = ctx.chat!.id;
     const existing = onboardSessions.get(chatId) ?? { step: 'user_id' as OnboardStep };
     onboardSessions.set(chatId, { ...existing, tier });
     const dbUser = getUser(ctx.from!.id);
     if (dbUser) setUserTier(ctx.from!.id, tier);
-    // Onboard keyboard was already shown in startOnboarding — just confirm tier selection
-    await ctx.answerCbQuery(`✅ ${tier} selected`);
 });
 
 // ─── Account connection choice ────────────────────────────────────────────────
@@ -772,6 +771,7 @@ bot.action(/^amt:(.+)$/, async ctx => {
     const chatId = ctx.chat!.id;
     const state = wizardSessions.get(chatId);
     if (!state || state.step !== 'amount') { await ctx.answerCbQuery('Session expired — start over.'); return; }
+    await ctx.answerCbQuery();
 
     const val = ctx.match[1];
     if (val === 'custom') {
@@ -779,7 +779,7 @@ bot.action(/^amt:(.+)$/, async ctx => {
         try { await ctx.editMessageText('✏️ Enter your custom amount (e.g. 75):'); } catch {}
     } else {
         const amt = parseFloat(val);
-        if (state.mode === 'demo' && amt > 20) { await ctx.answerCbQuery('Demo max is $20.'); return; }
+        if (state.mode === 'demo' && amt > 20) { await ctx.reply('❌ Demo max is $20.'); return; }
         state.amount = amt;
         state.step = 'timeframe';
         if (state.lastImageMsgId) {
@@ -791,7 +791,6 @@ bot.action(/^amt:(.+)$/, async ctx => {
             { reply_markup: timeframeKeyboard() }
         ); } catch {}
     }
-    await ctx.answerCbQuery();
 });
 
 // ─── Trade wizard — timeframe ─────────────────────────────────────────────────
@@ -827,10 +826,10 @@ bot.action(/^page:(\d+)$/, async ctx => {
     const chatId = ctx.chat!.id;
     const state = wizardSessions.get(chatId);
     if (!state || state.step !== 'pair') { await ctx.answerCbQuery('Session expired — start over.'); return; }
+    await ctx.answerCbQuery();
     const pageUser = getUser(chatId);
     const pageTier = pageUser?.tier ?? 'NEWBIE';
     try { await ctx.editMessageReplyMarkup(pairKeyboard(parseInt(ctx.match[1], 10), pageTier)); } catch {}
-    await ctx.answerCbQuery();
 });
 
 // ─── Trade wizard — pair selected → analyze → execute ────────────────────────
@@ -839,11 +838,11 @@ bot.action(/^pair:(.+)$/, async ctx => {
     const chatId = ctx.chat!.id;
     const state = wizardSessions.get(chatId);
     if (!state || state.step !== 'pair') { await ctx.answerCbQuery('Session expired — start over.'); return; }
+    await ctx.answerCbQuery();
 
     const pair = ctx.match[1];
     const { amount, timeframe, mode, lastImageMsgId: prevImgId } = state;
     wizardSessions.delete(chatId);
-    await ctx.answerCbQuery();  // stops spinner immediately — no more 30s dead wait
 
     if (!amount || !timeframe) { await ctx.reply('❌ Session error — start over.'); return; }
 
@@ -2117,7 +2116,13 @@ bot.on('text', async ctx => {
 });
 
 bot.catch((err: unknown, ctx) => {
-    console.error(`[bot.catch] ${ctx.updateType}:`, err);
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[bot.catch] ${ctx.updateType}:`, msg);
+    if (ctx.callbackQuery && msg.includes('query is too old')) {
+        ctx.answerCbQuery('⏳ Session expired. Reloading...').catch(() => {});
+        sendStartMenu(ctx).catch(() => {});
+        return;
+    }
     if (ctx.callbackQuery) {
         ctx.answerCbQuery('⚠️ Error occurred. Try again.').catch(() => {});
     } else {
