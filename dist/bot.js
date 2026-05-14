@@ -29,6 +29,13 @@ bot.use(async (ctx, next) => {
 const MAX_ROUNDS = 6;
 const ROUND_COOLDOWN_MS = 5_000;
 function escapeMd(s) { return s.replace(/[_*[\]()~`>#+=|{}.!-]/g, '\\$&'); }
+const CURRENCY_SYMBOLS = {
+    USD: '$', NGN: '₦', EUR: '€', GBP: '£', JPY: '¥', AUD: 'A$', CAD: 'C$',
+};
+function fmtBalance(b) {
+    const sym = (b.currency && CURRENCY_SYMBOLS[b.currency]) || b.currency || '$';
+    return `${sym}${b.amount.toFixed(2)}`;
+}
 function withTimeout(promise, ms, label) {
     return Promise.race([
         promise,
@@ -286,8 +293,8 @@ async function sendStartMenu(ctx) {
                         const demo = all.find(b => b.type === BalanceType.Demo);
                         const real = all.find(b => b.type === BalanceType.Real);
                         return [
-                            demo ? `Practice $${demo.amount.toFixed(2)}` : '',
-                            real ? `Real $${real.amount.toFixed(2)}` : '',
+                            demo ? `Practice ${fmtBalance(demo)}` : '',
+                            real ? `Real ${fmtBalance(real)}` : '',
                         ].filter(Boolean).join(' | ');
                     }
                     finally {
@@ -997,9 +1004,9 @@ bot.command('balance', async (ctx) => {
             const real = all.find(b => b.type === BalanceType.Real);
             let msg = '💰 *Balances*\n\n';
             if (demo)
-                msg += `🎮 Practice: $${demo.amount.toFixed(2)}\n`;
+                msg += `🎮 Practice: ${fmtBalance(demo)}\n`;
             if (real)
-                msg += `💎 Live: $${real.amount.toFixed(2)}\n`;
+                msg += `💎 Live: ${fmtBalance(real)}\n`;
             if (!demo && !real)
                 msg += 'No balances found.';
             await ctx.reply(msg, { parse_mode: 'Markdown', reply_markup: backKeyboard() });
@@ -1921,9 +1928,9 @@ bot.on('text', async (ctx) => {
                     const real = all.find(b => b.type === BalanceType.Real);
                     let msg = '✅ Connected!\n\n';
                     if (demo)
-                        msg += `🎮 Practice: $${demo.amount.toFixed(2)}\n`;
+                        msg += `🎮 Practice: ${fmtBalance(demo)}\n`;
                     if (real)
-                        msg += `💎 Live: $${real.amount.toFixed(2)}\n`;
+                        msg += `💎 Live: ${fmtBalance(real)}\n`;
                     onboardSessions.delete(chatId);
                     await ctx.reply(msg, { reply_markup: startKeyboard() });
                 }
@@ -1976,9 +1983,9 @@ bot.on('text', async (ctx) => {
                     const real = all.find(b => b.type === BalanceType.Real);
                     let msg = '✅ *Connected!*\n\n';
                     if (demo)
-                        msg += `🎮 Practice: $${demo.amount.toFixed(2)}\n`;
+                        msg += `🎮 Practice: ${fmtBalance(demo)}\n`;
                     if (real)
-                        msg += `💎 Live: $${real.amount.toFixed(2)}\n`;
+                        msg += `💎 Live: ${fmtBalance(real)}\n`;
                     await ctx.reply(msg, { parse_mode: 'Markdown' });
                 }
                 finally {

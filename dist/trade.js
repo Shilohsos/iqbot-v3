@@ -16,7 +16,13 @@ export async function executeTradeWithSdk(sdk, trade) {
         const positions = await sdk.positions();
         const balances = await sdk.balances();
         const wantLive = trade.balanceType === 'live';
-        const selectedBalance = balances.getBalances().find(b => b.type === (wantLive ? BalanceType.Real : BalanceType.Demo));
+        let selectedBalance = balances.getBalances().find(b => b.type === (wantLive ? BalanceType.Real : BalanceType.Demo));
+        // Fallback for accounts whose balance typeId the SDK doesn't map (e.g. NGN)
+        if (!selectedBalance) {
+            selectedBalance = wantLive
+                ? balances.getBalances().find(b => b.type === undefined || b.type === BalanceType.Real)
+                : balances.getBalances().find(b => b.type === undefined || b.type === BalanceType.Demo);
+        }
         if (!selectedBalance)
             return errorResult(trade, wantLive ? 'No real balance found' : 'No demo balance found');
         const currentTime = sdk.currentTime();
