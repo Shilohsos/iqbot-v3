@@ -294,7 +294,7 @@ async function sendStartMenu(ctx) {
                         await sdk.shutdown();
                     }
                 };
-                balanceLine = await withTimeout(fetchBalance(), 5_000, 'balance');
+                balanceLine = await withTimeout(fetchBalance(), 3_000, 'balance');
                 balanceCache.set(telegramId, { line: balanceLine, ts: Date.now() });
             }
             catch { }
@@ -559,14 +559,13 @@ bot.command('start', sendStartMenu);
 // ─── Tier selection ───────────────────────────────────────────────────────────
 bot.action(/^tier:(demo|newbie|pro)$/, async (ctx) => {
     const tier = ctx.match[1].toUpperCase();
+    await ctx.answerCbQuery(`✅ ${tier} selected`);
     const chatId = ctx.chat.id;
     const existing = onboardSessions.get(chatId) ?? { step: 'user_id' };
     onboardSessions.set(chatId, { ...existing, tier });
     const dbUser = getUser(ctx.from.id);
     if (dbUser)
         setUserTier(ctx.from.id, tier);
-    // Onboard keyboard was already shown in startOnboarding — just confirm tier selection
-    await ctx.answerCbQuery(`✅ ${tier} selected`);
 });
 // ─── Account connection choice ────────────────────────────────────────────────
 bot.action('onboard:yes', async (ctx) => {
@@ -620,6 +619,7 @@ bot.action(/^amt:(.+)$/, async (ctx) => {
         await ctx.answerCbQuery('Session expired — start over.');
         return;
     }
+    await ctx.answerCbQuery();
     const val = ctx.match[1];
     if (val === 'custom') {
         state.step = 'custom_amount';
@@ -631,7 +631,7 @@ bot.action(/^amt:(.+)$/, async (ctx) => {
     else {
         const amt = parseFloat(val);
         if (state.mode === 'demo' && amt > 20) {
-            await ctx.answerCbQuery('Demo max is $20.');
+            await ctx.reply('❌ Demo max is $20.');
             return;
         }
         state.amount = amt;
@@ -652,7 +652,6 @@ bot.action(/^amt:(.+)$/, async (ctx) => {
         }
         catch { }
     }
-    await ctx.answerCbQuery();
 });
 // ─── Trade wizard — timeframe ─────────────────────────────────────────────────
 bot.action(/^tf:(\d+)$/, async (ctx) => {
@@ -701,13 +700,13 @@ bot.action(/^page:(\d+)$/, async (ctx) => {
         await ctx.answerCbQuery('Session expired — start over.');
         return;
     }
+    await ctx.answerCbQuery();
     const pageUser = getUser(chatId);
     const pageTier = pageUser?.tier ?? 'NEWBIE';
     try {
         await ctx.editMessageReplyMarkup(pairKeyboard(parseInt(ctx.match[1], 10), pageTier));
     }
     catch { }
-    await ctx.answerCbQuery();
 });
 // ─── Trade wizard — pair selected → analyze → execute ────────────────────────
 bot.action(/^pair:(.+)$/, async (ctx) => {
@@ -717,10 +716,10 @@ bot.action(/^pair:(.+)$/, async (ctx) => {
         await ctx.answerCbQuery('Session expired — start over.');
         return;
     }
+    await ctx.answerCbQuery();
     const pair = ctx.match[1];
     const { amount, timeframe, mode, lastImageMsgId: prevImgId } = state;
     wizardSessions.delete(chatId);
-    await ctx.answerCbQuery(); // stops spinner immediately — no more 30s dead wait
     if (!amount || !timeframe) {
         await ctx.reply('❌ Session error — start over.');
         return;
@@ -2024,7 +2023,13 @@ bot.on('text', async (ctx) => {
     await ctx.reply('⏱ Pick your expiry timeframe 👇\n⏱ Faster timeframes settle quicker.\n🐢 Longer timeframes ride bigger moves.', { reply_markup: timeframeKeyboard() });
 });
 bot.catch((err, ctx) => {
-    console.error(`[bot.catch] ${ctx.updateType}:`, err);
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[bot.catch] ${ctx.updateType}:`, msg);
+    if (ctx.callbackQuery && msg.includes('query is too old')) {
+        ctx.answerCbQuery('⏳ Session expired. Reloading...').catch(() => { });
+        sendStartMenu(ctx).catch(() => { });
+        return;
+    }
     if (ctx.callbackQuery) {
         ctx.answerCbQuery('⚠️ Error occurred. Try again.').catch(() => { });
     }
