@@ -58,6 +58,14 @@ const ROUND_COOLDOWN_MS = 5_000;
 
 function escapeMd(s: string): string { return s.replace(/[_*[\]()~`>#+=|{}.!-]/g, '\\$&'); }
 
+const CURRENCY_SYMBOLS: Record<string, string> = {
+    USD: '$', NGN: '₦', EUR: '€', GBP: '£', JPY: '¥', AUD: 'A$', CAD: 'C$',
+};
+function fmtBalance(b: { amount: number; currency?: string }): string {
+    const sym = (b.currency && CURRENCY_SYMBOLS[b.currency]) || b.currency || '$';
+    return `${sym}${b.amount.toFixed(2)}`;
+}
+
 function withTimeout<T>(promise: Promise<T>, ms: number, label?: string): Promise<T> {
     return Promise.race([
         promise,
@@ -407,8 +415,8 @@ async function sendStartMenu(ctx: Context): Promise<void> {
                         const demo = all.find(b => b.type === BalanceType.Demo);
                         const real = all.find(b => b.type === BalanceType.Real);
                         return [
-                            demo ? `Practice $${demo.amount.toFixed(2)}` : '',
-                            real ? `Real $${real.amount.toFixed(2)}` : '',
+                            demo ? `Practice ${fmtBalance(demo)}` : '',
+                            real ? `Real ${fmtBalance(real)}` : '',
                         ].filter(Boolean).join(' | ');
                     } finally { await sdk.shutdown(); }
                 };
@@ -1114,8 +1122,8 @@ bot.command('balance', async ctx => {
             const demo = all.find(b => b.type === BalanceType.Demo);
             const real = all.find(b => b.type === BalanceType.Real);
             let msg = '💰 *Balances*\n\n';
-            if (demo) msg += `🎮 Practice: $${demo.amount.toFixed(2)}\n`;
-            if (real) msg += `💎 Live: $${real.amount.toFixed(2)}\n`;
+            if (demo) msg += `🎮 Practice: ${fmtBalance(demo)}\n`;
+            if (real) msg += `💎 Live: ${fmtBalance(real)}\n`;
             if (!demo && !real) msg += 'No balances found.';
             await ctx.reply(msg, { parse_mode: 'Markdown', reply_markup: backKeyboard() });
         } finally { await sdk.shutdown(); }
@@ -2032,8 +2040,8 @@ bot.on('text', async ctx => {
                     const demo = all.find(b => b.type === BalanceType.Demo);
                     const real = all.find(b => b.type === BalanceType.Real);
                     let msg = '✅ Connected!\n\n';
-                    if (demo) msg += `🎮 Practice: $${demo.amount.toFixed(2)}\n`;
-                    if (real) msg += `💎 Live: $${real.amount.toFixed(2)}\n`;
+                    if (demo) msg += `🎮 Practice: ${fmtBalance(demo)}\n`;
+                    if (real) msg += `💎 Live: ${fmtBalance(real)}\n`;
                     onboardSessions.delete(chatId);
                     await ctx.reply(msg, { reply_markup: startKeyboard() });
                 } finally { await sdk.shutdown(); }
@@ -2080,8 +2088,8 @@ bot.on('text', async ctx => {
                     const demo = all.find(b => b.type === BalanceType.Demo);
                     const real = all.find(b => b.type === BalanceType.Real);
                     let msg = '✅ *Connected!*\n\n';
-                    if (demo) msg += `🎮 Practice: $${demo.amount.toFixed(2)}\n`;
-                    if (real) msg += `💎 Live: $${real.amount.toFixed(2)}\n`;
+                    if (demo) msg += `🎮 Practice: ${fmtBalance(demo)}\n`;
+                    if (real) msg += `💎 Live: ${fmtBalance(real)}\n`;
                     await ctx.reply(msg, { parse_mode: 'Markdown' });
                 } finally { await sdk.shutdown(); }
             } catch (err: unknown) {
