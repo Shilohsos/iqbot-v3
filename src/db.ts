@@ -88,6 +88,8 @@ if (ssidColNotNull) {
 const finalUserCols = (db.prepare('PRAGMA table_info(users)').all() as { name: string }[]).map(c => c.name);
 if (!finalUserCols.includes('username'))
     db.exec('ALTER TABLE users ADD COLUMN username TEXT');
+if (!finalUserCols.includes('currency'))
+    db.exec("ALTER TABLE users ADD COLUMN currency TEXT DEFAULT 'USD'");
 
 // ─── Section 10 tables ────────────────────────────────────────────────────────
 
@@ -274,8 +276,13 @@ export interface UserRecord {
     approved_at?: string | null;
     affiliate_data?: string | null;
     tier?: string | null;
+    currency?: string | null;
     created_at?: string;
     last_used?: string;
+}
+
+export function saveUserCurrency(telegramId: number, currency: string): void {
+    db.prepare('UPDATE users SET currency = ? WHERE telegram_id = ?').run(currency, telegramId);
 }
 
 export function maskUserId(id: number): string {

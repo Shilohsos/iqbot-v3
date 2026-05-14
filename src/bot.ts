@@ -9,7 +9,7 @@ import {
     getActiveTraderIds, getInactiveTraderIds, findUsersByUsername,
     upsertOnboardingUser, approveUser, setManualApproval, rejectUser, resetUser, getApprovalStats,
     getRecentApprovals, getPendingManualUsers,
-    setUserTier, pauseUser, resumeUser,
+    setUserTier, saveUserCurrency, pauseUser, resumeUser,
     generateToken, validateToken, useToken, getTokens,
     updateLeaderboardAuto, addLeaderboardManual, getLeaderboard,
     getLeaderboardDetailed, updateLeaderboardManual,
@@ -414,6 +414,8 @@ async function sendStartMenu(ctx: Context): Promise<void> {
                         const all = (await sdk.balances()).getBalances();
                         const demo = all.find(b => b.type === BalanceType.Demo);
                         const real = all.find(b => b.type === BalanceType.Real);
+                        if (real?.currency) saveUserCurrency(telegramId, real.currency);
+                        else if (demo?.currency) saveUserCurrency(telegramId, demo.currency);
                         return [
                             demo ? `Practice ${fmtBalance(demo)}` : '',
                             real ? `Real ${fmtBalance(real)}` : '',
@@ -760,7 +762,8 @@ bot.action(/^mode:(demo|live)$/, async ctx => {
     if (!state || state.step !== 'mode') return;
     state.mode = ctx.match[1] as 'demo' | 'live';
     state.step = 'amount';
-    await ctx.reply('Enter amount', { reply_markup: amountKeyboard() });
+    const modeUser = getUser(ctx.from!.id);
+    await ctx.reply('Enter amount', { reply_markup: amountKeyboard(modeUser?.currency ?? 'USD') });
 });
 
 // ─── Trade wizard — amount ────────────────────────────────────────────────────
@@ -784,10 +787,12 @@ bot.action(/^amt:(.+)$/, async ctx => {
     const val = ctx.match[1];
     if (val === 'custom') {
         state.step = 'custom_amount';
-        try { await ctx.editMessageText('✏️ Enter your custom amount (e.g. 75):'); } catch {}
+        const curUser = getUser(ctx.from!.id);
+        const cur = curUser?.currency || 'USD';
+        try { await ctx.editMessageText(`✏️ Enter your custom amount (e.g. 75 ${cur}):`); } catch {}
     } else {
         const amt = parseFloat(val);
-        if (state.mode === 'demo' && amt > 20) { await ctx.reply('❌ Demo max is $20.'); return; }
+        if (state.mode === 'demo' && amt > 20) { await ctx.reply('❌ Demo max is $20 or equivalent.'); return; }
         state.amount = amt;
         state.step = 'timeframe';
         if (state.lastImageMsgId) {
@@ -936,7 +941,8 @@ bot.action('upsell:live', async ctx => {
     const state: WizardState = { step: 'amount', mode: 'live' };
     try { const m = await ctx.replyWithPhoto(ASSET('L5.png')); state.lastImageMsgId = m.message_id; } catch {}
     wizardSessions.set(chatId, state);
-    await ctx.reply('💰 Enter amount for Live trade:', { reply_markup: amountKeyboard() });
+    const upsellLiveUser = getUser(ctx.from!.id);
+    await ctx.reply('💰 Enter amount for Live trade:', { reply_markup: amountKeyboard(upsellLiveUser?.currency ?? 'USD') });
 });
 
 bot.action('upsell:demo', async ctx => {
@@ -945,7 +951,8 @@ bot.action('upsell:demo', async ctx => {
     const state: WizardState = { step: 'amount', mode: 'demo' };
     try { const m = await ctx.replyWithPhoto(ASSET('L5.png')); state.lastImageMsgId = m.message_id; } catch {}
     wizardSessions.set(chatId, state);
-    await ctx.reply('💰 Enter amount for Demo trade:', { reply_markup: amountKeyboard() });
+    const upsellDemoUser = getUser(ctx.from!.id);
+    await ctx.reply('💰 Enter amount for Demo trade:', { reply_markup: amountKeyboard(upsellDemoUser?.currency ?? 'USD') });
 });
 
 // ─── User menu actions ────────────────────────────────────────────────────────
@@ -2109,7 +2116,7 @@ bot.on('text', async ctx => {
 
     const amount = parseFloat(text);
     if (isNaN(amount) || amount <= 0) { await ctx.reply('Please enter a valid positive number (e.g. 75).'); return; }
-    if (wiz.mode === 'demo' && amount > 20) { await ctx.reply('Demo max is $20. Please enter a smaller amount.'); return; }
+    if (wiz.mode === 'demo' && amount > 20) { await ctx.reply('❌ Demo max is $20 or equivalent. Please enter a smaller amount.'); return; }
 
     wiz.amount = amount;
     wiz.step = 'timeframe';
