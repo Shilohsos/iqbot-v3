@@ -2150,7 +2150,8 @@ bot.catch((err: unknown, ctx) => {
 });
 
 cleanStaleSessions();
-bot.launch({ handlerTimeout: 10_000 });
+(bot as any).options.handlerTimeout = 10_000;
+bot.launch();
 console.log('[iqbot-v3] running');
 
 setInterval(async () => {

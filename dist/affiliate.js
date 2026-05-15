@@ -13,10 +13,12 @@ async function getClient() {
     }
     _client = new TelegramClient(new StringSession(sessionString), apiId, apiHash, {
         connectionRetries: 3,
-        // Suppress interactive prompts — session must already be authorised
         baseLogger: undefined,
     });
-    await _client.connect();
+    await Promise.race([
+        _client.connect(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('GramJS connect timeout')), 15_000)),
+    ]);
     return _client;
 }
 /**
@@ -25,12 +27,15 @@ async function getClient() {
  */
 export async function checkAffiliate(iqUserId) {
     const channelId = process.env.AFFILIATE_CHANNEL_ID ?? '';
-    const limit = parseInt(process.env.AFFILIATE_SCAN_LIMIT ?? '1000', 10);
+    const limit = parseInt(process.env.AFFILIATE_SCAN_LIMIT ?? '200', 10);
     if (!channelId)
         throw new Error('AFFILIATE_CHANNEL_ID not set');
     const client = await getClient();
     const userIdStr = String(iqUserId);
-    const messages = await client.getMessages(channelId, { limit });
+    const messages = await Promise.race([
+        client.getMessages(channelId, { limit }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('GramJS getMessages timeout')), 15_000)),
+    ]);
     for (const msg of messages) {
         if (msg.text?.includes(userIdStr)) {
             return {
