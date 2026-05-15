@@ -87,9 +87,50 @@ The `sdkPool` (once added), `balanceCache`, `sessionStats`, and other Maps grow 
 
 **Fix:** Add cleanup intervals for all persistent Maps.
 
+### 6. GramJS affiliate checker has no timeout
+`checkAffiliate()` (in `src/affiliate.ts`) connects to Telegram MTProto via GramJS and fetches up to 1000 messages from the affiliate channel. This has **zero timeout protection**:
+- `getClient()` → `client.connect()` can hang if MTProto is unreachable
+- `client.getMessages(channelId, { limit: 1000 })` — fetching 1000 messages is slow
+- If GramJS hangs, the onboarding handler blocks for 90s (Telegraf default)
+
+**Fix in src/affiliate.ts:**
+- Add a 15-second timeout around `client.connect()` and `client.getMessages()`
+- Reduce the default scan limit from 1000 to 200 messages (still enough to find recent users)
+- Wrap `checkAffiliate()` in `withTimeout()` at the call site in bot.ts (around line 1983):
+  ```typescript
+  const result = await withTimeout(checkAffiliate(iqUserId), 15_000, 'affiliate')
+      .catch(() => ({ found: false } as AffiliateResult));
+  ```
+- If GramJS times out or errors, fall through to `setManualApproval()` silently (don't block the user)
+
+### 7. Concurrent request limiting
+Too many handlers running concurrently (e.g., 20 stale button callbacks) overwhelm the event loop.
+
+**Fix:** Add a simple concurrency limiter for IQ Option SDK operations:
+```typescript
+const MAX_CONCURRENT_SDK = 5;
+let activeSdkOps = 0;
+const sdkQueue: Array<() => void> = [];
+
+async function runSdkOp<T>(fn: () => Promise<T>): Promise<T> {
+    if (activeSdkOps >= MAX_CONCURRENT_SDK) {
+        await new Promise<void>(resolve => sdkQueue.push(resolve));
+    }
+    activeSdkOps++;
+    try { return await fn(); }
+    finally {
+        activeSdkOps--;
+        sdkQueue.shift()?.();
+    }
+}
+```
+
+This prevents SDK operation pileup when many users hit the bot simultaneously.
+
 ## Files to modify
-- `src/bot.ts` — Add SDK pool, handler timeout, background balance fetch, currency save in all paths
+- `src/bot.ts` — Add SDK pool, handler timeout, background balance fetch, currency save in all paths, withTimeout on affiliate call, concurrency limiter
 - `src/trade.ts` — Use pooled SDK connection instead of creating new one
+- `src/affiliate.ts` — Add timeouts to GramJS connect and getMessages, reduce scan limit
 - All SDK connection points — replace `ClientSdk.create()` with `getSdk(ssid)`
 
 ## Testing
