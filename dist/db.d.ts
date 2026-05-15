@@ -36,9 +36,11 @@ export interface UserRecord {
     approved_at?: string | null;
     affiliate_data?: string | null;
     tier?: string | null;
+    currency?: string | null;
     created_at?: string;
     last_used?: string;
 }
+export declare function saveUserCurrency(telegramId: number, currency: string): void;
 export declare function maskUserId(id: number): string;
 export declare function getUser(telegramId: number): UserRecord | undefined;
 export declare function findUsersByUsername(username: string): UserRecord[];

@@ -9,7 +9,7 @@ type Btn = {
 type IKMarkup = {
     inline_keyboard: Btn[][];
 };
-export declare function amountKeyboard(): IKMarkup;
+export declare function amountKeyboard(currency?: string): IKMarkup;
 export declare function timeframeKeyboard(): IKMarkup;
 export declare function pairKeyboard(page?: number, tier?: string): IKMarkup;
 export declare function tfLabel(timeframeSec: number): string;

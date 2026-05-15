@@ -3,7 +3,7 @@ import { Telegraf } from 'telegraf';
 import { ClientSdk, SsidAuthMethod, BalanceType } from './index.js';
 import { WS_URL, PLATFORM_ID, IQ_HOST, IQ_AUTH_URL } from './protocol.js';
 import { executeTrade, createSdk } from './trade.js';
-import { getRecentTrades, getTradeStats, getTopTradersToday, getUser, saveUser, saveUsername, deleteUser, getAllUsers, getAllUserIds, getActiveTraderIds, getInactiveTraderIds, findUsersByUsername, upsertOnboardingUser, approveUser, setManualApproval, rejectUser, resetUser, getApprovalStats, getRecentApprovals, getPendingManualUsers, setUserTier, pauseUser, resumeUser, generateToken, validateToken, useToken, getTokens, updateLeaderboardAuto, addLeaderboardManual, getLeaderboard, getLeaderboardDetailed, updateLeaderboardManual, getFunnelStats, getConfig, setConfig, getAuditReport, maskUserId, calculatePairWinRates, selectTopPicks, setSession, getSession, deleteSession, cleanStaleSessions, } from './db.js';
+import { getRecentTrades, getTradeStats, getTopTradersToday, getUser, saveUser, saveUsername, deleteUser, getAllUsers, getAllUserIds, getActiveTraderIds, getInactiveTraderIds, findUsersByUsername, upsertOnboardingUser, approveUser, setManualApproval, rejectUser, resetUser, getApprovalStats, getRecentApprovals, getPendingManualUsers, setUserTier, saveUserCurrency, pauseUser, resumeUser, generateToken, validateToken, useToken, getTokens, updateLeaderboardAuto, addLeaderboardManual, getLeaderboard, getLeaderboardDetailed, updateLeaderboardManual, getFunnelStats, getConfig, setConfig, getAuditReport, maskUserId, calculatePairWinRates, selectTopPicks, setSession, getSession, deleteSession, cleanStaleSessions, } from './db.js';
 import { analyzePair } from './analysis.js';
 import { amountKeyboard, timeframeKeyboard, pairKeyboard, tfLabel, OTC_PAIRS, tradeModeKeyboard, demoUpsellKeyboard, affiliateFailKeyboard, } from './menu.js';
 import { startKeyboard, backKeyboard, onboardKeyboard } from './ui/user.js';
@@ -292,6 +292,10 @@ async function sendStartMenu(ctx) {
                         const all = (await sdk.balances()).getBalances();
                         const demo = all.find(b => b.type === BalanceType.Demo);
                         const real = all.find(b => b.type === BalanceType.Real);
+                        if (real?.currency)
+                            saveUserCurrency(telegramId, real.currency);
+                        else if (demo?.currency)
+                            saveUserCurrency(telegramId, demo.currency);
                         return [
                             demo ? `Practice ${fmtBalance(demo)}` : '',
                             real ? `Real ${fmtBalance(real)}` : '',
@@ -601,7 +605,8 @@ bot.action(/^mode:(demo|live)$/, async (ctx) => {
         return;
     state.mode = ctx.match[1];
     state.step = 'amount';
-    await ctx.reply('Enter amount', { reply_markup: amountKeyboard() });
+    const modeUser = getUser(ctx.from.id);
+    await ctx.reply('Enter amount', { reply_markup: amountKeyboard(modeUser?.currency ?? 'USD') });
 });
 // ─── Trade wizard — amount ────────────────────────────────────────────────────
 bot.action('wizard:cancel', async (ctx) => {
@@ -630,15 +635,17 @@ bot.action(/^amt:(.+)$/, async (ctx) => {
     const val = ctx.match[1];
     if (val === 'custom') {
         state.step = 'custom_amount';
+        const curUser = getUser(ctx.from.id);
+        const cur = curUser?.currency || 'USD';
         try {
-            await ctx.editMessageText('✏️ Enter your custom amount (e.g. 75):');
+            await ctx.editMessageText(`✏️ Enter your custom amount (e.g. 75 ${cur}):`);
         }
         catch { }
     }
     else {
         const amt = parseFloat(val);
         if (state.mode === 'demo' && amt > 20) {
-            await ctx.reply('❌ Demo max is $20.');
+            await ctx.reply('❌ Demo max is $20 or equivalent.');
             return;
         }
         state.amount = amt;
@@ -825,7 +832,8 @@ bot.action('upsell:live', async (ctx) => {
     }
     catch { }
     wizardSessions.set(chatId, state);
-    await ctx.reply('💰 Enter amount for Live trade:', { reply_markup: amountKeyboard() });
+    const upsellLiveUser = getUser(ctx.from.id);
+    await ctx.reply('💰 Enter amount for Live trade:', { reply_markup: amountKeyboard(upsellLiveUser?.currency ?? 'USD') });
 });
 bot.action('upsell:demo', async (ctx) => {
     await ctx.answerCbQuery();
@@ -837,7 +845,8 @@ bot.action('upsell:demo', async (ctx) => {
     }
     catch { }
     wizardSessions.set(chatId, state);
-    await ctx.reply('💰 Enter amount for Demo trade:', { reply_markup: amountKeyboard() });
+    const upsellDemoUser = getUser(ctx.from.id);
+    await ctx.reply('💰 Enter amount for Demo trade:', { reply_markup: amountKeyboard(upsellDemoUser?.currency ?? 'USD') });
 });
 // ─── User menu actions ────────────────────────────────────────────────────────
 bot.action('ui:start', async (ctx) => { await ctx.answerCbQuery(); await sendStartMenu(ctx); });
@@ -2011,7 +2020,7 @@ bot.on('text', async (ctx) => {
         return;
     }
     if (wiz.mode === 'demo' && amount > 20) {
-        await ctx.reply('Demo max is $20. Please enter a smaller amount.');
+        await ctx.reply('❌ Demo max is $20 or equivalent. Please enter a smaller amount.');
         return;
     }
     wiz.amount = amount;
@@ -2033,8 +2042,7 @@ bot.catch((err, ctx) => {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`[bot.catch] ${ctx.updateType}:`, msg);
     if (ctx.callbackQuery && msg.includes('query is too old')) {
-        ctx.answerCbQuery('⏳ Session expired. Reloading...').catch(() => { });
-        sendStartMenu(ctx).catch(() => { });
+        ctx.answerCbQuery().catch(() => { });
         return;
     }
     if (ctx.callbackQuery) {

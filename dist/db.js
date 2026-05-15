@@ -81,6 +81,8 @@ else {
 const finalUserCols = db.prepare('PRAGMA table_info(users)').all().map(c => c.name);
 if (!finalUserCols.includes('username'))
     db.exec('ALTER TABLE users ADD COLUMN username TEXT');
+if (!finalUserCols.includes('currency'))
+    db.exec("ALTER TABLE users ADD COLUMN currency TEXT DEFAULT 'USD'");
 // ─── Section 10 tables ────────────────────────────────────────────────────────
 db.exec(`
   CREATE TABLE IF NOT EXISTS tokens (
@@ -216,6 +218,9 @@ export function getTopTradersToday(limit = 20) {
         ORDER BY trade_count DESC
         LIMIT ?
     `).all(limit);
+}
+export function saveUserCurrency(telegramId, currency) {
+    db.prepare('UPDATE users SET currency = ? WHERE telegram_id = ?').run(currency, telegramId);
 }
 export function maskUserId(id) {
     const s = String(id);

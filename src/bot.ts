@@ -2134,8 +2134,7 @@ bot.catch((err: unknown, ctx) => {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`[bot.catch] ${ctx.updateType}:`, msg);
     if (ctx.callbackQuery && msg.includes('query is too old')) {
-        ctx.answerCbQuery('⏳ Session expired. Reloading...').catch(() => {});
-        sendStartMenu(ctx).catch(() => {});
+        ctx.answerCbQuery().catch(() => {});
         return;
     }
     if (ctx.callbackQuery) {

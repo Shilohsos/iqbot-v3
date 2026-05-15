@@ -2,14 +2,18 @@ export const OTC_PAIRS = [
     'EURUSD-OTC', 'GBPUSD-OTC', 'EURJPY-OTC', 'GBPJPY-OTC',
     'AUDUSD-OTC', 'USDCAD-OTC', 'EURGBP-OTC', 'USDCHF-OTC',
 ];
-export function amountKeyboard() {
+const CURRENCY_SYMBOLS = {
+    USD: '$', NGN: '₦', EUR: '€', GBP: '£', JPY: '¥', AUD: 'A$', CAD: 'C$',
+};
+export function amountKeyboard(currency = 'USD') {
+    const sym = CURRENCY_SYMBOLS[currency] || currency;
     return {
         inline_keyboard: [
             [
-                { text: '$10', callback_data: 'amt:10' },
-                { text: '$25', callback_data: 'amt:25' },
-                { text: '$50', callback_data: 'amt:50' },
-                { text: '$100', callback_data: 'amt:100' },
+                { text: `${sym}10`, callback_data: 'amt:10' },
+                { text: `${sym}25`, callback_data: 'amt:25' },
+                { text: `${sym}50`, callback_data: 'amt:50' },
+                { text: `${sym}100`, callback_data: 'amt:100' },
             ],
             [
                 { text: '✏️ Custom', callback_data: 'amt:custom' },
