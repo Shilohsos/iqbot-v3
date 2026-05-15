@@ -2042,7 +2042,8 @@ bot.catch((err, ctx) => {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`[bot.catch] ${ctx.updateType}:`, msg);
     if (ctx.callbackQuery && msg.includes('query is too old')) {
-        ctx.answerCbQuery().catch(() => { });
+        ctx.answerCbQuery('⏳ Expired').catch(() => { });
+        ctx.editMessageText('⏳ This session expired.\n\nSend /start to continue.', { reply_markup: { inline_keyboard: [[{ text: '🏠 Start Over', callback_data: 'ui:start' }]] } }).catch(() => { });
         return;
     }
     if (ctx.callbackQuery) {
