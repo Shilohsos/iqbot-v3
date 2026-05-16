@@ -22,6 +22,9 @@ export function adminKeyboard(): IKMarkup {
                 { text: '📢 Broadcast',   callback_data: 'admin:broadcast' },
             ],
             [
+                { text: '🎁 Giveaway',   callback_data: 'admin:giveaway' },
+            ],
+            [
                 { text: '🏆 Top Traders', callback_data: 'admin:top_traders' },
                 { text: '🔻 Funnel',      callback_data: 'admin:funnel' },
             ],
@@ -163,6 +166,16 @@ export function funnelKeyboard(): IKMarkup {
         inline_keyboard: [
             [{ text: '🌐 Set Landing Page URL', callback_data: 'admin:set_funnel_url' }],
             [{ text: '🔙 Admin Menu',           callback_data: 'admin:back' }],
+        ],
+    };
+}
+
+export function giveawayTargetKeyboard(): IKMarkup {
+    return {
+        inline_keyboard: [
+            [{ text: '👥 All Approved Users',          callback_data: 'giveaway:all' }],
+            [{ text: '🔥 Active Traders (last 24h)',   callback_data: 'giveaway:24h' }],
+            [{ text: '🔙 Admin Menu',                  callback_data: 'admin:back' }],
         ],
     };
 }

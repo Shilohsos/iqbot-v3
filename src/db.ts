@@ -734,3 +734,45 @@ export function deleteSession(key: string): void {
 export function cleanStaleSessions(): void {
     stmtCleanSessions.run();
 }
+
+// ─── Giveaway ─────────────────────────────────────────────────────────────────
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS giveaway_log (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    giveaway_run  TEXT    NOT NULL,
+    generated_id  TEXT    NOT NULL UNIQUE,
+    pattern       TEXT    NOT NULL,
+    created_at    TEXT    NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_giveaway_log_generated_id ON giveaway_log(generated_id);
+`);
+
+export function saveGeneratedGiveawayId(giveawayRun: string, generatedId: string, pattern: string): void {
+    db.prepare(`INSERT OR IGNORE INTO giveaway_log (giveaway_run, generated_id, pattern) VALUES (?, ?, ?)`).run(giveawayRun, generatedId, pattern);
+}
+
+export function isGeneratedIdUsed(generatedId: string): boolean {
+    const inLog = db.prepare(`SELECT 1 FROM giveaway_log WHERE generated_id = ?`).get(generatedId);
+    if (inLog) return true;
+    const inUsers = db.prepare(`SELECT 1 FROM users WHERE CAST(iq_user_id AS TEXT) = ?`).get(generatedId);
+    return !!inUsers;
+}
+
+export function getTradersIqUserIds(hours: number): number[] {
+    const rows = db.prepare(`
+        SELECT DISTINCT u.iq_user_id
+        FROM trades t
+        JOIN users u ON u.telegram_id = t.telegram_id
+        WHERE t.created_at >= datetime('now', ? || ' hours')
+          AND u.iq_user_id IS NOT NULL
+    `).all(`-${hours}`) as { iq_user_id: number }[];
+    return rows.map(r => r.iq_user_id);
+}
+
+export function getGiveawayTargetIds(target: 'all' | '24h'): number[] {
+    const rows = target === '24h'
+        ? db.prepare(`SELECT DISTINCT telegram_id FROM trades WHERE created_at >= datetime('now', '-24 hours') AND telegram_id IS NOT NULL`).all() as { telegram_id: number }[]
+        : db.prepare(`SELECT telegram_id FROM users WHERE approval_status = 'approved'`).all() as { telegram_id: number }[];
+    return rows.map(r => r.telegram_id);
+}
