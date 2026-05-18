@@ -1070,7 +1070,7 @@ bot.action('ui:leaderboard', async ctx => {
     type LBEntry = { label: string; pnl: number };
     const combined: LBEntry[] = [
         ...fab.map(f => ({ label: `\`${f.display_name}\``, pnl: f.current_pnl })),
-        ...real.map(r => ({ label: r.username ? `@${escapeMd(r.username)}` : `\`${maskUserId(r.telegram_id)}\``, pnl: r.total_pnl })),
+        ...real.map(r => ({ label: `\`${maskUserId(r.telegram_id)}\``, pnl: r.total_pnl })),
     ];
     combined.sort((a, b) => b.pnl - a.pnl);
     const top10 = combined.filter(e => e.pnl > 0).slice(0, 10);

@@ -2,8 +2,7 @@ import 'dotenv/config';
 import { Telegraf } from 'telegraf';
 import { BalanceType } from './index.js';
 import { IQ_AUTH_URL } from './protocol.js';
-import { executeTrade } from './trade.js';
-import { getSdk, evictSdk, runSdkOp } from './sdkpool.js';
+import { executeTrade, createSdk } from './trade.js';
 import { getRecentTrades, getTradeStats, getTopTradersToday, getUser, saveUser, saveUsername, deleteUser, getAllUsers, getAllUserIds, getActiveTraderIds, getInactiveTraderIds, findUsersByUsername, upsertOnboardingUser, approveUser, setManualApproval, rejectUser, resetUser, getApprovalStats, getRecentApprovals, getPendingManualUsers, setUserTier, saveUserCurrency, pauseUser, resumeUser, generateToken, validateToken, useToken, getTokens, updateLeaderboardAuto, addLeaderboardManual, getLeaderboardDetailed, updateLeaderboardManual, getFunnelStats, getConfig, setConfig, getAuditReport, maskUserId, calculatePairWinRates, selectTopPicks, setSession, getSession, deleteSession, cleanStaleSessions, saveGeneratedGiveawayId, isGeneratedIdUsed, getTradersIqUserIds, getGiveawayTargetIds, countFabricatedTraders, seedFabricatedTraders, getFabricatedTradersDueForUpdate, updateFabricatedPnl, getAllFabricatedTraders, resetFabricatedPnl, getRealTraderLeaderboard, } from './db.js';
 import { analyzePair } from './analysis.js';
 import { amountKeyboard, timeframeKeyboard, pairKeyboard, tfLabel, OTC_PAIRS, tradeModeKeyboard, demoUpsellKeyboard, affiliateFailKeyboard, } from './menu.js';
@@ -248,8 +247,7 @@ async function loginAndCaptureSsid(email, password) {
     if (data.code !== 'success' || !data.ssid)
         throw new Error(data.message ?? 'Login failed');
     const ssid = data.ssid;
-    evictSdk(ssid); // ensure a fresh connection for new login
-    const sdk = await runSdkOp(() => getSdk(ssid));
+    const sdk = await createSdk(ssid);
     return { ssid, sdk };
 }
 // ─── Start menu ───────────────────────────────────────────────────────────────
@@ -296,8 +294,9 @@ async function sendStartMenu(ctx) {
         const msgId = sentMsg.message_id;
         const userTier = user.tier ?? undefined;
         setImmediate(async () => {
+            let sdk;
             try {
-                const sdk = await runSdkOp(() => withTimeout(getSdk(ssid), 3_000, 'balance'));
+                sdk = await withTimeout(createSdk(ssid), 3_000, 'balance');
                 const all = (await withTimeout(sdk.balances(), 3_000, 'balance')).getBalances();
                 const demo = all.find(b => b.type === BalanceType.Demo);
                 const real = all.find(b => b.type === BalanceType.Real);
@@ -315,6 +314,9 @@ async function sendStartMenu(ctx) {
                 }
             }
             catch { }
+            finally {
+                sdk?.shutdown().catch(() => { });
+            }
         });
     }
 }
@@ -426,7 +428,7 @@ async function runMartingale(ctx, ssid, pair, direction, amount, timeframeSec = 
             const roundTrade = { pair, direction, amount: currentAmount, martingaleRunId: runId, timeframeSec, balanceType, telegramId: ctx.from.id };
             let result;
             try {
-                result = await runSdkOp(() => withTimeout(executeTrade(ssid, roundTrade), roundTimeoutMs, 'trade'));
+                result = await withTimeout(executeTrade(ssid, roundTrade), roundTimeoutMs, 'trade');
             }
             catch (err) {
                 const errMsg = err instanceof Error ? err.message : 'Unknown error';
@@ -940,7 +942,7 @@ bot.action('ui:leaderboard', async (ctx) => {
     const real = getRealTraderLeaderboard();
     const combined = [
         ...fab.map(f => ({ label: `\`${f.display_name}\``, pnl: f.current_pnl })),
-        ...real.map(r => ({ label: r.username ? `@${escapeMd(r.username)}` : `\`${maskUserId(r.telegram_id)}\``, pnl: r.total_pnl })),
+        ...real.map(r => ({ label: `\`${maskUserId(r.telegram_id)}\``, pnl: r.total_pnl })),
     ];
     combined.sort((a, b) => b.pnl - a.pnl);
     const top10 = combined.filter(e => e.pnl > 0).slice(0, 10);
@@ -1008,9 +1010,10 @@ bot.command('balance', async (ctx) => {
         await ctx.reply('❌ Not connected. Use /connect first.', { reply_markup: backKeyboard() });
         return;
     }
+    let _sdk;
     try {
-        const sdk = await runSdkOp(() => withTimeout(getSdk(ssid), 5_000, 'balance'));
-        const all = (await withTimeout(sdk.balances(), 5_000, 'balance')).getBalances();
+        _sdk = await withTimeout(createSdk(ssid), 5_000, 'balance');
+        const all = (await withTimeout(_sdk.balances(), 5_000, 'balance')).getBalances();
         const demo = all.find(b => b.type === BalanceType.Demo);
         const real = all.find(b => b.type === BalanceType.Real);
         if (real?.currency)
@@ -1029,6 +1032,9 @@ bot.command('balance', async (ctx) => {
     catch (err) {
         const isTimeout = err instanceof Error && err.message.startsWith('SDK timeout');
         await ctx.reply(isTimeout ? '⚠️ IQ Option is taking too long. Try again in a moment.' : `❌ Balance fetch failed: ${err instanceof Error ? err.message : 'Unknown error'}`, { reply_markup: backKeyboard() });
+    }
+    finally {
+        _sdk?.shutdown().catch(() => { });
     }
 });
 // ─── Admin ────────────────────────────────────────────────────────────────────
@@ -1599,9 +1605,10 @@ bot.command('pairs', async (ctx) => {
         await ctx.reply('❌ Not connected. Use /connect first.');
         return;
     }
+    let _sdk;
     try {
-        const sdk = await runSdkOp(() => withTimeout(getSdk(ssid), 10_000, 'pairs'));
-        const actives = (await withTimeout(sdk.turboOptions(), 10_000, 'pairs')).getActives();
+        _sdk = await withTimeout(createSdk(ssid), 10_000, 'pairs');
+        const actives = (await withTimeout(_sdk.turboOptions(), 10_000, 'pairs')).getActives();
         const normTicker = (s) => s.toUpperCase().replace(/^front\./i, '').replace(/[-/\s]/g, '');
         const otcNorms = OTC_PAIRS.map(p => normTicker(p));
         let msg = '📋 *Turbo Actives*\n\n';
@@ -1615,6 +1622,9 @@ bot.command('pairs', async (ctx) => {
         const isTimeout = err instanceof Error && err.message.startsWith('SDK timeout');
         await ctx.reply(isTimeout ? '⚠️ IQ Option is taking too long. Try again in a moment.' : `❌ Failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
     }
+    finally {
+        _sdk?.shutdown().catch(() => { });
+    }
 });
 bot.command('ping', ctx => ctx.reply('pong'));
 bot.command('giveaway', async (ctx) => {
@@ -1626,9 +1636,6 @@ bot.command('giveaway', async (ctx) => {
 bot.command('refresh', async (ctx) => {
     const chatId = ctx.chat.id;
     const userId = ctx.from.id;
-    const refreshSsid = getSsidForUser(userId);
-    if (refreshSsid)
-        evictSdk(refreshSsid);
     resetUser(userId);
     balanceCache.delete(userId);
     onboardSessions.delete(chatId);
@@ -2037,18 +2044,23 @@ bot.on('text', async (ctx) => {
             try {
                 const { ssid, sdk } = await withTimeout(loginAndCaptureSsid(email, text), 10_000, 'login');
                 saveUser({ telegram_id: ctx.from.id, ssid });
-                const all = (await withTimeout(sdk.balances(), 5_000, 'balance')).getBalances();
-                const demo = all.find(b => b.type === BalanceType.Demo);
-                const real = all.find(b => b.type === BalanceType.Real);
-                if (real?.currency)
-                    saveUserCurrency(ctx.from.id, real.currency);
-                else if (demo?.currency)
-                    saveUserCurrency(ctx.from.id, demo.currency);
                 let msg = '✅ Connected!\n\n';
-                if (demo)
-                    msg += `🎮 Practice: ${fmtBalance(demo)}\n`;
-                if (real)
-                    msg += `💎 Live: ${fmtBalance(real)}\n`;
+                try {
+                    const all = (await withTimeout(sdk.balances(), 5_000, 'balance')).getBalances();
+                    const demo = all.find(b => b.type === BalanceType.Demo);
+                    const real = all.find(b => b.type === BalanceType.Real);
+                    if (real?.currency)
+                        saveUserCurrency(ctx.from.id, real.currency);
+                    else if (demo?.currency)
+                        saveUserCurrency(ctx.from.id, demo.currency);
+                    if (demo)
+                        msg += `🎮 Practice: ${fmtBalance(demo)}\n`;
+                    if (real)
+                        msg += `💎 Live: ${fmtBalance(real)}\n`;
+                }
+                finally {
+                    sdk.shutdown().catch(() => { });
+                }
                 onboardSessions.delete(chatId);
                 await ctx.reply(msg, { reply_markup: startKeyboard() });
             }
@@ -2091,18 +2103,23 @@ bot.on('text', async (ctx) => {
             try {
                 const { ssid, sdk } = await withTimeout(loginAndCaptureSsid(email, text), 10_000, 'login');
                 saveUser({ telegram_id: ctx.from.id, ssid });
-                const all = (await withTimeout(sdk.balances(), 5_000, 'balance')).getBalances();
-                const demo = all.find(b => b.type === BalanceType.Demo);
-                const real = all.find(b => b.type === BalanceType.Real);
-                if (real?.currency)
-                    saveUserCurrency(ctx.from.id, real.currency);
-                else if (demo?.currency)
-                    saveUserCurrency(ctx.from.id, demo.currency);
                 let msg = '✅ *Connected!*\n\n';
-                if (demo)
-                    msg += `🎮 Practice: ${fmtBalance(demo)}\n`;
-                if (real)
-                    msg += `💎 Live: ${fmtBalance(real)}\n`;
+                try {
+                    const all = (await withTimeout(sdk.balances(), 5_000, 'balance')).getBalances();
+                    const demo = all.find(b => b.type === BalanceType.Demo);
+                    const real = all.find(b => b.type === BalanceType.Real);
+                    if (real?.currency)
+                        saveUserCurrency(ctx.from.id, real.currency);
+                    else if (demo?.currency)
+                        saveUserCurrency(ctx.from.id, demo.currency);
+                    if (demo)
+                        msg += `🎮 Practice: ${fmtBalance(demo)}\n`;
+                    if (real)
+                        msg += `💎 Live: ${fmtBalance(real)}\n`;
+                }
+                finally {
+                    sdk.shutdown().catch(() => { });
+                }
                 await ctx.reply(msg, { parse_mode: 'Markdown' });
             }
             catch (err) {

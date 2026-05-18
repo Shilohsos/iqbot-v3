@@ -27,9 +27,7 @@ export interface TradeResult {
  */
 export declare function executeTradeWithSdk(sdk: ClientSdk, trade: TradeRequest): Promise<TradeResult>;
 /**
- * One-shot trade using the shared SDK pool.
- * Does NOT shut down the SDK — the pool manages the connection lifecycle.
- * Evicts and retries once if the pooled connection is stale.
+ * One-shot trade — fresh connection per call, shut down when done.
  */
 export declare function executeTrade(ssid: string, trade: TradeRequest): Promise<TradeResult>;
 export declare function createSdk(ssid: string): Promise<ClientSdk>;
