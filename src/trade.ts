@@ -8,6 +8,7 @@ import {
 } from './index.js';
 import { WS_URL, PLATFORM_ID, IQ_HOST } from './protocol.js';
 import { insertTrade } from './db.js';
+import { getSdk, evictSdk } from './sdkpool.js';
 
 export interface TradeRequest {
     pair: string;
@@ -106,22 +107,24 @@ export async function executeTradeWithSdk(sdk: ClientSdk, trade: TradeRequest): 
 }
 
 /**
- * Convenience wrapper for one-shot trades.
- * Creates its own SDK connection and shuts it down after the trade.
+ * One-shot trade using the shared SDK pool.
+ * Does NOT shut down the SDK — the pool manages the connection lifecycle.
+ * Evicts and retries once if the pooled connection is stale.
  */
 export async function executeTrade(ssid: string, trade: TradeRequest): Promise<TradeResult> {
     let sdk: ClientSdk;
     try {
-        sdk = await ClientSdk.create(WS_URL, PLATFORM_ID, new SsidAuthMethod(ssid), { host: IQ_HOST });
-    } catch (err: unknown) {
-        if (isTimeoutError(err)) return errorResult(trade, 'Connection timed out');
-        throw err;
+        sdk = await getSdk(ssid);
+    } catch {
+        evictSdk(ssid);
+        try {
+            sdk = await getSdk(ssid);
+        } catch (err: unknown) {
+            if (isTimeoutError(err)) return errorResult(trade, 'Connection timed out');
+            throw err;
+        }
     }
-    try {
-        return await executeTradeWithSdk(sdk, trade);
-    } finally {
-        await sdk.shutdown();
-    }
+    return executeTradeWithSdk(sdk, trade);
 }
 
 export function createSdk(ssid: string): Promise<ClientSdk> {

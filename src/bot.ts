@@ -2,7 +2,7 @@ import 'dotenv/config';
 import { Telegraf, Context } from 'telegraf';
 import { ClientSdk, SsidAuthMethod, BalanceType } from './index.js';
 import { WS_URL, PLATFORM_ID, IQ_HOST, IQ_AUTH_URL } from './protocol.js';
-import { executeTrade, executeTradeWithSdk, createSdk, type TradeRequest, type TradeResult } from './trade.js';
+import { executeTrade, executeTradeWithSdk, type TradeRequest, type TradeResult } from './trade.js';
 import { getSdk, evictSdk, runSdkOp } from './sdkpool.js';
 import {
     getRecentTrades, getTradeStats, getTopTradersToday,
