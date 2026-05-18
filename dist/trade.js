@@ -1,6 +1,7 @@
 import { ClientSdk, SsidAuthMethod, BlitzOptionsDirection, BalanceType, } from './index.js';
 import { WS_URL, PLATFORM_ID, IQ_HOST } from './protocol.js';
 import { insertTrade } from './db.js';
+import { getSdk, evictSdk } from './sdkpool.js';
 const normTicker = (s) => s.toUpperCase().replace(/^front\./i, '').replace(/[-/\s]/g, '');
 /**
  * Runs a single trade on an already-authenticated SDK instance.
@@ -70,25 +71,27 @@ export async function executeTradeWithSdk(sdk, trade) {
     }
 }
 /**
- * Convenience wrapper for one-shot trades.
- * Creates its own SDK connection and shuts it down after the trade.
+ * One-shot trade using the shared SDK pool.
+ * Does NOT shut down the SDK — the pool manages the connection lifecycle.
+ * Evicts and retries once if the pooled connection is stale.
  */
 export async function executeTrade(ssid, trade) {
     let sdk;
     try {
-        sdk = await ClientSdk.create(WS_URL, PLATFORM_ID, new SsidAuthMethod(ssid), { host: IQ_HOST });
+        sdk = await getSdk(ssid);
     }
-    catch (err) {
-        if (isTimeoutError(err))
-            return errorResult(trade, 'Connection timed out');
-        throw err;
+    catch {
+        evictSdk(ssid);
+        try {
+            sdk = await getSdk(ssid);
+        }
+        catch (err) {
+            if (isTimeoutError(err))
+                return errorResult(trade, 'Connection timed out');
+            throw err;
+        }
     }
-    try {
-        return await executeTradeWithSdk(sdk, trade);
-    }
-    finally {
-        await sdk.shutdown();
-    }
+    return executeTradeWithSdk(sdk, trade);
 }
 export function createSdk(ssid) {
     return ClientSdk.create(WS_URL, PLATFORM_ID, new SsidAuthMethod(ssid), { host: IQ_HOST });

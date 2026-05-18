@@ -29,7 +29,7 @@ export declare function topTradersAdminKeyboard(editableEntries?: Array<{
 }>): IKMarkup;
 export declare function activationsKeyboard(pendingUsers: Array<{
     telegram_id: number;
-    username: string | null;
+    username?: string | null;
 }>): IKMarkup;
 export declare function funnelKeyboard(): IKMarkup;
 export declare function giveawayTargetKeyboard(): IKMarkup;

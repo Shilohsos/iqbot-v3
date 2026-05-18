@@ -147,7 +147,7 @@ export function topTradersAdminKeyboard(editableEntries: Array<{ telegram_id: nu
 }
 
 export function activationsKeyboard(
-    pendingUsers: Array<{ telegram_id: number; username: string | null }>
+    pendingUsers: Array<{ telegram_id: number; username?: string | null }>
 ): IKMarkup {
     const rows: Btn[][] = [];
     for (const u of pendingUsers) {
