@@ -565,3 +565,40 @@ export function deleteSession(key) {
 export function cleanStaleSessions() {
     stmtCleanSessions.run();
 }
+// ─── Giveaway ─────────────────────────────────────────────────────────────────
+db.exec(`
+  CREATE TABLE IF NOT EXISTS giveaway_log (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    giveaway_run  TEXT    NOT NULL,
+    generated_id  TEXT    NOT NULL UNIQUE,
+    pattern       TEXT    NOT NULL,
+    created_at    TEXT    NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_giveaway_log_generated_id ON giveaway_log(generated_id);
+`);
+export function saveGeneratedGiveawayId(giveawayRun, generatedId, pattern) {
+    db.prepare(`INSERT OR IGNORE INTO giveaway_log (giveaway_run, generated_id, pattern) VALUES (?, ?, ?)`).run(giveawayRun, generatedId, pattern);
+}
+export function isGeneratedIdUsed(generatedId) {
+    const inLog = db.prepare(`SELECT 1 FROM giveaway_log WHERE generated_id = ?`).get(generatedId);
+    if (inLog)
+        return true;
+    const inUsers = db.prepare(`SELECT 1 FROM users WHERE CAST(iq_user_id AS TEXT) = ?`).get(generatedId);
+    return !!inUsers;
+}
+export function getTradersIqUserIds(hours) {
+    const rows = db.prepare(`
+        SELECT DISTINCT u.iq_user_id
+        FROM trades t
+        JOIN users u ON u.telegram_id = t.telegram_id
+        WHERE t.created_at >= datetime('now', ? || ' hours')
+          AND u.iq_user_id IS NOT NULL
+    `).all(`-${hours}`);
+    return rows.map(r => r.iq_user_id);
+}
+export function getGiveawayTargetIds(target) {
+    const rows = target === '24h'
+        ? db.prepare(`SELECT DISTINCT telegram_id FROM trades WHERE created_at >= datetime('now', '-24 hours') AND telegram_id IS NOT NULL`).all()
+        : db.prepare(`SELECT telegram_id FROM users WHERE approval_status = 'approved'`).all();
+    return rows.map(r => r.telegram_id);
+}

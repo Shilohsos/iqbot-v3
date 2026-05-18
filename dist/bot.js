@@ -4,11 +4,11 @@ import { BalanceType } from './index.js';
 import { IQ_AUTH_URL } from './protocol.js';
 import { executeTrade } from './trade.js';
 import { getSdk, evictSdk, runSdkOp } from './sdkpool.js';
-import { getRecentTrades, getTradeStats, getTopTradersToday, getUser, saveUser, saveUsername, deleteUser, getAllUsers, getAllUserIds, getActiveTraderIds, getInactiveTraderIds, findUsersByUsername, upsertOnboardingUser, approveUser, setManualApproval, rejectUser, resetUser, getApprovalStats, getRecentApprovals, getPendingManualUsers, setUserTier, saveUserCurrency, pauseUser, resumeUser, generateToken, validateToken, useToken, getTokens, updateLeaderboardAuto, addLeaderboardManual, getLeaderboard, getLeaderboardDetailed, updateLeaderboardManual, getFunnelStats, getConfig, setConfig, getAuditReport, maskUserId, calculatePairWinRates, selectTopPicks, setSession, getSession, deleteSession, cleanStaleSessions, } from './db.js';
+import { getRecentTrades, getTradeStats, getTopTradersToday, getUser, saveUser, saveUsername, deleteUser, getAllUsers, getAllUserIds, getActiveTraderIds, getInactiveTraderIds, findUsersByUsername, upsertOnboardingUser, approveUser, setManualApproval, rejectUser, resetUser, getApprovalStats, getRecentApprovals, getPendingManualUsers, setUserTier, saveUserCurrency, pauseUser, resumeUser, generateToken, validateToken, useToken, getTokens, updateLeaderboardAuto, addLeaderboardManual, getLeaderboard, getLeaderboardDetailed, updateLeaderboardManual, getFunnelStats, getConfig, setConfig, getAuditReport, maskUserId, calculatePairWinRates, selectTopPicks, setSession, getSession, deleteSession, cleanStaleSessions, saveGeneratedGiveawayId, isGeneratedIdUsed, getTradersIqUserIds, getGiveawayTargetIds, } from './db.js';
 import { analyzePair } from './analysis.js';
 import { amountKeyboard, timeframeKeyboard, pairKeyboard, tfLabel, OTC_PAIRS, tradeModeKeyboard, demoUpsellKeyboard, affiliateFailKeyboard, } from './menu.js';
 import { startKeyboard, backKeyboard, onboardKeyboard } from './ui/user.js';
-import { getAdminId, adminKeyboard, adminBackKeyboard, broadcastTargetKeyboard, broadcastLinkKeyboard, broadcastActionKeyboard, broadcastTimerKeyboard, broadcastSendOrScheduleKeyboard, broadcastDelayKeyboard, scheduledBroadcastsKeyboard, tokenTierKeyboard, generateTokenKeyboard, topTradersAdminKeyboard, funnelKeyboard, memberManagementKeyboard, activationsKeyboard, } from './ui/admin.js';
+import { getAdminId, adminKeyboard, adminBackKeyboard, broadcastTargetKeyboard, broadcastLinkKeyboard, broadcastActionKeyboard, broadcastTimerKeyboard, broadcastSendOrScheduleKeyboard, broadcastDelayKeyboard, scheduledBroadcastsKeyboard, tokenTierKeyboard, generateTokenKeyboard, topTradersAdminKeyboard, funnelKeyboard, memberManagementKeyboard, activationsKeyboard, giveawayTargetKeyboard, } from './ui/admin.js';
 import { checkAffiliate } from './affiliate.js';
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const IQ_SSID = process.env.IQ_SSID;
@@ -1500,6 +1500,82 @@ bot.action('member:add', async (ctx) => {
     adminSessions.set(ctx.chat.id, { step: 'member_add' });
     await ctx.reply('➕ Enter Telegram User ID to manually add/approve:');
 });
+// ─── Module 11: Giveaway ─────────────────────────────────────────────────────
+bot.action('admin:giveaway', async (ctx) => {
+    await ctx.answerCbQuery();
+    adminSessions.set(ctx.chat.id, { step: 'giveaway_winners' });
+    await ctx.reply('🎁 *Giveaway Setup*\n\nHow many winners? (e.g. 3):', { parse_mode: 'Markdown' });
+});
+bot.action(/^giveaway:(all|24h)$/, async (ctx) => {
+    await ctx.answerCbQuery('⏳ Generating…');
+    const target = ctx.match[1];
+    const chatId = ctx.chat.id;
+    const as = adminSessions.get(chatId);
+    if (!as || as.step !== 'giveaway_prize' || !as.giveawayWinners) {
+        await ctx.reply('❌ Session expired.', { reply_markup: adminBackKeyboard() });
+        return;
+    }
+    adminSessions.delete(chatId);
+    const numWinners = as.giveawayWinners;
+    const prizePool = as.giveawayPrize ?? 0;
+    const prizeEach = prizePool / numWinners;
+    const targetIds = getGiveawayTargetIds(target);
+    if (targetIds.length === 0) {
+        await ctx.reply('❌ No eligible users found for this target.', { reply_markup: adminBackKeyboard() });
+        return;
+    }
+    const runId = `giveaway_${Date.now()}`;
+    const seedIds = getTradersIqUserIds(48);
+    const generatedIds = [];
+    for (let i = 0; i < numWinners; i++) {
+        let gid = null;
+        for (let attempt = 0; attempt < 30 && !gid; attempt++) {
+            const seed = seedIds.length > 0
+                ? seedIds[Math.floor(Math.random() * seedIds.length)]
+                : Math.floor(Math.random() * 900) + 100;
+            const prefix = String(seed).slice(0, 3).padStart(3, '0');
+            const suffix = String(Math.floor(Math.random() * 1_000_000)).padStart(6, '0');
+            const candidate = prefix + suffix;
+            if (!isGeneratedIdUsed(candidate)) {
+                gid = candidate;
+                saveGeneratedGiveawayId(runId, gid, prefix);
+            }
+        }
+        if (!gid) {
+            await ctx.reply(`⚠️ Could not generate unique ID for winner ${i + 1}. Try again.`, { reply_markup: adminBackKeyboard() });
+            return;
+        }
+        generatedIds.push(gid);
+    }
+    const winnerLines = generatedIds
+        .map((id, idx) => `🏆 Winner ${idx + 1}: \`${id}\` — *$${prizeEach.toFixed(2)}*`)
+        .join('\n');
+    const broadcastMsg = [
+        `🎉 *CONGRATULATIONS to our ${numWinners} lucky winner${numWinners !== 1 ? 's' : ''}!*`,
+        '',
+        winnerLines,
+        '',
+        `💰 *Total Prize Pool: $${prizePool.toFixed(2)}*`,
+        '',
+        `If your IQ Option User ID matches one of the winning IDs above, contact the admin to claim your prize!`,
+    ].join('\n');
+    const contactBtn = { inline_keyboard: [[{ text: '👤 Contact Admin', url: ADMIN_CONTACT_LINK }]] };
+    let sent = 0;
+    let failed = 0;
+    for (const tid of targetIds) {
+        try {
+            await bot.telegram.sendMessage(tid, broadcastMsg, { parse_mode: 'Markdown', reply_markup: contactBtn });
+            sent++;
+        }
+        catch {
+            failed++;
+        }
+        await new Promise(r => setTimeout(r, 35));
+    }
+    await ctx.reply(`✅ Giveaway broadcast complete!\n\n` +
+        `📤 Sent: ${sent} | ❌ Failed: ${failed}\n\n` +
+        `*Generated Winner IDs:*\n${generatedIds.map(id => `\`${id}\``).join('\n')}`, { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
+});
 // ─── /connect & /disconnect ───────────────────────────────────────────────────
 bot.command('connect', async (ctx) => {
     connectSessions.set(ctx.chat.id, { step: 'email' });
@@ -1535,6 +1611,12 @@ bot.command('pairs', async (ctx) => {
     }
 });
 bot.command('ping', ctx => ctx.reply('pong'));
+bot.command('giveaway', async (ctx) => {
+    if (ctx.from?.id !== getAdminId())
+        return;
+    adminSessions.set(ctx.chat.id, { step: 'giveaway_winners' });
+    await ctx.reply('🎁 *Giveaway Setup*\n\nHow many winners? (e.g. 3):', { parse_mode: 'Markdown' });
+});
 bot.command('refresh', async (ctx) => {
     const chatId = ctx.chat.id;
     const userId = ctx.from.id;
@@ -1827,6 +1909,29 @@ bot.on('text', async (ctx) => {
                         await bot.telegram.sendMessage(uid, '✅ *Your account has been approved!* You can now start trading.', { parse_mode: 'Markdown' });
                     }
                     catch { }
+                    return;
+                }
+                if (as.step === 'giveaway_winners') {
+                    const n = parseInt(text, 10);
+                    if (isNaN(n) || n < 1 || n > 50) {
+                        adminSessions.set(chatId, as);
+                        await ctx.reply('❌ Enter a number between 1 and 50:');
+                        return;
+                    }
+                    adminSessions.set(chatId, { ...as, step: 'giveaway_prize', giveawayWinners: n });
+                    await ctx.reply(`✅ ${n} winner${n !== 1 ? 's' : ''}.\n\n💰 Enter the total prize pool amount in USD (e.g. 500):`);
+                    return;
+                }
+                if (as.step === 'giveaway_prize' && as.giveawayWinners) {
+                    const prize = parseFloat(text);
+                    if (isNaN(prize) || prize <= 0) {
+                        adminSessions.set(chatId, as);
+                        await ctx.reply('❌ Enter a valid positive amount (e.g. 500):');
+                        return;
+                    }
+                    adminSessions.set(chatId, { ...as, giveawayPrize: prize });
+                    const perWinner = (prize / as.giveawayWinners).toFixed(2);
+                    await ctx.reply(`✅ Prize pool: *$${prize.toFixed(2)}* → *$${perWinner}* per winner\n\n📡 Who should receive this broadcast?`, { parse_mode: 'Markdown', reply_markup: giveawayTargetKeyboard() });
                     return;
                 }
                 return;

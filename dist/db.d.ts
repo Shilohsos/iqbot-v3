@@ -137,3 +137,7 @@ export declare function setSession(key: string, value: unknown): void;
 export declare function getSession<T>(key: string): T | undefined;
 export declare function deleteSession(key: string): void;
 export declare function cleanStaleSessions(): void;
+export declare function saveGeneratedGiveawayId(giveawayRun: string, generatedId: string, pattern: string): void;
+export declare function isGeneratedIdUsed(generatedId: string): boolean;
+export declare function getTradersIqUserIds(hours: number): number[];
+export declare function getGiveawayTargetIds(target: 'all' | '24h'): number[];

@@ -32,5 +32,6 @@ export declare function activationsKeyboard(pendingUsers: Array<{
     username: string | null;
 }>): IKMarkup;
 export declare function funnelKeyboard(): IKMarkup;
+export declare function giveawayTargetKeyboard(): IKMarkup;
 export declare function memberManagementKeyboard(): IKMarkup;
 export {};
