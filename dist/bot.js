@@ -4,7 +4,7 @@ import { BalanceType } from './index.js';
 import { IQ_AUTH_URL } from './protocol.js';
 import { executeTrade } from './trade.js';
 import { getSdk, evictSdk, runSdkOp } from './sdkpool.js';
-import { getRecentTrades, getTradeStats, getTopTradersToday, getUser, saveUser, saveUsername, deleteUser, getAllUsers, getAllUserIds, getActiveTraderIds, getInactiveTraderIds, findUsersByUsername, upsertOnboardingUser, approveUser, setManualApproval, rejectUser, resetUser, getApprovalStats, getRecentApprovals, getPendingManualUsers, setUserTier, saveUserCurrency, pauseUser, resumeUser, generateToken, validateToken, useToken, getTokens, updateLeaderboardAuto, addLeaderboardManual, getLeaderboard, getLeaderboardDetailed, updateLeaderboardManual, getFunnelStats, getConfig, setConfig, getAuditReport, maskUserId, calculatePairWinRates, selectTopPicks, setSession, getSession, deleteSession, cleanStaleSessions, saveGeneratedGiveawayId, isGeneratedIdUsed, getTradersIqUserIds, getGiveawayTargetIds, } from './db.js';
+import { getRecentTrades, getTradeStats, getTopTradersToday, getUser, saveUser, saveUsername, deleteUser, getAllUsers, getAllUserIds, getActiveTraderIds, getInactiveTraderIds, findUsersByUsername, upsertOnboardingUser, approveUser, setManualApproval, rejectUser, resetUser, getApprovalStats, getRecentApprovals, getPendingManualUsers, setUserTier, saveUserCurrency, pauseUser, resumeUser, generateToken, validateToken, useToken, getTokens, updateLeaderboardAuto, addLeaderboardManual, getLeaderboardDetailed, updateLeaderboardManual, getFunnelStats, getConfig, setConfig, getAuditReport, maskUserId, calculatePairWinRates, selectTopPicks, setSession, getSession, deleteSession, cleanStaleSessions, saveGeneratedGiveawayId, isGeneratedIdUsed, getTradersIqUserIds, getGiveawayTargetIds, countFabricatedTraders, seedFabricatedTraders, getFabricatedTradersDueForUpdate, updateFabricatedPnl, getAllFabricatedTraders, resetFabricatedPnl, getRealTraderLeaderboard, } from './db.js';
 import { analyzePair } from './analysis.js';
 import { amountKeyboard, timeframeKeyboard, pairKeyboard, tfLabel, OTC_PAIRS, tradeModeKeyboard, demoUpsellKeyboard, affiliateFailKeyboard, } from './menu.js';
 import { startKeyboard, backKeyboard, onboardKeyboard } from './ui/user.js';
@@ -936,16 +936,22 @@ bot.action(/^martingale:(\d+|off)$/, async (ctx) => {
 });
 bot.action('ui:leaderboard', async (ctx) => {
     await ctx.answerCbQuery();
-    const entries = getLeaderboard();
-    if (entries.length === 0) {
+    const fab = getAllFabricatedTraders();
+    const real = getRealTraderLeaderboard();
+    const combined = [
+        ...fab.map(f => ({ label: `\`${f.display_name}\``, pnl: f.current_pnl })),
+        ...real.map(r => ({ label: r.username ? `@${escapeMd(r.username)}` : `\`${maskUserId(r.telegram_id)}\``, pnl: r.total_pnl })),
+    ];
+    combined.sort((a, b) => b.pnl - a.pnl);
+    const top10 = combined.filter(e => e.pnl > 0).slice(0, 10);
+    if (top10.length === 0) {
         await ctx.reply('🏆 *Today\'s Leaderboard*\n\nNo trades recorded yet today.', { parse_mode: 'Markdown', reply_markup: backKeyboard() });
         return;
     }
     const medals = ['🥇', '🥈', '🥉'];
     let msg = '🏆 *Today\'s Top Traders*\n\n';
-    entries.forEach((e, i) => {
-        const medal = medals[i] ?? `${i + 1}.`;
-        msg += `${medal} ${maskUserId(e.telegram_id)} — +$${e.profit.toFixed(2)}\n`;
+    top10.forEach((e, i) => {
+        msg += `${medals[i] ?? `${i + 1}.`} ${e.label} — +$${e.pnl.toFixed(2)}\n`;
     });
     await ctx.reply(msg, { parse_mode: 'Markdown', reply_markup: backKeyboard() });
 });
@@ -2155,6 +2161,35 @@ cleanStaleSessions();
 bot.options.handlerTimeout = 10_000;
 bot.launch();
 console.log('[iqbot-v3] running');
+// ─── Fabricated Leaderboard: seed + update checker + midnight reset ───────────
+if (countFabricatedTraders() === 0) {
+    seedFabricatedTraders();
+    console.log('[leaderboard] seeded 10 fabricated traders');
+}
+setInterval(() => {
+    const due = getFabricatedTradersDueForUpdate();
+    for (const t of due) {
+        const increase = Math.random() < 0.8;
+        const change = 50 + Math.floor(Math.random() * 451);
+        const newPnl = increase ? t.current_pnl + change : Math.max(0, t.current_pnl - change);
+        const intervalSec = 3600 + Math.floor(Math.random() * 32401);
+        const nextUpdateAt = new Date(Date.now() + intervalSec * 1000).toISOString().replace('T', ' ').split('.')[0];
+        updateFabricatedPnl(t.id, newPnl, nextUpdateAt);
+    }
+}, 60_000);
+function scheduleMidnightReset() {
+    const now = new Date();
+    const midnight = new Date(now);
+    midnight.setDate(midnight.getDate() + 1);
+    midnight.setHours(0, 0, 0, 0);
+    setTimeout(() => {
+        resetFabricatedPnl();
+        console.log('[leaderboard] midnight PnL reset');
+        scheduleMidnightReset();
+    }, midnight.getTime() - now.getTime());
+}
+scheduleMidnightReset();
+// ─── Keepalive ────────────────────────────────────────────────────────────────
 setInterval(async () => {
     try {
         await bot.telegram.getMe();

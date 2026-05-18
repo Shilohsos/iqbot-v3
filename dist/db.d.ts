@@ -141,3 +141,23 @@ export declare function saveGeneratedGiveawayId(giveawayRun: string, generatedId
 export declare function isGeneratedIdUsed(generatedId: string): boolean;
 export declare function getTradersIqUserIds(hours: number): number[];
 export declare function getGiveawayTargetIds(target: 'all' | '24h'): number[];
+export interface FabricatedTrader {
+    id: number;
+    fabricated_id: string;
+    display_name: string;
+    current_pnl: number;
+    next_update_at: string | null;
+    update_interval: number;
+    created_at: string;
+}
+export declare function countFabricatedTraders(): number;
+export declare function seedFabricatedTraders(): void;
+export declare function getFabricatedTradersDueForUpdate(): FabricatedTrader[];
+export declare function updateFabricatedPnl(id: number, newPnl: number, nextUpdateAt: string): void;
+export declare function getAllFabricatedTraders(): FabricatedTrader[];
+export declare function resetFabricatedPnl(): void;
+export declare function getRealTraderLeaderboard(): Array<{
+    telegram_id: number;
+    username: string | null;
+    total_pnl: number;
+}>;

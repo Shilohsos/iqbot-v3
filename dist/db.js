@@ -602,3 +602,80 @@ export function getGiveawayTargetIds(target) {
         : db.prepare(`SELECT telegram_id FROM users WHERE approval_status = 'approved'`).all();
     return rows.map(r => r.telegram_id);
 }
+// ─── Fabricated Traders (Dynamic Leaderboard) ─────────────────────────────────
+db.exec(`
+  CREATE TABLE IF NOT EXISTS fabricated_traders (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    fabricated_id    TEXT    NOT NULL UNIQUE,
+    display_name     TEXT    NOT NULL,
+    current_pnl      REAL    NOT NULL DEFAULT 0,
+    next_update_at   TEXT,
+    update_interval  INTEGER NOT NULL DEFAULT 3600,
+    created_at       TEXT    NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_fab_next_update ON fabricated_traders(next_update_at);
+`);
+export function countFabricatedTraders() {
+    return db.prepare(`SELECT COUNT(*) AS cnt FROM fabricated_traders`).get().cnt;
+}
+export function seedFabricatedTraders() {
+    const seedIds = getTradersIqUserIds(48);
+    const prefixes = seedIds.length > 0
+        ? seedIds.map(id => String(id).slice(0, 3).padStart(3, '0'))
+        : ['182', '511', '447', '329', '613'];
+    for (let i = 0; i < 10; i++) {
+        let fabricatedId = null;
+        for (let attempt = 0; attempt < 30 && !fabricatedId; attempt++) {
+            const prefix = prefixes[Math.floor(Math.random() * prefixes.length)];
+            const suffix = String(Math.floor(Math.random() * 1_000_000)).padStart(6, '0');
+            const candidate = prefix + suffix;
+            const inUsers = db.prepare(`SELECT 1 FROM users WHERE CAST(iq_user_id AS TEXT) = ?`).get(candidate);
+            const inGiveaway = db.prepare(`SELECT 1 FROM giveaway_log WHERE generated_id = ?`).get(candidate);
+            const inFab = db.prepare(`SELECT 1 FROM fabricated_traders WHERE fabricated_id = ?`).get(candidate);
+            if (!inUsers && !inGiveaway && !inFab)
+                fabricatedId = candidate;
+        }
+        if (!fabricatedId)
+            continue;
+        const displayName = `${fabricatedId.slice(0, 3)}***${fabricatedId.slice(-3)}`;
+        const startPnl = 10 + Math.floor(Math.random() * 4991);
+        const intervalSec = 3600 + Math.floor(Math.random() * 32401);
+        const nextUpdateAt = new Date(Date.now() + intervalSec * 1000).toISOString().replace('T', ' ').split('.')[0];
+        db.prepare(`
+            INSERT OR IGNORE INTO fabricated_traders
+                (fabricated_id, display_name, current_pnl, next_update_at, update_interval)
+            VALUES (?, ?, ?, ?, ?)
+        `).run(fabricatedId, displayName, startPnl, nextUpdateAt, intervalSec);
+    }
+}
+export function getFabricatedTradersDueForUpdate() {
+    return db.prepare(`
+        SELECT * FROM fabricated_traders
+        WHERE next_update_at IS NULL OR next_update_at <= datetime('now')
+    `).all();
+}
+export function updateFabricatedPnl(id, newPnl, nextUpdateAt) {
+    db.prepare(`
+        UPDATE fabricated_traders SET current_pnl = ?, next_update_at = ? WHERE id = ?
+    `).run(newPnl, nextUpdateAt, id);
+}
+export function getAllFabricatedTraders() {
+    return db.prepare(`
+        SELECT * FROM fabricated_traders ORDER BY current_pnl DESC
+    `).all();
+}
+export function resetFabricatedPnl() {
+    db.prepare(`UPDATE fabricated_traders SET current_pnl = 0, next_update_at = NULL`).run();
+}
+export function getRealTraderLeaderboard() {
+    const today = new Date().toISOString().split('T')[0];
+    return db.prepare(`
+        SELECT l.telegram_id,
+               u.username,
+               COALESCE(l.manual_profit, l.auto_profit) AS total_pnl
+        FROM leaderboard l
+        LEFT JOIN users u ON u.telegram_id = l.telegram_id
+        WHERE l.date = ?
+        ORDER BY total_pnl DESC
+    `).all(today);
+}
