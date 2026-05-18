@@ -2,8 +2,7 @@ import 'dotenv/config';
 import { Telegraf, Context } from 'telegraf';
 import { ClientSdk, SsidAuthMethod, BalanceType } from './index.js';
 import { WS_URL, PLATFORM_ID, IQ_HOST, IQ_AUTH_URL } from './protocol.js';
-import { executeTrade, executeTradeWithSdk, type TradeRequest, type TradeResult } from './trade.js';
-import { getSdk, evictSdk, runSdkOp } from './sdkpool.js';
+import { executeTrade, executeTradeWithSdk, createSdk, type TradeRequest, type TradeResult } from './trade.js';
 import {
     getRecentTrades, getTradeStats, getTopTradersToday,
     getUser, saveUser, saveUsername, deleteUser, getAllUsers, getAllUserIds,
@@ -370,8 +369,7 @@ async function loginAndCaptureSsid(email: string, password: string): Promise<{ s
     }
     if (data.code !== 'success' || !data.ssid) throw new Error(data.message ?? 'Login failed');
     const ssid = data.ssid;
-    evictSdk(ssid); // ensure a fresh connection for new login
-    const sdk = await runSdkOp(() => getSdk(ssid));
+    const sdk = await createSdk(ssid);
     return { ssid, sdk };
 }
 
@@ -430,8 +428,9 @@ async function sendStartMenu(ctx: Context): Promise<void> {
         const msgId  = sentMsg.message_id;
         const userTier = user.tier ?? undefined;
         setImmediate(async () => {
+            let sdk;
             try {
-                const sdk = await runSdkOp(() => withTimeout(getSdk(ssid!), 3_000, 'balance'));
+                sdk = await withTimeout(createSdk(ssid!), 3_000, 'balance');
                 const all = (await withTimeout(sdk.balances(), 3_000, 'balance')).getBalances();
                 const demo = all.find(b => b.type === BalanceType.Demo);
                 const real = all.find(b => b.type === BalanceType.Real);
@@ -446,7 +445,9 @@ async function sendStartMenu(ctx: Context): Promise<void> {
                     await ctx.telegram.editMessageText(chatId, msgId, undefined, buildMenu(newLine),
                         { reply_markup: startKeyboard(userTier) });
                 }
-            } catch {}
+            } catch {} finally {
+                sdk?.shutdown().catch(() => {});
+            }
         });
     }
 }
@@ -574,7 +575,7 @@ async function runMartingale(
 
         let result: TradeResult;
         try {
-            result = await runSdkOp(() => withTimeout(executeTrade(ssid, roundTrade), roundTimeoutMs, 'trade'));
+            result = await withTimeout(executeTrade(ssid, roundTrade), roundTimeoutMs, 'trade');
         } catch (err: unknown) {
             const errMsg = err instanceof Error ? err.message : 'Unknown error';
             logLines[logLines.length - 1] = `⚡ Trade 1|⚠️ $${currentAmount.toFixed(2)} → error`;
@@ -1139,9 +1140,10 @@ bot.command('balance', async ctx => {
     const uid = ctx.from!.id;
     const ssid = getSsidForUser(uid);
     if (!ssid) { await ctx.reply('❌ Not connected. Use /connect first.', { reply_markup: backKeyboard() }); return; }
+    let _sdk;
     try {
-        const sdk = await runSdkOp(() => withTimeout(getSdk(ssid), 5_000, 'balance'));
-        const all = (await withTimeout(sdk.balances(), 5_000, 'balance')).getBalances();
+        _sdk = await withTimeout(createSdk(ssid), 5_000, 'balance');
+        const all = (await withTimeout(_sdk.balances(), 5_000, 'balance')).getBalances();
         const demo = all.find(b => b.type === BalanceType.Demo);
         const real = all.find(b => b.type === BalanceType.Real);
         if (real?.currency) saveUserCurrency(uid, real.currency);
@@ -1157,6 +1159,8 @@ bot.command('balance', async ctx => {
             isTimeout ? '⚠️ IQ Option is taking too long. Try again in a moment.' : `❌ Balance fetch failed: ${err instanceof Error ? err.message : 'Unknown error'}`,
             { reply_markup: backKeyboard() }
         );
+    } finally {
+        _sdk?.shutdown().catch(() => {});
     }
 });
 
@@ -1763,9 +1767,10 @@ bot.command('disconnect', async ctx => {
 bot.command('pairs', async ctx => {
     const ssid = getSsidForUser(ctx.from!.id);
     if (!ssid) { await ctx.reply('❌ Not connected. Use /connect first.'); return; }
+    let _sdk;
     try {
-        const sdk = await runSdkOp(() => withTimeout(getSdk(ssid), 10_000, 'pairs'));
-        const actives = (await withTimeout(sdk.turboOptions(), 10_000, 'pairs')).getActives();
+        _sdk = await withTimeout(createSdk(ssid), 10_000, 'pairs');
+        const actives = (await withTimeout(_sdk.turboOptions(), 10_000, 'pairs')).getActives();
         const normTicker = (s: string) => s.toUpperCase().replace(/^front\./i, '').replace(/[-/\s]/g, '');
         const otcNorms = OTC_PAIRS.map(p => normTicker(p));
         let msg = '📋 *Turbo Actives*\n\n';
@@ -1777,6 +1782,8 @@ bot.command('pairs', async ctx => {
     } catch (err: unknown) {
         const isTimeout = err instanceof Error && err.message.startsWith('SDK timeout');
         await ctx.reply(isTimeout ? '⚠️ IQ Option is taking too long. Try again in a moment.' : `❌ Failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    } finally {
+        _sdk?.shutdown().catch(() => {});
     }
 });
 
@@ -1791,8 +1798,6 @@ bot.command('giveaway', async ctx => {
 bot.command('refresh', async ctx => {
     const chatId = ctx.chat.id;
     const userId = ctx.from!.id;
-    const refreshSsid = getSsidForUser(userId);
-    if (refreshSsid) evictSdk(refreshSsid);
     resetUser(userId);
     balanceCache.delete(userId);
     onboardSessions.delete(chatId);
@@ -2184,14 +2189,18 @@ bot.on('text', async ctx => {
             try {
                 const { ssid, sdk } = await withTimeout(loginAndCaptureSsid(email, text), 10_000, 'login');
                 saveUser({ telegram_id: ctx.from!.id, ssid });
-                const all = (await withTimeout(sdk.balances(), 5_000, 'balance')).getBalances();
-                const demo = all.find(b => b.type === BalanceType.Demo);
-                const real = all.find(b => b.type === BalanceType.Real);
-                if (real?.currency) saveUserCurrency(ctx.from!.id, real.currency);
-                else if (demo?.currency) saveUserCurrency(ctx.from!.id, demo.currency);
                 let msg = '✅ Connected!\n\n';
-                if (demo) msg += `🎮 Practice: ${fmtBalance(demo)}\n`;
-                if (real) msg += `💎 Live: ${fmtBalance(real)}\n`;
+                try {
+                    const all = (await withTimeout(sdk.balances(), 5_000, 'balance')).getBalances();
+                    const demo = all.find(b => b.type === BalanceType.Demo);
+                    const real = all.find(b => b.type === BalanceType.Real);
+                    if (real?.currency) saveUserCurrency(ctx.from!.id, real.currency);
+                    else if (demo?.currency) saveUserCurrency(ctx.from!.id, demo.currency);
+                    if (demo) msg += `🎮 Practice: ${fmtBalance(demo)}\n`;
+                    if (real) msg += `💎 Live: ${fmtBalance(real)}\n`;
+                } finally {
+                    sdk.shutdown().catch(() => {});
+                }
                 onboardSessions.delete(chatId);
                 await ctx.reply(msg, { reply_markup: startKeyboard() });
             } catch (err: unknown) {
@@ -2232,14 +2241,18 @@ bot.on('text', async ctx => {
             try {
                 const { ssid, sdk } = await withTimeout(loginAndCaptureSsid(email, text), 10_000, 'login');
                 saveUser({ telegram_id: ctx.from!.id, ssid });
-                const all = (await withTimeout(sdk.balances(), 5_000, 'balance')).getBalances();
-                const demo = all.find(b => b.type === BalanceType.Demo);
-                const real = all.find(b => b.type === BalanceType.Real);
-                if (real?.currency) saveUserCurrency(ctx.from!.id, real.currency);
-                else if (demo?.currency) saveUserCurrency(ctx.from!.id, demo.currency);
                 let msg = '✅ *Connected!*\n\n';
-                if (demo) msg += `🎮 Practice: ${fmtBalance(demo)}\n`;
-                if (real) msg += `💎 Live: ${fmtBalance(real)}\n`;
+                try {
+                    const all = (await withTimeout(sdk.balances(), 5_000, 'balance')).getBalances();
+                    const demo = all.find(b => b.type === BalanceType.Demo);
+                    const real = all.find(b => b.type === BalanceType.Real);
+                    if (real?.currency) saveUserCurrency(ctx.from!.id, real.currency);
+                    else if (demo?.currency) saveUserCurrency(ctx.from!.id, demo.currency);
+                    if (demo) msg += `🎮 Practice: ${fmtBalance(demo)}\n`;
+                    if (real) msg += `💎 Live: ${fmtBalance(real)}\n`;
+                } finally {
+                    sdk.shutdown().catch(() => {});
+                }
                 await ctx.reply(msg, { parse_mode: 'Markdown' });
             } catch (err: unknown) {
                 const isTimeout = err instanceof Error && err.message.startsWith('SDK timeout');

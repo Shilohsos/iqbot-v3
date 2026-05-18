@@ -1,5 +1,4 @@
-import { ClientSdk } from './index.js';
-import { getSdk, evictSdk } from './sdkpool.js';
+import { createSdk } from './trade.js';
 
 export interface AnalysisResult {
     direction: 'call' | 'put';
@@ -8,14 +7,8 @@ export interface AnalysisResult {
 }
 
 export async function analyzePair(ssid: string, pair: string, timeframeSec: number): Promise<AnalysisResult> {
-    let sdk: ClientSdk;
+    const sdk = await createSdk(ssid);
     try {
-        sdk = await getSdk(ssid);
-    } catch {
-        evictSdk(ssid);
-        sdk = await getSdk(ssid);
-    }
-
     const turboOptions = await sdk.turboOptions();
     const normTicker = (s: string) => s.toUpperCase().replace(/^front\./i, '').replace(/[-/\s]/g, '');
     const normalizedInput = normTicker(pair);
@@ -45,6 +38,9 @@ export async function analyzePair(ssid: string, pair: string, timeframeSec: numb
     const reason = `${sentiment} (+${bullishScore}%) | RSI ${rsi.toFixed(1)}, ${crossStr}`;
 
     return { direction, confidence: bullishScore, reason };
+    } finally {
+        await sdk.shutdown();
+    }
 }
 
 function computeRSI(closes: number[], period: number): number {
