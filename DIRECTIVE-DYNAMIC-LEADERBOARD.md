@@ -52,6 +52,13 @@ export function countFabricatedTraders(): number;
 ### Every midnight (cron-style check)
 Don't regenerate — fabricated IDs persist across days. Only seed if the table is empty.
 
+### Daily reset at midnight (12am)
+At midnight every day:
+- Fabricated **IDs persist** (same IDs stay day after day — they don't get regenerated)
+- But **PnL resets** — all fabricated traders' `current_pnl` goes back to 0
+- After reset, the update checker picks up and starts assigning random PnL again (as if a new trading day started)
+- This keeps the leaderboard fresh daily while maintaining consistent "traders"
+
 ### Update checker (runs every 60 seconds via setInterval)
 1. `getFabricatedTradersDueForUpdate()` — finds entries where `next_update_at < datetime('now')`
 2. For each:
