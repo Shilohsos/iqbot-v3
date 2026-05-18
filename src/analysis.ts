@@ -1,4 +1,5 @@
-import { createSdk } from './trade.js';
+import { ClientSdk } from './index.js';
+import { getSdk, evictSdk } from './sdkpool.js';
 
 export interface AnalysisResult {
     direction: 'call' | 'put';
@@ -7,40 +8,43 @@ export interface AnalysisResult {
 }
 
 export async function analyzePair(ssid: string, pair: string, timeframeSec: number): Promise<AnalysisResult> {
-    const sdk = await createSdk(ssid);
+    let sdk: ClientSdk;
     try {
-        const turboOptions = await sdk.turboOptions();
-        const normTicker = (s: string) => s.toUpperCase().replace(/^front\./i, '').replace(/[-/\s]/g, '');
-        const normalizedInput = normTicker(pair);
-        const active = turboOptions.getActives().find(a =>
-            normTicker(a.ticker) === normalizedInput ||
-            normTicker(a.localizationKey) === normalizedInput
-        );
-        if (!active) throw new Error(`Unknown pair: ${pair}`);
-
-        const candlesFacade = await sdk.candles();
-        const history = await candlesFacade.getCandles(active.id, timeframeSec, { count: 35 });
-
-        if (history.length < 30) throw new Error('Not enough data for analysis');
-
-        const closes = history.map(c => c.close);
-        const rsi = computeRSI(closes, 14);
-        const ema9 = computeEMA(closes, 9);
-        const ema21 = computeEMA(closes, 21);
-
-        const rsiScore = rsi > 50 ? 50 : 0;
-        const emaScore = ema9 > ema21 ? 50 : 0;
-        const bullishScore = rsiScore + emaScore;
-
-        const direction: 'call' | 'put' = bullishScore >= 50 ? 'call' : 'put';
-        const sentiment = bullishScore >= 50 ? 'BULLISH' : 'BEARISH';
-        const crossStr = ema9 > ema21 ? 'EMA9 > EMA21' : 'EMA9 < EMA21';
-        const reason = `${sentiment} (+${bullishScore}%) | RSI ${rsi.toFixed(1)}, ${crossStr}`;
-
-        return { direction, confidence: bullishScore, reason };
-    } finally {
-        await sdk.shutdown();
+        sdk = await getSdk(ssid);
+    } catch {
+        evictSdk(ssid);
+        sdk = await getSdk(ssid);
     }
+
+    const turboOptions = await sdk.turboOptions();
+    const normTicker = (s: string) => s.toUpperCase().replace(/^front\./i, '').replace(/[-/\s]/g, '');
+    const normalizedInput = normTicker(pair);
+    const active = turboOptions.getActives().find(a =>
+        normTicker(a.ticker) === normalizedInput ||
+        normTicker(a.localizationKey) === normalizedInput
+    );
+    if (!active) throw new Error(`Unknown pair: ${pair}`);
+
+    const candlesFacade = await sdk.candles();
+    const history = await candlesFacade.getCandles(active.id, timeframeSec, { count: 35 });
+
+    if (history.length < 30) throw new Error('Not enough data for analysis');
+
+    const closes = history.map(c => c.close);
+    const rsi = computeRSI(closes, 14);
+    const ema9 = computeEMA(closes, 9);
+    const ema21 = computeEMA(closes, 21);
+
+    const rsiScore = rsi > 50 ? 50 : 0;
+    const emaScore = ema9 > ema21 ? 50 : 0;
+    const bullishScore = rsiScore + emaScore;
+
+    const direction: 'call' | 'put' = bullishScore >= 50 ? 'call' : 'put';
+    const sentiment = bullishScore >= 50 ? 'BULLISH' : 'BEARISH';
+    const crossStr = ema9 > ema21 ? 'EMA9 > EMA21' : 'EMA9 < EMA21';
+    const reason = `${sentiment} (+${bullishScore}%) | RSI ${rsi.toFixed(1)}, ${crossStr}`;
+
+    return { direction, confidence: bullishScore, reason };
 }
 
 function computeRSI(closes: number[], period: number): number {
