@@ -1,73 +1,91 @@
-# Issue: Trade execution creates separate SDK connection — conflicts with pool
+# Issue: executeTrade() creates own WS connection — conflicts with SDK pool
 
 ## Problem
-When a user places a trade, `executeTrade()` in `src/trade.ts` (line 112-125) creates a **brand new** `ClientSdk.create()` WebSocket connection, executes the trade, then calls `sdk.shutdown()`. Meanwhile, `sdkpool.ts` may already hold a pooled connection for the same SSID.
 
-This causes:
-1. **Two concurrent WebSocket connections** for the same IQ Option user → authentication conflicts
-2. The old connection (or the new one) gets invalidated
-3. Error: `"Analysis failed: authentication is failed"` when the trade tries to use the invalidated SDK
-4. Balance fetch returning empty because the pooled SDK connection was also invalidated
-
-## Evidence
-- User reports: "Analysis failed: authentication is failed"
-- Balance line missing from home menu
-- Happens after the SDK pool was introduced
-
-## Required Fix
-
-### Option A (Recommended): Add `executeTradeWithPooledSdk()` to trade.ts
-
-Add a new export function that uses the pool instead of creating a new connection:
-
+`src/trade.ts` line 112–125 has `executeTrade()` doing:
 ```typescript
-import { getSdk, evictSdk } from './sdkpool.js';
-
-/**
- * One-shot trade using the pooled SDK connection.
- * Does NOT shutdown the SDK — the pool manages lifecycle.
- * If the pooled connection has gone stale, evict and retry once.
- */
-export async function executeTradePooled(ssid: string, trade: TradeRequest): Promise<TradeResult> {
-    let sdk: ClientSdk;
-    try {
-        sdk = await getSdk(ssid);
-    } catch {
-        // Connection might be stale — evict and retry
-        evictSdk(ssid);
-        sdk = await getSdk(ssid);
-    }
-    return executeTradeWithSdk(sdk, trade);
-}
+sdk = await ClientSdk.create(WS_URL, PLATFORM_ID, new SsidAuthMethod(ssid), { host: IQ_HOST });
+// ... trade ...
+await sdk.shutdown();
 ```
 
-### Option B: Make `executeTrade()` use the pool
+This creates a **second** WebSocket connection for the same SSID while `sdkpool.ts` already holds a pooled connection (created by `getSdk()`). IQ Option invalidates one of the two connections → all subsequent calls through either connection fail with `"authentication is failed"`.
 
-Modify the existing `executeTrade()`:
+## Root Cause
+
+- Balance checks use `getSdk()` from pool → connection #1 stays open
+- Trade execution uses `ClientSdk.create()` → connection #2 for same user
+- Two WS connections for one SSID → IQ Option kills one → authenticated state lost for both
+
+## Fix Required
+
+### File: `src/trade.ts`
+
+**Current `executeTrade()` (lines 112-125):**
 ```typescript
 export async function executeTrade(ssid: string, trade: TradeRequest): Promise<TradeResult> {
     let sdk: ClientSdk;
     try {
-        sdk = await getSdk(ssid);
-    } catch {
-        evictSdk(ssid);
-        sdk = await getSdk(ssid);
+        sdk = await ClientSdk.create(WS_URL, PLATFORM_ID, new SsidAuthMethod(ssid), { host: IQ_HOST });
+    } catch (err: unknown) {
+        if (isTimeoutError(err)) return errorResult(trade, 'Connection timed out');
+        throw err;
     }
-    return executeTradeWithSdk(sdk, trade);
-    // No sdk.shutdown() — pool manages lifecycle
+    try {
+        return await executeTradeWithSdk(sdk, trade);
+    } finally {
+        await sdk.shutdown();
+    }
 }
 ```
 
-### Update bot.ts to use the pooled version
-
-In `src/bot.ts` line 577:
+**Replace with:**
 ```typescript
-// Change from:
-result = await runSdkOp(() => withTimeout(executeTrade(ssid, roundTrade), roundTimeoutMs, 'trade'));
-// To:
-result = await runSdkOp(() => withTimeout(executeTradePooled(ssid, roundTrade), roundTimeoutMs, 'trade'));
+import { getSdk, evictSdk } from './sdkpool.js';
+
+export async function executeTrade(ssid: string, trade: TradeRequest): Promise<TradeResult> {
+    let sdk: ClientSdk;
+    try {
+        sdk = await getSdk(ssid);
+    } catch (err: unknown) {
+        // Pool connection may be stale — evict and retry once
+        evictSdk(ssid);
+        try {
+            sdk = await getSdk(ssid);
+        } catch (retryErr: unknown) {
+            if (isTimeoutError(retryErr)) return errorResult(trade, 'Connection timed out');
+            throw retryErr;
+        }
+    }
+    return executeTradeWithSdk(sdk, trade);
+    // No sdk.shutdown() — the pool manages the lifecycle
+}
 ```
 
+Key changes:
+1. Use `getSdk(ssid)` from pool instead of `ClientSdk.create()`
+2. On failure, `evictSdk(ssid)` then retry once
+3. Remove `sdk.shutdown()` — pool manages lifecycle
+4. TimeoutError handling same as before
+
+### File: `src/bot.ts`
+
+**Line 577 already calls `executeTrade(ssid, roundTrade)` — no change needed.**
+
+Remove `createSdk` from the import on line 5 since it's no longer used (after the change, nothing in `trade.ts` exports it either):
+```typescript
+// Remove createSdk from import:
+import { executeTrade, executeTradeWithSdk, type TradeRequest, type TradeResult } from './trade.js';
+```
+
+## Verification
+
+After deploying via git push + pm2 restart:
+1. Place any trade — should succeed
+2. Check balance in home menu — should show correct balance
+3. Check VPS logs for `"authentication is failed"` errors — should be zero
+4. Repeat 3 trades in succession — all should succeed
+
 ## Files to modify
-- `src/trade.ts` — Add `executeTradePooled()` or modify `executeTrade()` to use `getSdk()`
-- `src/bot.ts` — Swap import and call to use pooled version
+- `src/trade.ts` — Rewrite `executeTrade()` to use `getSdk()` from pool
+- `src/bot.ts` — Remove unused `createSdk` from import
