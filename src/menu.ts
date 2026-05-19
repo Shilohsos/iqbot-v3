@@ -72,15 +72,6 @@ export function tfLabel(timeframeSec: number): string {
     return '15m';
 }
 
-export function tierKeyboard(): IKMarkup {
-    return {
-        inline_keyboard: [
-            [{ text: '🧪 DEMO — try the bot risk-free', callback_data: 'tier:demo' }],
-            [{ text: '🚀 Newbie — trade with $20+ capital', callback_data: 'tier:newbie' }],
-            [{ text: '⚡ PRO — trade with $100+ capital', callback_data: 'tier:pro' }],
-        ],
-    };
-}
 
 export function hasAccountKeyboard(): IKMarkup {
     return {

@@ -24,7 +24,7 @@ import {
 import { analyzePair, type AnalysisResult } from './analysis.js';
 import {
     amountKeyboard, timeframeKeyboard, pairKeyboard, tfLabel, OTC_PAIRS,
-    tierKeyboard, tradeModeKeyboard, demoUpsellKeyboard, affiliateFailKeyboard,
+    tradeModeKeyboard, demoUpsellKeyboard, affiliateFailKeyboard,
 } from './menu.js';
 import { startKeyboard, backKeyboard, onboardKeyboard } from './ui/user.js';
 import {
@@ -729,18 +729,6 @@ async function showDemoUpsell(ctx: Context, messageIds: number[]): Promise<void>
 
 bot.command('start', sendStartMenu);
 
-// ─── Tier selection ───────────────────────────────────────────────────────────
-
-bot.action(/^tier:(demo|newbie|pro)$/, async ctx => {
-    const tier = ctx.match[1].toUpperCase();
-    await ctx.answerCbQuery(`✅ ${tier} selected`);
-    const chatId = ctx.chat!.id;
-    const existing = onboardSessions.get(chatId) ?? { step: 'user_id' as OnboardStep };
-    onboardSessions.set(chatId, { ...existing, tier });
-    const dbUser = getUser(ctx.from!.id);
-    if (dbUser) setUserTier(ctx.from!.id, tier);
-});
-
 // ─── Account connection choice ────────────────────────────────────────────────
 
 bot.action('onboard:yes', async ctx => {
@@ -891,7 +879,9 @@ bot.action(/^pair:(.+)$/, async ctx => {
     // Heavy SDK call — progress message is already visible, no dead silence
     let analysis: AnalysisResult;
     try {
-        analysis = await analyzePair(ssid, pair, timeframe);
+        const analysisUser = getUser(ctx.from!.id);
+        const analysisTier = (analysisUser?.tier ?? 'NEWBIE').toUpperCase();
+        analysis = await analyzePair(ssid, pair, timeframe, analysisTier);
     } catch (err: unknown) {
         if (l7MsgId) { try { await ctx.telegram.deleteMessage(chatId, l7MsgId); } catch {} }
         await ctx.telegram.editMessageText(
@@ -1020,7 +1010,7 @@ bot.action('ui:upgrade', async ctx => {
     upgradeSessions.add(ctx.chat!.id);
     await ctx.reply(
         `💡 *Upgrade Your Tier*\n\n` +
-        `Enter your upgrade token below to unlock NEWBIE or PRO tier.\n\n` +
+        `Enter your upgrade token below to unlock *PRO* tier. ⚡\n\n` +
         `Don't have a token? Contact support to get your token.`,
         { parse_mode: 'Markdown', reply_markup: backKeyboard() }
     );

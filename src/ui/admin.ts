@@ -121,9 +121,8 @@ export function broadcastTimerKeyboard(): IKMarkup {
 export function tokenTierKeyboard(): IKMarkup {
     return {
         inline_keyboard: [
-            [{ text: '🚀 Newbie Tier', callback_data: 'token_tier:NEWBIE' }],
-            [{ text: '⚡ PRO Tier',    callback_data: 'token_tier:PRO' }],
-            [{ text: '🔙 Admin Menu',  callback_data: 'admin:back' }],
+            [{ text: '⚡ PRO Tier',   callback_data: 'token_tier:PRO' }],
+            [{ text: '🔙 Admin Menu', callback_data: 'admin:back' }],
         ],
     };
 }
