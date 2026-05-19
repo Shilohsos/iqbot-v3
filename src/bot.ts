@@ -2310,6 +2310,12 @@ bot.catch((err: unknown, ctx) => {
                 '⏳ *Request timed out*\n\nThis can happen under heavy load. Please try again.\n\nSend /start to restart.',
                 { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [[{ text: '🏠 Start Over', callback_data: 'ui:start' }]] } }
             ).catch(() => {});
+            if (ctx.from?.id) {
+                wizardSessions.delete(ctx.chat!.id);
+                const prev = activeTradeSessions.get(ctx.from.id) ?? 1;
+                if (prev <= 1) activeTradeSessions.delete(ctx.from.id);
+                else activeTradeSessions.set(ctx.from.id, prev - 1);
+            }
         }
     } else {
         ctx.reply('⚠️ Something went wrong. Please try again.').catch(() => {});
@@ -2317,7 +2323,6 @@ bot.catch((err: unknown, ctx) => {
 });
 
 cleanStaleSessions();
-(bot as any).options.handlerTimeout = 30_000;
 bot.launch();
 console.log('[iqbot-v3] running');
 
