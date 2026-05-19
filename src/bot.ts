@@ -57,6 +57,15 @@ bot.use(async (ctx, next) => {
     return next();
 });
 
+bot.use(async (ctx, next) => {
+    if (!ctx.callbackQuery) return next();
+    const start = Date.now();
+    const label = (ctx.callbackQuery as { data?: string }).data?.substring(0, 20) ?? 'unknown';
+    await next();
+    const elapsed = Date.now() - start;
+    if (elapsed > 3000) console.log(`[slow] callback ${label}: ${elapsed}ms`);
+});
+
 const MAX_ROUNDS       = 6;
 const ROUND_COOLDOWN_MS = 5_000;
 
@@ -1011,8 +1020,16 @@ bot.action('ui:upgrade', async ctx => {
     await ctx.reply(
         `💡 *Upgrade Your Tier*\n\n` +
         `Enter your upgrade token below to unlock *PRO* tier. ⚡\n\n` +
-        `Don't have a token? Contact support to get your token.`,
-        { parse_mode: 'Markdown', reply_markup: backKeyboard() }
+        `Don't have a token? Tap the button below to contact support.`,
+        {
+            parse_mode: 'Markdown',
+            reply_markup: {
+                inline_keyboard: [
+                    [{ text: '👤 Contact Support', url: ADMIN_CONTACT_LINK }],
+                    [{ text: '🔙 Back', callback_data: 'ui:start' }],
+                ],
+            },
+        }
     );
 });
 
@@ -2288,13 +2305,19 @@ bot.catch((err: unknown, ctx) => {
     }
     if (ctx.callbackQuery) {
         ctx.answerCbQuery('⚠️ Error occurred. Try again.').catch(() => {});
+        if (msg.includes('timed out')) {
+            ctx.reply(
+                '⏳ *Request timed out*\n\nThis can happen under heavy load. Please try again.\n\nSend /start to restart.',
+                { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [[{ text: '🏠 Start Over', callback_data: 'ui:start' }]] } }
+            ).catch(() => {});
+        }
     } else {
         ctx.reply('⚠️ Something went wrong. Please try again.').catch(() => {});
     }
 });
 
 cleanStaleSessions();
-(bot as any).options.handlerTimeout = 10_000;
+(bot as any).options.handlerTimeout = 30_000;
 bot.launch();
 console.log('[iqbot-v3] running');
 
