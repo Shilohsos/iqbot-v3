@@ -884,9 +884,16 @@ bot.action(/^pair:(.+)$/, async ctx => {
     let l7MsgId: number | undefined;
     try { const m = await ctx.replyWithPhoto(ASSET('L7.png')); l7MsgId = m.message_id; } catch {}
     const progressMsg = await ctx.reply(
-        `Selected: ${pair}\n\n🔍 Scanning markets...\n⏱ This takes about 10–30 seconds...`
+        `Selected: ${pair}\n\n🔌 Connecting to IQ Option...\n⏱ May take 1–2 minutes...`
     );
     preTradeMessageIds.push(progressMsg.message_id);
+
+    const keepAlive = setInterval(() => {
+        ctx.telegram.editMessageText(
+            chatId, progressMsg.message_id, undefined,
+            `Selected: ${pair}\n\n🔄 Still connecting...\n⏱ Hold on, almost there..`
+        ).catch(() => {});
+    }, 30_000);
 
     // Create ONE SDK connection — shared across analysis + all martingale rounds
     let sdk: ClientSdk;
@@ -897,12 +904,18 @@ bot.action(/^pair:(.+)$/, async ctx => {
                 setTimeout(() => reject(new Error('Connection timed out')), 120_000)
             ),
         ]);
+        clearInterval(keepAlive);
+        await ctx.telegram.editMessageText(
+            chatId, progressMsg.message_id, undefined,
+            `✅ Connected! Analyzing market data for ${pair}...`
+        ).catch(() => {});
     } catch (err: unknown) {
+        clearInterval(keepAlive);
         if (l7MsgId) { try { await ctx.telegram.deleteMessage(chatId, l7MsgId); } catch {} }
         await ctx.telegram.editMessageText(
             chatId, progressMsg.message_id, undefined,
-            `❌ Could not connect to IQ Option: ${err instanceof Error ? err.message : 'Unknown error'}`
-        ).catch(() => ctx.reply('❌ Could not connect to IQ Option. Try again.'));
+            `❌ IQ Option server took too long to respond.\n\nTry again in a few minutes. If this keeps happening, check your connection or contact support.`
+        ).catch(() => ctx.reply('❌ IQ Option server took too long to respond. Please try again.'));
         return;
     }
 
@@ -925,7 +938,7 @@ bot.action(/^pair:(.+)$/, async ctx => {
         if (l7MsgId) { try { await ctx.telegram.deleteMessage(chatId, l7MsgId); } catch {} }
         await ctx.telegram.editMessageText(
             chatId, progressMsg.message_id, undefined,
-            `✅ Market scanned — signal found for ${pair}`
+            `✅ Market scanned — signal found`
         ).catch(() => {});
 
         const l8 = await ctx.replyWithPhoto(ASSET('L8.png')).catch(() => undefined);
