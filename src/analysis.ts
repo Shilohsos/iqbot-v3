@@ -15,7 +15,7 @@ export async function analyzePair(ssid: string, pair: string, timeframeSec: numb
     const sdk = await Promise.race([
         createSdk(ssid),
         new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error('Analysis SDK connection timed out')), 120_000)
+            setTimeout(() => reject(new Error('Analysis SDK connection timed out')), 180_000)
         ),
     ]);
     try {

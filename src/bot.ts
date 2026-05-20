@@ -543,7 +543,7 @@ async function runMartingale(
     activeTradeSessions.set(userId, (activeTradeSessions.get(userId) ?? 0) + 1);
     try {
     const runId = crypto.randomUUID();
-    const roundTimeoutMs = (timeframeSec + 90) * 1000 + 120_000;
+    const roundTimeoutMs = (timeframeSec + 90) * 1000 + 180_000;
     let currentAmount = amount;
     let totalPnl = 0;
     const logLines: string[] = ['✦ Trade session initialized…'];
@@ -901,7 +901,7 @@ bot.action(/^pair:(.+)$/, async ctx => {
         sdk = await Promise.race([
             createSdk(ssid),
             new Promise<never>((_, reject) =>
-                setTimeout(() => reject(new Error('Connection timed out')), 120_000)
+                setTimeout(() => reject(new Error('Connection timed out')), 180_000)
             ),
         ]);
         clearInterval(keepAlive);

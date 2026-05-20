@@ -114,7 +114,7 @@ export async function executeTrade(ssid: string, trade: TradeRequest): Promise<T
         sdk = await Promise.race([
             ClientSdk.create(WS_URL, PLATFORM_ID, new SsidAuthMethod(ssid), { host: IQ_HOST }),
             new Promise<never>((_, reject) =>
-                setTimeout(() => reject(new Error('Connection timed out')), 120_000)
+                setTimeout(() => reject(new Error('Connection timed out')), 180_000)
             ),
         ]);
     } catch (err: unknown) {
