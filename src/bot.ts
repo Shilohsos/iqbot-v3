@@ -884,25 +884,35 @@ bot.action(/^pair:(.+)$/, async ctx => {
     let l7MsgId: number | undefined;
     try { const m = await ctx.replyWithPhoto(ASSET('L7.png')); l7MsgId = m.message_id; } catch {}
     const progressMsg = await ctx.reply(
-        `Selected: ${pair}\n\n🔍 Scanning markets...\n⏱ This takes about 10–30 seconds...`
+        `Selected: ${pair}\n\n🔄 Connecting to IQ Option...\n⏱ May take 1–2 minutes..`
     );
     preTradeMessageIds.push(progressMsg.message_id);
 
     // Create ONE SDK connection — shared across analysis + all martingale rounds
     let sdk: ClientSdk;
     try {
+        // Periodic "still working" update so user knows bot isn't frozen
+        const keepAlive = setInterval(async () => {
+            try {
+                await ctx.telegram.editMessageText(
+                    chatId, progressMsg.message_id, undefined,
+                    `Selected: ${pair}\n\n🔄 Still connecting to IQ Option...\n⏱ This can take a moment — hold on..\n━━━━━━━◉━━━━━━━━━`
+                ).catch(() => {});
+            } catch {}
+        }, 30_000);
         sdk = await Promise.race([
             createSdk(ssid),
             new Promise<never>((_, reject) =>
                 setTimeout(() => reject(new Error('Connection timed out')), 120_000)
             ),
         ]);
+        clearInterval(keepAlive);
     } catch (err: unknown) {
         if (l7MsgId) { try { await ctx.telegram.deleteMessage(chatId, l7MsgId); } catch {} }
         await ctx.telegram.editMessageText(
             chatId, progressMsg.message_id, undefined,
-            `❌ Could not connect to IQ Option: ${err instanceof Error ? err.message : 'Unknown error'}`
-        ).catch(() => ctx.reply('❌ Could not connect to IQ Option. Try again.'));
+            `❌ Connection timed out.\n\nIQ Option server took too long to respond. Try again in a few minutes.\n\nIf this keeps happening, check your internet or contact support.`
+        ).catch(() => ctx.reply('❌ Connection timed out. Try again.'));
         return;
     }
 
