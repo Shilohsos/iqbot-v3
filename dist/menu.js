@@ -66,6 +66,15 @@ export function tfLabel(timeframeSec) {
         return '5m';
     return '15m';
 }
+export function tierKeyboard() {
+    return {
+        inline_keyboard: [
+            [{ text: '🧪 DEMO — try the bot risk-free', callback_data: 'tier:demo' }],
+            [{ text: '🚀 Newbie — trade with $20+ capital', callback_data: 'tier:newbie' }],
+            [{ text: '⚡ PRO — trade with $100+ capital', callback_data: 'tier:pro' }],
+        ],
+    };
+}
 export function hasAccountKeyboard() {
     return {
         inline_keyboard: [
