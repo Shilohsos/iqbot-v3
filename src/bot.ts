@@ -47,7 +47,7 @@ if (!BOT_TOKEN) throw new Error('BOT_TOKEN missing from .env');
 
 process.on('unhandledRejection', (reason) => { console.error('[unhandledRejection]', reason); });
 
-const bot = new Telegraf(BOT_TOKEN, { handlerTimeout: 0 });
+const bot = new Telegraf(BOT_TOKEN, { handlerTimeout: Infinity });
 
 // Save Telegram username on every interaction
 bot.use(async (ctx, next) => {
