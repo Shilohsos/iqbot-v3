@@ -1,9 +1,14 @@
 import { createSdk } from './trade.js';
+import type { ClientSdk } from './index.js';
 
 export interface AnalysisResult {
     direction: 'call' | 'put';
     confidence: number;
     reason: string;
+}
+
+export async function analyzePairWithSdk(sdk: ClientSdk, pair: string, timeframeSec: number, tier = 'NEWBIE'): Promise<AnalysisResult> {
+    return runAnalysis(sdk, pair, timeframeSec, tier);
 }
 
 export async function analyzePair(ssid: string, pair: string, timeframeSec: number, tier = 'NEWBIE'): Promise<AnalysisResult> {
@@ -14,6 +19,13 @@ export async function analyzePair(ssid: string, pair: string, timeframeSec: numb
         ),
     ]);
     try {
+        return await runAnalysis(sdk, pair, timeframeSec, tier);
+    } finally {
+        await sdk.shutdown();
+    }
+}
+
+async function runAnalysis(sdk: ClientSdk, pair: string, timeframeSec: number, tier: string): Promise<AnalysisResult> {
     const turboOptions = await sdk.turboOptions();
     const normTicker = (s: string) => s.toUpperCase().replace(/^front\./i, '').replace(/[-/\s]/g, '');
     const normalizedInput = normTicker(pair);
@@ -29,8 +41,8 @@ export async function analyzePair(ssid: string, pair: string, timeframeSec: numb
     if (history.length < 30) throw new Error('Not enough data for analysis');
 
     const closes = history.map(c => c.close);
-    const rsi = computeRSI(closes, 14);
-    const ema9 = computeEMA(closes, 9);
+    const rsi  = computeRSI(closes, 14);
+    const ema9  = computeEMA(closes, 9);
     const ema21 = computeEMA(closes, 21);
 
     if (tier === 'PRO') {
@@ -38,12 +50,12 @@ export async function analyzePair(ssid: string, pair: string, timeframeSec: numb
         const { mid, lower } = computeBollinger(closes, 20, 2);
         const lastClose = closes[closes.length - 1];
 
-        const rsiBull   = rsi > 50;
-        const emaBull   = ema9 > ema21;
-        const macdBull  = macd > macdSignal;
-        const bollBull  = lastClose < lower || lastClose > mid;
+        const rsiBull  = rsi > 50;
+        const emaBull  = ema9 > ema21;
+        const macdBull = macd > macdSignal;
+        const bollBull = lastClose < lower || lastClose > mid;
 
-        const votes     = [rsiBull, emaBull, macdBull, bollBull].filter(Boolean).length;
+        const votes      = [rsiBull, emaBull, macdBull, bollBull].filter(Boolean).length;
         const confidence = votes / 4 * 100;
         const direction: 'call' | 'put' = confidence >= 75 ? 'call' : 'put';
         const signals = [
@@ -52,23 +64,13 @@ export async function analyzePair(ssid: string, pair: string, timeframeSec: numb
             `MACD ${macdBull ? '▲' : '▼'}`,
             `BB ${bollBull ? '▲' : '▼'}`,
         ].join(' | ');
-        const reason = `${direction === 'call' ? 'BULLISH' : 'BEARISH'} (${votes}/4) | ${signals}`;
-        return { direction, confidence, reason };
+        return { direction, confidence, reason: `${direction === 'call' ? 'BULLISH' : 'BEARISH'} (${votes}/4) | ${signals}` };
     }
 
-    const rsiScore = rsi > 50 ? 50 : 0;
-    const emaScore = ema9 > ema21 ? 50 : 0;
-    const bullishScore = rsiScore + emaScore;
-
+    const bullishScore = (rsi > 50 ? 50 : 0) + (ema9 > ema21 ? 50 : 0);
     const direction: 'call' | 'put' = bullishScore >= 50 ? 'call' : 'put';
-    const sentiment = bullishScore >= 50 ? 'BULLISH' : 'BEARISH';
-    const crossStr = ema9 > ema21 ? 'EMA9 > EMA21' : 'EMA9 < EMA21';
-    const reason = `${sentiment} (+${bullishScore}%) | RSI ${rsi.toFixed(1)}, ${crossStr}`;
-
+    const reason = `${bullishScore >= 50 ? 'BULLISH' : 'BEARISH'} (+${bullishScore}%) | RSI ${rsi.toFixed(1)}, ${ema9 > ema21 ? 'EMA9 > EMA21' : 'EMA9 < EMA21'}`;
     return { direction, confidence: bullishScore, reason };
-    } finally {
-        await sdk.shutdown();
-    }
 }
 
 function computeMACD(closes: number[], fast: number, slow: number, signal: number): { macd: number; signal: number } {

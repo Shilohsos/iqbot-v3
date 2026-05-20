@@ -21,7 +21,7 @@ import {
     countFabricatedTraders, seedFabricatedTraders, getFabricatedTradersDueForUpdate,
     updateFabricatedPnl, getAllFabricatedTraders, resetFabricatedPnl, getRealTraderLeaderboard,
 } from './db.js';
-import { analyzePair, type AnalysisResult } from './analysis.js';
+import { analyzePair, analyzePairWithSdk, type AnalysisResult } from './analysis.js';
 import {
     amountKeyboard, timeframeKeyboard, pairKeyboard, tfLabel, OTC_PAIRS,
     tradeModeKeyboard, demoUpsellKeyboard, affiliateFailKeyboard,
@@ -536,6 +536,7 @@ async function runMartingale(
     balanceType: 'demo' | 'live' = 'demo',
     martingaleRounds?: number,
     preTradeMessageIds: number[] = [],
+    existingSdk?: ClientSdk,
 ): Promise<void> {
     const userId = ctx.from!.id;
     const effectiveRounds = martingaleRounds ?? userMartingaleSettings.get(userId)?.maxRounds ?? MAX_ROUNDS;
@@ -584,7 +585,9 @@ async function runMartingale(
 
         let result: TradeResult;
         try {
-            result = await withTimeout(executeTrade(ssid, roundTrade), roundTimeoutMs, 'trade');
+            result = existingSdk
+                ? await withTimeout(executeTradeWithSdk(existingSdk, roundTrade), roundTimeoutMs, 'trade')
+                : await withTimeout(executeTrade(ssid, roundTrade), roundTimeoutMs, 'trade');
         } catch (err: unknown) {
             const errMsg = err instanceof Error ? err.message : 'Unknown error';
             logLines[logLines.length - 1] = `⚡ Trade 1|⚠️ $${currentAmount.toFixed(2)} → error`;
@@ -885,61 +888,82 @@ bot.action(/^pair:(.+)$/, async ctx => {
     );
     preTradeMessageIds.push(progressMsg.message_id);
 
-    // Heavy SDK call — progress message is already visible, no dead silence
-    let analysis: AnalysisResult;
+    // Create ONE SDK connection — shared across analysis + all martingale rounds
+    let sdk: ClientSdk;
     try {
-        const analysisUser = getUser(ctx.from!.id);
-        const analysisTier = (analysisUser?.tier ?? 'NEWBIE').toUpperCase();
-        analysis = await analyzePair(ssid, pair, timeframe, analysisTier);
+        sdk = await Promise.race([
+            createSdk(ssid),
+            new Promise<never>((_, reject) =>
+                setTimeout(() => reject(new Error('Connection timed out')), 120_000)
+            ),
+        ]);
     } catch (err: unknown) {
         if (l7MsgId) { try { await ctx.telegram.deleteMessage(chatId, l7MsgId); } catch {} }
         await ctx.telegram.editMessageText(
             chatId, progressMsg.message_id, undefined,
-            `❌ Analysis failed: ${err instanceof Error ? err.message : 'Unknown error'}`
-        ).catch(() => ctx.reply(`❌ Analysis failed: ${err instanceof Error ? err.message : 'Unknown error'}`));
+            `❌ Could not connect to IQ Option: ${err instanceof Error ? err.message : 'Unknown error'}`
+        ).catch(() => ctx.reply('❌ Could not connect to IQ Option. Try again.'));
         return;
     }
 
-    // Replace progress message with completion note, then deliver results
-    if (l7MsgId) { try { await ctx.telegram.deleteMessage(chatId, l7MsgId); } catch {} }
-    await ctx.telegram.editMessageText(
-        chatId, progressMsg.message_id, undefined,
-        `✅ Market scanned — signal found for ${pair}`
-    ).catch(() => {});
-
-    const l8 = await ctx.replyWithPhoto(ASSET('L8.png')).catch(() => undefined);
-    if (l8) preTradeMessageIds.push(l8.message_id);
-    const signalImg = analysis.direction === 'call' ? 'L9b.png' : 'L9a.png';
-    const dirStr = analysis.direction === 'call' ? '🟢 CALL SIGNAL' : '🔴 PUT SIGNAL';
-    const l9 = await ctx.replyWithPhoto(ASSET(signalImg)).catch(() => undefined);
-    if (l9) preTradeMessageIds.push(l9.message_id);
-    const opportunityMsg = await ctx.reply(
-        `OPPORTUNITY FOUND\nConfidence: 78% · Bot is ready to execute.\n\n${dirStr}\n\n` +
-        `🔷 Trading pair: ${pair}\n🔷 Amount: $${amount.toFixed(2)} USD\n` +
-        `🔷 Expiration: ${tfLabel(timeframe)}\n🔷 Strategy: High-Profit ⚡`
-    ).catch(() => undefined);
-    if (opportunityMsg) preTradeMessageIds.push(opportunityMsg.message_id);
-
-    const tradeUser = getUser(ctx.from!.id);
-    const tradeTier = (tradeUser?.tier ?? 'NEWBIE').toUpperCase();
-    const maxConcurrent = tradeTier === 'PRO' ? 3 : 1;
-    const currentCount = activeTradeSessions.get(ctx.from!.id) ?? 0;
-    if (currentCount >= maxConcurrent) {
-        await ctx.reply(
-            tradeTier === 'NEWBIE'
-                ? '⚠️ You already have an active trade. Newbie allows 1 trade at a time. Upgrade to PRO for up to 3 concurrent trades.'
-                : `⚠️ You already have ${currentCount} active trade(s). Max 3 concurrent trades reached. Wait for one to finish.`
-        );
-        return;
-    }
-
-    const mgSettings = userMartingaleSettings.get(ctx.from!.id);
-    const martingaleRounds = mgSettings ? (mgSettings.enabled ? mgSettings.maxRounds : 1) : undefined;
     try {
-        await runMartingale(ctx, ssid, pair, analysis.direction, amount, timeframe, mode === 'live' ? 'live' : 'demo', martingaleRounds, preTradeMessageIds);
-    } catch (err: unknown) {
-        console.error('[pair] runMartingale threw:', err);
-        await ctx.reply('⚠️ Trade session ended unexpectedly. Please try again.').catch(() => {});
+        const analysisUser = getUser(ctx.from!.id);
+        const analysisTier = (analysisUser?.tier ?? 'NEWBIE').toUpperCase();
+        let analysis: AnalysisResult;
+        try {
+            analysis = await analyzePairWithSdk(sdk, pair, timeframe, analysisTier);
+        } catch (err: unknown) {
+            if (l7MsgId) { try { await ctx.telegram.deleteMessage(chatId, l7MsgId); } catch {} }
+            await ctx.telegram.editMessageText(
+                chatId, progressMsg.message_id, undefined,
+                `❌ Analysis failed: ${err instanceof Error ? err.message : 'Unknown error'}`
+            ).catch(() => ctx.reply(`❌ Analysis failed: ${err instanceof Error ? err.message : 'Unknown error'}`));
+            return;
+        }
+
+        // Replace progress message with completion note, then deliver results
+        if (l7MsgId) { try { await ctx.telegram.deleteMessage(chatId, l7MsgId); } catch {} }
+        await ctx.telegram.editMessageText(
+            chatId, progressMsg.message_id, undefined,
+            `✅ Market scanned — signal found for ${pair}`
+        ).catch(() => {});
+
+        const l8 = await ctx.replyWithPhoto(ASSET('L8.png')).catch(() => undefined);
+        if (l8) preTradeMessageIds.push(l8.message_id);
+        const signalImg = analysis.direction === 'call' ? 'L9b.png' : 'L9a.png';
+        const dirStr = analysis.direction === 'call' ? '🟢 CALL SIGNAL' : '🔴 PUT SIGNAL';
+        const l9 = await ctx.replyWithPhoto(ASSET(signalImg)).catch(() => undefined);
+        if (l9) preTradeMessageIds.push(l9.message_id);
+        const opportunityMsg = await ctx.reply(
+            `OPPORTUNITY FOUND\nConfidence: 78% · Bot is ready to execute.\n\n${dirStr}\n\n` +
+            `🔷 Trading pair: ${pair}\n🔷 Amount: $${amount.toFixed(2)} USD\n` +
+            `🔷 Expiration: ${tfLabel(timeframe)}\n🔷 Strategy: High-Profit ⚡`
+        ).catch(() => undefined);
+        if (opportunityMsg) preTradeMessageIds.push(opportunityMsg.message_id);
+
+        const tradeUser = getUser(ctx.from!.id);
+        const tradeTier = (tradeUser?.tier ?? 'NEWBIE').toUpperCase();
+        const maxConcurrent = tradeTier === 'PRO' ? 3 : 1;
+        const currentCount = activeTradeSessions.get(ctx.from!.id) ?? 0;
+        if (currentCount >= maxConcurrent) {
+            await ctx.reply(
+                tradeTier === 'NEWBIE'
+                    ? '⚠️ You already have an active trade. Newbie allows 1 trade at a time. Upgrade to PRO for up to 3 concurrent trades.'
+                    : `⚠️ You already have ${currentCount} active trade(s). Max 3 concurrent trades reached. Wait for one to finish.`
+            );
+            return;
+        }
+
+        const mgSettings = userMartingaleSettings.get(ctx.from!.id);
+        const martingaleRounds = mgSettings ? (mgSettings.enabled ? mgSettings.maxRounds : 1) : undefined;
+        try {
+            await runMartingale(ctx, ssid, pair, analysis.direction, amount, timeframe, mode === 'live' ? 'live' : 'demo', martingaleRounds, preTradeMessageIds, sdk);
+        } catch (err: unknown) {
+            console.error('[pair] runMartingale threw:', err);
+            await ctx.reply('⚠️ Trade session ended unexpectedly. Please try again.').catch(() => {});
+        }
+    } finally {
+        await sdk.shutdown();
     }
 });
 
