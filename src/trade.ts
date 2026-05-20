@@ -111,7 +111,12 @@ export async function executeTradeWithSdk(sdk: ClientSdk, trade: TradeRequest): 
 export async function executeTrade(ssid: string, trade: TradeRequest): Promise<TradeResult> {
     let sdk: ClientSdk;
     try {
-        sdk = await ClientSdk.create(WS_URL, PLATFORM_ID, new SsidAuthMethod(ssid), { host: IQ_HOST });
+        sdk = await Promise.race([
+            ClientSdk.create(WS_URL, PLATFORM_ID, new SsidAuthMethod(ssid), { host: IQ_HOST }),
+            new Promise<never>((_, reject) =>
+                setTimeout(() => reject(new Error('Connection timed out')), 120_000)
+            ),
+        ]);
     } catch (err: unknown) {
         if (isTimeoutError(err)) return errorResult(trade, 'Connection timed out');
         throw err;

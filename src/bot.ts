@@ -439,8 +439,8 @@ async function sendStartMenu(ctx: Context): Promise<void> {
         setImmediate(async () => {
             let sdk;
             try {
-                sdk = await withTimeout(createSdk(ssid!), 3_000, 'balance');
-                const all = (await withTimeout(sdk.balances(), 3_000, 'balance')).getBalances();
+                sdk = await withTimeout(createSdk(ssid!), 30_000, 'balance');
+                const all = (await withTimeout(sdk.balances(), 15_000, 'balance')).getBalances();
                 const demo = all.find(b => b.type === BalanceType.Demo);
                 const real = all.find(b => b.type === BalanceType.Real);
                 if (real?.currency) saveUserCurrency(telegramId, real.currency);
@@ -542,7 +542,7 @@ async function runMartingale(
     activeTradeSessions.set(userId, (activeTradeSessions.get(userId) ?? 0) + 1);
     try {
     const runId = crypto.randomUUID();
-    const roundTimeoutMs = (timeframeSec + 90) * 1000;
+    const roundTimeoutMs = (timeframeSec + 90) * 1000 + 120_000;
     let currentAmount = amount;
     let totalPnl = 0;
     const logLines: string[] = ['✦ Trade session initialized…'];
@@ -1149,8 +1149,8 @@ bot.command('balance', async ctx => {
     if (!ssid) { await ctx.reply('❌ Not connected. Use /connect first.', { reply_markup: backKeyboard() }); return; }
     let _sdk;
     try {
-        _sdk = await withTimeout(createSdk(ssid), 5_000, 'balance');
-        const all = (await withTimeout(_sdk.balances(), 5_000, 'balance')).getBalances();
+        _sdk = await withTimeout(createSdk(ssid), 30_000, 'balance');
+        const all = (await withTimeout(_sdk.balances(), 15_000, 'balance')).getBalances();
         const demo = all.find(b => b.type === BalanceType.Demo);
         const real = all.find(b => b.type === BalanceType.Real);
         if (real?.currency) saveUserCurrency(uid, real.currency);
@@ -1776,8 +1776,8 @@ bot.command('pairs', async ctx => {
     if (!ssid) { await ctx.reply('❌ Not connected. Use /connect first.'); return; }
     let _sdk;
     try {
-        _sdk = await withTimeout(createSdk(ssid), 10_000, 'pairs');
-        const actives = (await withTimeout(_sdk.turboOptions(), 10_000, 'pairs')).getActives();
+        _sdk = await withTimeout(createSdk(ssid), 60_000, 'pairs');
+        const actives = (await withTimeout(_sdk.turboOptions(), 60_000, 'pairs')).getActives();
         const normTicker = (s: string) => s.toUpperCase().replace(/^front\./i, '').replace(/[-/\s]/g, '');
         const otcNorms = OTC_PAIRS.map(p => normTicker(p));
         let msg = '📋 *Turbo Actives*\n\n';

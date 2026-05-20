@@ -7,7 +7,12 @@ export interface AnalysisResult {
 }
 
 export async function analyzePair(ssid: string, pair: string, timeframeSec: number, tier = 'NEWBIE'): Promise<AnalysisResult> {
-    const sdk = await createSdk(ssid);
+    const sdk = await Promise.race([
+        createSdk(ssid),
+        new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Analysis SDK connection timed out')), 120_000)
+        ),
+    ]);
     try {
     const turboOptions = await sdk.turboOptions();
     const normTicker = (s: string) => s.toUpperCase().replace(/^front\./i, '').replace(/[-/\s]/g, '');
