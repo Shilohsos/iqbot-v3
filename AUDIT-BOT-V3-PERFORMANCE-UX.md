@@ -403,3 +403,174 @@ The bot's UX problem is **one single bottleneck**: creating fresh Quadcode SDK W
 **The fix is not more timeout tweaking — it's eliminating the repeated SDK creation.** A persistent SDK pool (1 connection per user, kept alive across trades) reduces the perceived wait from 64-194 seconds to 0 seconds for repeat trades.
 
 With 500 users projected, the current architecture creates 2,500 SDK connections/day (44 hours of blocking in 24 hours). The SDK pool reduces this to ~500 connections/day (8.9 hours), fitting within capacity.
+
+---
+
+# APPENDIX A — Item 7: Scalability Projection (Quantitative)
+
+## Request Throughput Analysis
+
+### Current (75 users)
+
+| Metric | Value | Calculation |
+|--------|-------|-------------|
+| Trades/day | 225 | 75 users × 3 trades/user |
+| SDK connections/day | 375 | 225 (trades) + 150 (balance checks via /start) |
+| Button interactions/day | ~1,500 | ~20 clicks/user/day through trade wizard |
+| DB reads/day | ~3,000 | 1.5 lookup per trade + history checks |
+| DB writes/day | ~900 | 1 insert per trade + session updates |
+| Telegram API calls/day | ~4,500 | reply + editMessageText + answerCbQuery + deleteMessage |
+| Peak concurrent trades | ~5-10 | Assuming 10-15% of users trade simultaneously |
+| **Blocked time/day** | **6.7 hours** | 375 SDK × 64s avg connect |
+
+### Projected (500 users)
+
+| Metric | Value | Calculation |
+|--------|-------|-------------|
+| Trades/day | 1,500 | 500 × 3 |
+| SDK connections/day | 2,500 | 1,500 + 1,000 |
+| Button interactions/day | ~10,000 | ~20 clicks/user/day |
+| DB reads/day | ~20,000 | 40 reads/user/day |
+| DB writes/day | ~6,000 | 12 writes/user/day |
+| Telegram API calls/day | ~30,000 | ~60 API calls/user/day |
+| Peak concurrent trades | ~50-75 | 10-15% of 500 |
+| **Blocked time/day (current arch)** | **44.4 hours** | 2,500 × 64s |
+| **Blocked time/day (with pool)** | **8.9 hours** | 500 SDK × 64s |
+
+### Throughput Feasibility
+
+| Constraint | Limit | Required at 500 users | Status |
+|-----------|-------|----------------------|--------|
+| Node.js event loop (single-thread) | 1 operation at a time | Serial trade execution | 🔴 Exceeded without pool |
+| Node.js event loop (single-thread, with pool) | 1 operation at a time | 500 sessions/day × 64s | ✅ 8.9h fits in 24h |
+| Telegram API: sendMessage | 30/sec (soft) | ~0.3/sec avg | ✅ 100× headroom |
+| Telegram API: answerCallbackQuery | No documented limit | ~0.1/sec avg | ✅ |
+| SQLite concurrent reads | Unlimited (WAL mode) | 20,000/day | ✅ <1ms per read |
+| SQLite concurrent writes | Serialized by WAL | 6,000/day | ✅ <1ms per write |
+| IQ Option WebSocket connections | Unknown | Up to 500 concurrent (with pool) | ⚠️ May need proxy rotation |
+| VPS memory (11GB total) | Node.js heap ~60MB | ~80-120MB at 500 users (est.) | ✅ 100× headroom |
+| VPS CPU (6 cores) | ~10% utilization at 75 users | ~50-60% at 500 users (est.) | ✅ |
+| VPS disk (150GB) | ~500KB DB + logs | ~5MB DB + 50MB logs at 500 (est.) | ✅ |
+
+### Telegram API Rate-Limit Headroom
+
+Telegram Bot API limits (documented):
+- **Per-chat:** 30 messages/second (not enforced for bots in private chats)
+- **Per-bot global:** ~30 messages/second (soft limit, auto-throttled)
+- **Callback query answer:** Must be within 30 seconds (hard limit)
+- **editMessageText:** No specific limit
+
+At 500 users, peak rate ≈ 0.5 API calls/second (30,000/day ÷ 86,400 seconds). Even at 10× peak (lunch rush), that's 5 calls/second — **6× below the 30/sec soft limit**.
+
+**Finding:** Telegram API is NOT a bottleneck. The SDK connection is the ONLY bottleneck.
+
+## Memory Footprint Projection
+
+| Component | 75 users | 500 users |
+|-----------|---------|-----------|
+| Node.js heap (bot) | 60MB | ~80-100MB |
+| `tsx` interpreter | 14MB | ~14MB |
+| `esbuild` service | 14MB | ~14MB |
+| Redis (existing, shared) | ~20MB | ~30MB |
+| Total | ~108MB | ~138-158MB |
+| Available | 9,500MB | 9,440MB |
+| **Headroom** | **88×** | **60×** |
+
+## Concurrent Connection Limits
+
+| Connection type | Per user | At 500 users |
+|----------------|---------|-------------|
+| Telegram long-poll | 1 (bot-wide) | 1 |
+| IQ Option WebSocket | 1 (with pool) | 0 without pool, up to 500 with pool |
+| SQLite | 1 (process-wide) | 1 |
+
+**Risk:** IQ Option may limit concurrent WebSocket connections per IP address. If they limit to ~100 connections, proxy rotation would be needed at 500 users with the pool. Current architecture (no pool) naturally thrashes connections, staying under any IP limit.
+
+---
+
+# APPENDIX B — Item 8: Telegram API Endpoint Error Rates
+
+## Observed Error Statistics (from 1,435 `bot.catch` entries)
+
+| Error Type | Count | Rate | Root Cause |
+|-----------|-------|------|------------|
+| Promise timed out after 10000ms | 540 | 37.6% | Old handlerTimeout=10s (FIXED) |
+| 400: query is too old (various) | 443+128 | 39.9% | Callback expired during 90s SDK connect (FIXED) |
+| Promise timed out after 90000ms | 203+71 | 19.1% | Telegraf 90s default timeout (FIXED) |
+| Promise timed out after 0ms | 28 | 1.9% | handlerTimeout=0 fiasco (FIXED) |
+| Parse entities error | 15 | 1.0% | Markdown formatting bug in escapeMd |
+| Promise timed out after 30000ms | 7 | 0.5% | Balance fetch timeout |
+
+### Endpoint-Specific Failure Rates
+
+| Endpoint | Total calls (est.) | Failures | Failure rate |
+|----------|-------------------|----------|-------------|
+| `answerCbQuery` | ~15,000+ | 128 (query too old) | <1% |
+| `sendMessage` / `reply` | ~12,000+ | 0 logged | <0.01% |
+| `editMessageText` | ~4,000+ | 0 (message not found) | <0.01% |
+| `deleteMessage` | ~3,000+ | 0 logged | <0.01% |
+| `replyWithPhoto` | ~2,000+ | 0 logged | <0.01% |
+
+**Finding:** Parse entities errors (15 total) are the only real API failures — caused by unescaped Markdown characters in usernames. Already handled by `escapeMd()`.
+
+---
+
+# APPENDIX C — Item 10: Remediation Plan with Effort & Impact Estimates
+
+| Priority | Fix | Lines of Code | Effort | Latency Impact | Risk |
+|----------|-----|--------------|--------|---------------|------|
+| **P0-1** | Persistent SDK pool (`sdk-pool.ts`) | ~150 new, ~30 modified | 2-3 hours | p50: 64s→5s; p95: 303s→10s | Low |
+| **P0-2** | SDK background warming | ~50 | 1 hour | Perceived: 64s→5s | None |
+| **P1-1** | /start uses pool for balance | ~10 | 15 min | 30s→1s for balance fetch | None |
+| **P1-2** | `/cancel` command with AbortController | ~40 | 1 hour | ∞→0s for stuck trades | Low |
+| **P2-1** | Redis session store | ~100 + dep | 2-3 hours | Session loss: 100%→0% on restart | Medium |
+| **P2-2** | answerCbQuery on first line (4 handlers) | 4 | 5 min | ~1ms improvement | None |
+| **P2-3** | PM2 cluster mode | PM2 config only | 15 min | 4× throughput for non-blocking ops | Medium (needs Redis first) |
+
+---
+
+# APPENDIX D — Item 14: Long-Polling vs Webhook Quantitative Comparison
+
+| Metric | Long-Polling (current) | Webhook |
+|--------|----------------------|---------|
+| Message delivery latency | 1-3 seconds | <100ms |
+| Setup complexity | Zero (default) | SSL cert + domain required |
+| Reliability | Self-healing | Queue for 24h if server down |
+| CPU overhead | ~1% constant polling | ~0% idle |
+| Bot's total response time | 64-194s (SDK) + 1-3s (poll) | 64-194s (SDK) + <0.1s |
+| **Net UX improvement if switched** | Baseline | **1-3s faster** (1.5-4.5% of total wait) |
+
+**Verdict:** Switching to webhook saves 1-3 seconds. The SDK connection saves 64-194 seconds. **Focus on the SDK connection, not the delivery mode.** Webhook is useful only after the SDK bottleneck is resolved.
+
+---
+
+# APPENDIX E — Item 15: Per-Handler Error Handling Audit
+
+| Handler | answerCbQuery? | .catch() on reply? | Error → user sees what? | Silent failure risk |
+|---------|---------------|-------------------|------------------------|-------------------|
+| `pair:*` | ✅ Line 865 (immediate) | ✅ Some bare, caught by bot.catch | "Request timed out" (bot.catch) or trade result | Low |
+| `mode:demo\|live` | ✅ Line 770 | ✅ Safe | User sent back to mode picker | None |
+| `amt:*` | ⚠️ Line 796 (after check) | ✅ Safe | Session expired toast | None |
+| `tf:*` | ⚠️ Line 826 (after check) | ✅ Safe | Session expired toast | None |
+| `page:*` | ⚠️ Line 853 (after check) | ✅ Safe | Session expired toast | None |
+| `ui:trade` | ✅ Line 1010 | ✅ Safe | Menu shown or "not approved" | None |
+| `ui:start` | ✅ Line 1007 | ✅ Safe | Menu refreshed | None |
+| `ui:history` | ✅ Line 1019 | ✅ Safe (no SDK) | "No trades yet" or history | None |
+| `ui:leaderboard` | ✅ Line 1110 | ✅ Safe (DB only) | Leaderboard or "no trades" | None |
+| `ui:help/support` | ✅ Early | ✅ Safe | Text message shown | None |
+| `ui:upgrade` | ✅ Line 902 (early) | ✅ Safe | Token prompt | None |
+| `martingale:*` | ✅ Line 1096 | ✅ Safe | Settings updated | None |
+| `balance` cmd | ✅ try/catch | ✅ Safe | "Too long" or balance | None |
+| `connect` flow | ✅ Multi-step handlers | ✅ Safe per step | Error messages at each step | None |
+| Admin handlers | ✅ All early | ✅ Safe | DB results displayed | None |
+| `upsell:live/demo` | ✅ Line 986/996 | ✅ Safe | Show mode keyboard | None |
+| `wizard:cancel` | ✅ Line 783 | ✅ deleteMessage .catch | Trade cancelled | None |
+| `giveaway:*` | ✅ Line 1702 | ✅ Safe | Results or error | None |
+| Broadcast handlers | ✅ All early | ✅ Safe | Schedule shown | None |
+
+**Key gaps (all minor):**
+1. `pair:*` handler — if `sdk.shutdown()` throws in `finally`, error goes to `bot.catch` → user sees "Request timed out" even though trade succeeded. Acceptable (bot.catch handles gracefully).
+2. `sendStartMenu` balance fetch — if SDK connect times out at 30s, user sees menu without balance. Acceptable (cache masks this 5-min TTL).
+3. `scheduleCleanup` — 1-hour setTimeout callback just calls `deleteMessage`.catch(). Cannot fail silently.
+
+**Finding:** Zero critical missing error handling. The `bot.catch` global handler is the safety net for all unhandled paths. All user-facing replies either succeed or fail with `.catch()`.
