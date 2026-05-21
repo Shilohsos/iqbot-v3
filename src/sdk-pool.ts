@@ -40,20 +40,25 @@ class UserSdkPool {
         }
 
         const promise = (async () => {
-            const sdk = await ClientSdk.create(
-                WS_URL, PLATFORM_ID,
-                new SsidAuthMethod(ssid),
-                { host: IQ_HOST }
-            );
-            this.entries.set(userId, {
-                sdk,
-                ssid,
-                inUse: true,
-                lastUsed: Date.now(),
-                createdAt: Date.now(),
-            });
-            this.pending.delete(userId);
-            return sdk;
+            try {
+                const sdk = await ClientSdk.create(
+                    WS_URL, PLATFORM_ID,
+                    new SsidAuthMethod(ssid),
+                    { host: IQ_HOST }
+                );
+                this.entries.set(userId, {
+                    sdk,
+                    ssid,
+                    inUse: true,
+                    lastUsed: Date.now(),
+                    createdAt: Date.now(),
+                });
+                return sdk;
+            } catch (err) {
+                throw err;
+            } finally {
+                this.pending.delete(userId);
+            }
         })();
 
         this.pending.set(userId, promise);
