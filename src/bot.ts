@@ -3,6 +3,7 @@ import { Telegraf, Context } from 'telegraf';
 import { ClientSdk, SsidAuthMethod, BalanceType } from './index.js';
 import { WS_URL, PLATFORM_ID, IQ_HOST, IQ_AUTH_URL } from './protocol.js';
 import { executeTrade, executeTradeWithSdk, createSdk, type TradeRequest, type TradeResult } from './trade.js';
+import { sdkPool } from './sdk-pool.js';
 import {
     getRecentTrades, getTradeStats, getTopTradersToday,
     getUser, saveUser, saveUsername, deleteUser, getAllUsers, getAllUserIds,
@@ -437,9 +438,8 @@ async function sendStartMenu(ctx: Context): Promise<void> {
         const msgId  = sentMsg.message_id;
         const userTier = user.tier ?? undefined;
         setImmediate(async () => {
-            let sdk;
             try {
-                sdk = await withTimeout(createSdk(ssid!), 30_000, 'balance');
+                const sdk = await sdkPool.get(telegramId, ssid!);
                 const all = (await withTimeout(sdk.balances(), 15_000, 'balance')).getBalances();
                 const demo = all.find(b => b.type === BalanceType.Demo);
                 const real = all.find(b => b.type === BalanceType.Real);
@@ -455,7 +455,7 @@ async function sendStartMenu(ctx: Context): Promise<void> {
                         { reply_markup: startKeyboard(userTier) });
                 }
             } catch {} finally {
-                sdk?.shutdown().catch(() => {});
+                sdkPool.release(telegramId);
             }
         });
     }
@@ -884,38 +884,23 @@ bot.action(/^pair:(.+)$/, async ctx => {
     let l7MsgId: number | undefined;
     try { const m = await ctx.replyWithPhoto(ASSET('L7.png')); l7MsgId = m.message_id; } catch {}
     const progressMsg = await ctx.reply(
-        `Selected: ${pair}\n\n🔌 Connecting to IQ Option...\n⏱ May take 1–2 minutes...`
+        `Selected: ${pair}\n\n🔌 Connecting to IQ Option...\n⏱ Usually instant if you traded recently`
     );
     preTradeMessageIds.push(progressMsg.message_id);
 
-    const keepAlive = setInterval(() => {
-        ctx.telegram.editMessageText(
-            chatId, progressMsg.message_id, undefined,
-            `Selected: ${pair}\n\n🔄 Still connecting...\n⏱ Hold on, almost there..`
-        ).catch(() => {});
-    }, 30_000);
-
-    // Create ONE SDK connection — shared across analysis + all martingale rounds
     let sdk: ClientSdk;
     try {
-        sdk = await Promise.race([
-            createSdk(ssid),
-            new Promise<never>((_, reject) =>
-                setTimeout(() => reject(new Error('Connection timed out')), 180_000)
-            ),
-        ]);
-        clearInterval(keepAlive);
+        sdk = await sdkPool.get(ctx.from!.id, ssid);
         await ctx.telegram.editMessageText(
             chatId, progressMsg.message_id, undefined,
             `✅ Connected! Analyzing market data for ${pair}...`
         ).catch(() => {});
     } catch (err: unknown) {
-        clearInterval(keepAlive);
         if (l7MsgId) { try { await ctx.telegram.deleteMessage(chatId, l7MsgId); } catch {} }
         await ctx.telegram.editMessageText(
             chatId, progressMsg.message_id, undefined,
-            `❌ IQ Option server took too long to respond.\n\nTry again in a few minutes. If this keeps happening, check your connection or contact support.`
-        ).catch(() => ctx.reply('❌ IQ Option server took too long to respond. Please try again.'));
+            `❌ Could not connect to IQ Option.\n\nTry again in a moment.`
+        ).catch(() => ctx.reply('❌ Could not connect to IQ Option. Try again.'));
         return;
     }
 
@@ -976,7 +961,7 @@ bot.action(/^pair:(.+)$/, async ctx => {
             await ctx.reply('⚠️ Trade session ended unexpectedly. Please try again.').catch(() => {});
         }
     } finally {
-        await sdk.shutdown();
+        sdkPool.release(ctx.from!.id);
     }
 });
 
@@ -1184,10 +1169,9 @@ bot.command('balance', async ctx => {
     const uid = ctx.from!.id;
     const ssid = getSsidForUser(uid);
     if (!ssid) { await ctx.reply('❌ Not connected. Use /connect first.', { reply_markup: backKeyboard() }); return; }
-    let _sdk;
     try {
-        _sdk = await withTimeout(createSdk(ssid), 30_000, 'balance');
-        const all = (await withTimeout(_sdk.balances(), 15_000, 'balance')).getBalances();
+        const sdk = await sdkPool.get(uid, ssid);
+        const all = (await withTimeout(sdk.balances(), 15_000, 'balance')).getBalances();
         const demo = all.find(b => b.type === BalanceType.Demo);
         const real = all.find(b => b.type === BalanceType.Real);
         if (real?.currency) saveUserCurrency(uid, real.currency);
@@ -1204,7 +1188,7 @@ bot.command('balance', async ctx => {
             { reply_markup: backKeyboard() }
         );
     } finally {
-        _sdk?.shutdown().catch(() => {});
+        sdkPool.release(uid);
     }
 });
 
@@ -1809,12 +1793,12 @@ bot.command('disconnect', async ctx => {
 // ─── /pairs debug ─────────────────────────────────────────────────────────────
 
 bot.command('pairs', async ctx => {
-    const ssid = getSsidForUser(ctx.from!.id);
+    const uid = ctx.from!.id;
+    const ssid = getSsidForUser(uid);
     if (!ssid) { await ctx.reply('❌ Not connected. Use /connect first.'); return; }
-    let _sdk;
     try {
-        _sdk = await withTimeout(createSdk(ssid), 60_000, 'pairs');
-        const actives = (await withTimeout(_sdk.turboOptions(), 60_000, 'pairs')).getActives();
+        const sdk = await sdkPool.get(uid, ssid);
+        const actives = (await withTimeout(sdk.turboOptions(), 60_000, 'pairs')).getActives();
         const normTicker = (s: string) => s.toUpperCase().replace(/^front\./i, '').replace(/[-/\s]/g, '');
         const otcNorms = OTC_PAIRS.map(p => normTicker(p));
         let msg = '📋 *Turbo Actives*\n\n';
@@ -1827,7 +1811,7 @@ bot.command('pairs', async ctx => {
         const isTimeout = err instanceof Error && err.message.startsWith('SDK timeout');
         await ctx.reply(isTimeout ? '⚠️ IQ Option is taking too long. Try again in a moment.' : `❌ Failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
     } finally {
-        _sdk?.shutdown().catch(() => {});
+        sdkPool.release(uid);
     }
 });
 
