@@ -577,7 +577,7 @@ async function runMartingale(
         } catch {}
     };
 
-    for (let round = 1; round <= effectiveRounds; round++) {
+    for (let round = 1; round <= effectiveRounds + 1; round++) {
         logLines.push(`⚡ Trade 1|🟡 $${currentAmount.toFixed(2)} → in flight`);
         await syncLog();
 
