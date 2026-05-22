@@ -41,11 +41,12 @@ class UserSdkPool {
 
         const promise = (async () => {
             try {
-                const sdk = await ClientSdk.create(
-                    WS_URL, PLATFORM_ID,
-                    new SsidAuthMethod(ssid),
-                    { host: IQ_HOST }
-                );
+                const sdk = await Promise.race([
+                    ClientSdk.create(WS_URL, PLATFORM_ID, new SsidAuthMethod(ssid), { host: IQ_HOST }),
+                    new Promise<never>((_, reject) =>
+                        setTimeout(() => reject(new Error('SDK connection timed out')), 180_000)
+                    ),
+                ]);
                 this.entries.set(userId, {
                     sdk,
                     ssid,
