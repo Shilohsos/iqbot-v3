@@ -677,7 +677,7 @@ async function runMartingale(
         }
 
         // LOSS — next round
-        if (round < effectiveRounds) {
+        if (round <= effectiveRounds) {
             if (round === 1) {
                 await sendRoundImage('L10.png');
                 const recoveryReply = await ctx.reply('SMART RECOVERY ACTIVATED\nBumping the next stake. Bot fights back.');
