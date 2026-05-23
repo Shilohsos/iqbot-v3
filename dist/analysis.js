@@ -1,8 +1,8 @@
 import { createSdk } from './trade.js';
-export async function analyzePairWithSdk(sdk, pair, timeframeSec, tier = 'NEWBIE') {
+export async function analyzePairWithSdk(sdk, pair, timeframeSec, tier = 'DEMO') {
     return runAnalysis(sdk, pair, timeframeSec, tier);
 }
-export async function analyzePair(ssid, pair, timeframeSec, tier = 'NEWBIE') {
+export async function analyzePair(ssid, pair, timeframeSec, tier = 'DEMO') {
     const sdk = await Promise.race([
         createSdk(ssid),
         new Promise((_, reject) => setTimeout(() => reject(new Error('Analysis SDK connection timed out')), 180_000)),
@@ -30,7 +30,8 @@ async function runAnalysis(sdk, pair, timeframeSec, tier) {
     const rsi = computeRSI(closes, 14);
     const ema9 = computeEMA(closes, 9);
     const ema21 = computeEMA(closes, 21);
-    if (tier === 'PRO') {
+    const upperTier = tier.toUpperCase();
+    if (upperTier === 'PRO' || upperTier === 'MASTER') {
         const { macd, signal: macdSignal } = computeMACD(closes, 12, 26, 9);
         const { mid, lower } = computeBollinger(closes, 20, 2);
         const lastClose = closes[closes.length - 1];

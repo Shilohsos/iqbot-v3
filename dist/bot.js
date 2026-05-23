@@ -4,11 +4,13 @@ import { BalanceType } from './index.js';
 import { IQ_AUTH_URL } from './protocol.js';
 import { executeTrade, executeTradeWithSdk, createSdk } from './trade.js';
 import { sdkPool } from './sdk-pool.js';
-import { getRecentTrades, getTradeStats, getTopTradersToday, getUser, saveUser, saveUsername, deleteUser, getAllUsers, getAllUserIds, getActiveTraderIds, getInactiveTraderIds, findUsersByUsername, upsertOnboardingUser, approveUser, setManualApproval, rejectUser, resetUser, getApprovalStats, getRecentApprovals, getPendingManualUsers, setUserTier, saveUserCurrency, pauseUser, resumeUser, generateToken, validateToken, useToken, getTokens, updateLeaderboardAuto, addLeaderboardManual, getLeaderboardDetailed, updateLeaderboardManual, getFunnelStats, getConfig, setConfig, getAuditReport, maskUserId, calculatePairWinRates, selectTopPicks, setSession, getSession, deleteSession, cleanStaleSessions, saveGeneratedGiveawayId, isGeneratedIdUsed, getTradersIqUserIds, getGiveawayTargetIds, countFabricatedTraders, seedFabricatedTraders, getFabricatedTradersDueForUpdate, updateFabricatedPnl, getAllFabricatedTraders, resetFabricatedPnl, getRealTraderLeaderboard, } from './db.js';
+import { getTierConfig, normalizeTier } from './tiers.js';
+import { getRecentTrades, getTradeStats, getTopTradersToday, getUser, saveUser, saveUsername, deleteUser, getAllUsers, getAllUserIds, getActiveTraderIds, getInactiveTraderIds, findUsersByUsername, upsertOnboardingUser, approveUser, setManualApproval, rejectUser, resetUser, getApprovalStats, getRecentApprovals, getPendingManualUsers, setUserTier, saveUserCurrency, pauseUser, resumeUser, generateToken, validateToken, useToken, getTokens, updateLeaderboardAuto, addLeaderboardManual, getLeaderboardDetailed, updateLeaderboardManual, getFunnelStats, getConfig, setConfig, getAuditReport, maskUserId, calculatePairWinRates, selectTopPicks, setSession, getSession, deleteSession, cleanStaleSessions, saveGeneratedGiveawayId, isGeneratedIdUsed, getTradersIqUserIds, getGiveawayTargetIds, countFabricatedTraders, seedFabricatedTraders, getFabricatedTradersDueForUpdate, updateFabricatedPnl, getAllFabricatedTraders, resetFabricatedPnl, getRealTraderLeaderboard, getGiveawayStats, getGiveawayParticipantCount, } from './db.js';
+import { createGiveawayEvent, activateGiveaway, participate as giveawayParticipate, recordTrade as giveawayRecordTrade, selectWinners as giveawaySelectWinners, getGiveawayEvents, getActiveGiveaways, getGiveawayEvent, processUpdateQueue, processNotificationsQueue, } from './giveaway.js';
 import { analyzePairWithSdk } from './analysis.js';
-import { amountKeyboard, timeframeKeyboard, pairKeyboard, tfLabel, OTC_PAIRS, tradeModeKeyboard, demoUpsellKeyboard, affiliateFailKeyboard, } from './menu.js';
+import { amountKeyboard, timeframeKeyboard, pairKeyboard, tfLabel, OTC_PAIRS, tradeModeKeyboard, demoUpsellKeyboard, } from './menu.js';
 import { startKeyboard, backKeyboard, onboardKeyboard } from './ui/user.js';
-import { getAdminId, adminKeyboard, adminBackKeyboard, broadcastTargetKeyboard, broadcastLinkKeyboard, broadcastActionKeyboard, broadcastTimerKeyboard, broadcastSendOrScheduleKeyboard, broadcastDelayKeyboard, scheduledBroadcastsKeyboard, tokenTierKeyboard, generateTokenKeyboard, topTradersAdminKeyboard, funnelKeyboard, memberManagementKeyboard, activationsKeyboard, giveawayTargetKeyboard, } from './ui/admin.js';
+import { getAdminId, adminKeyboard, adminBackKeyboard, broadcastTargetKeyboard, broadcastLinkKeyboard, broadcastActionKeyboard, broadcastTimerKeyboard, broadcastSendOrScheduleKeyboard, broadcastDelayKeyboard, scheduledBroadcastsKeyboard, tokenTierKeyboard, generateTokenKeyboard, topTradersAdminKeyboard, funnelKeyboard, memberManagementKeyboard, activationsKeyboard, giveawayTargetKeyboard, giveawayManagerKeyboard, giveawayTypeKeyboard, giveawayCriteriaKeyboard, giveawayScheduleKeyboard, activeGiveawaysKeyboard, } from './ui/admin.js';
 import { checkAffiliate } from './affiliate.js';
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const IQ_SSID = process.env.IQ_SSID;
@@ -285,8 +287,8 @@ async function sendStartMenu(ctx) {
     }
     // Approved — build rich menu
     const ss = getSessionStats(telegramId);
-    const tier = (user.tier ?? 'DEMO').toUpperCase();
-    const tierEmoji = tier === 'PRO' ? '⚡' : tier === 'NEWBIE' ? '🚀' : '🧪';
+    const tier = normalizeTier(user.tier);
+    const tierEmoji = tier === 'MASTER' ? '👑' : tier === 'PRO' ? '⚡' : '🧪';
     const pnlSign = ss.pnl >= 0 ? '+' : '';
     const ssid = getSsidForUser(telegramId);
     const cached = ssid ? balanceCache.get(telegramId) : undefined;
@@ -300,6 +302,23 @@ async function sendStartMenu(ctx) {
         ``, `What now? 👇`,
     ].filter(l => l !== '').join('\n');
     const sentMsg = await ctx.reply(buildMenu(cachedLine), { reply_markup: startKeyboard(user.tier ?? undefined) });
+    // Show active giveaway card if any
+    const activeGiveaways = getActiveGiveaways();
+    if (activeGiveaways.length > 0) {
+        const giveaway = activeGiveaways[0];
+        const prizeText = giveaway.prize_pool != null ? `\nPrize Pool: *$${giveaway.prize_pool.toFixed(2)}*` : '';
+        const canParticipate = tier === 'PRO' || tier === 'MASTER';
+        const giveawayCard = [
+            `🎁 *LIVE GIVEAWAY*`,
+            `*${giveaway.title}*`,
+            prizeText,
+            canParticipate ? `` : `\n🔒 Upgrade to PRO to participate`,
+        ].filter(l => l !== '').join('\n');
+        const giveawayMarkup = canParticipate
+            ? { inline_keyboard: [[{ text: '🎯 Participate', callback_data: `giveaway:participate:${giveaway.id}` }]] }
+            : { inline_keyboard: [[{ text: '⚡ Upgrade to PRO', callback_data: 'ui:upgrade' }]] };
+        await ctx.reply(giveawayCard, { parse_mode: 'Markdown', reply_markup: giveawayMarkup });
+    }
     if (needsFetch) {
         const chatId = ctx.chat.id;
         const msgId = sentMsg.message_id;
@@ -484,6 +503,8 @@ async function runMartingale(ctx, ssid, pair, direction, amount, timeframeSec = 
                 const ss = getSessionStats(ctx.from.id);
                 ss.trades++;
                 ss.pnl += roundPnl;
+                // Record for giveaway (round 1 = initial, round > 1 = martingale recovery)
+                giveawayRecordTrade(ctx.from.id, round > 1);
             }
             if (result.status === 'WIN') {
                 updateLeaderboardAuto(ctx.from.id, result.pnl);
@@ -519,7 +540,7 @@ async function runMartingale(ctx, ssid, pair, direction, amount, timeframeSec = 
                 return;
             }
             // LOSS — next round
-            if (round < effectiveRounds) {
+            if (round <= effectiveRounds) {
                 if (round === 1) {
                     await sendRoundImage('L10.png');
                     const recoveryReply = await ctx.reply('SMART RECOVERY ACTIVATED\nBumping the next stake. Bot fights back.');
@@ -595,6 +616,16 @@ bot.action('onboard:no', async (ctx) => {
     onboardSessions.set(chatId, { ...existing, step: 'create_user_id' });
     await askCreateAccountUserId(ctx);
 });
+bot.action('onboard:autocreate', async (ctx) => {
+    await ctx.answerCbQuery();
+    const chatId = ctx.chat.id;
+    const existing = onboardSessions.get(chatId) ?? { step: 'auto_create_email' };
+    onboardSessions.set(chatId, { ...existing, step: 'auto_create_email' });
+    await ctx.reply('🤖 *Account creation*\n\n' +
+        'Send us a fresh email address and we\'ll set up an IQ Option account for you. ' +
+        'You\'ll get the login details once it\'s ready.\n\n' +
+        '📧 Enter your email:', { parse_mode: 'Markdown' });
+});
 // ─── Trade wizard — mode ──────────────────────────────────────────────────────
 bot.action(/^mode:(demo|live)$/, async (ctx) => {
     await ctx.answerCbQuery();
@@ -660,8 +691,9 @@ bot.action(/^amt:(.+)$/, async (ctx) => {
             state.lastImageMsgId = m.message_id;
         }
         catch { }
+        const tfBtnUser = getUser(ctx.from.id);
         try {
-            await ctx.editMessageText('⏱ Pick your expiry timeframe 👇\n⏱ Faster timeframes settle quicker.\n🐢 Longer timeframes ride bigger moves.', { reply_markup: timeframeKeyboard() });
+            await ctx.editMessageText('⏱ Pick your expiry timeframe 👇\n⏱ Faster timeframes settle quicker.\n🐢 Longer timeframes ride bigger moves.', { reply_markup: timeframeKeyboard(tfBtnUser?.tier ?? undefined) });
         }
         catch { }
     }
@@ -689,7 +721,7 @@ bot.action(/^tf:(\d+)$/, async (ctx) => {
     }
     catch { }
     const tfUser = getUser(chatId);
-    const tfTier = tfUser?.tier ?? 'NEWBIE';
+    const tfTier = normalizeTier(tfUser?.tier);
     const picks = getTopPicks();
     const medals = ['🏆', '🥇', '🥈', '🥉', '4️⃣'];
     let picksMsg = 'Top picks ready 🎯\n\nHighest chance to win right now:\n\n';
@@ -715,7 +747,7 @@ bot.action(/^page:(\d+)$/, async (ctx) => {
     }
     await ctx.answerCbQuery();
     const pageUser = getUser(chatId);
-    const pageTier = pageUser?.tier ?? 'NEWBIE';
+    const pageTier = normalizeTier(pageUser?.tier);
     try {
         await ctx.editMessageReplyMarkup(pairKeyboard(parseInt(ctx.match[1], 10), pageTier));
     }
@@ -781,7 +813,28 @@ bot.action(/^pair:(.+)$/, async (ctx) => {
     }
     try {
         const analysisUser = getUser(ctx.from.id);
-        const analysisTier = (analysisUser?.tier ?? 'NEWBIE').toUpperCase();
+        const analysisTier = normalizeTier(analysisUser?.tier);
+        const tierCfg = getTierConfig(analysisTier);
+        if (!tierCfg.allowedTimeframes.includes(timeframe)) {
+            if (l7MsgId) {
+                try {
+                    await ctx.telegram.deleteMessage(chatId, l7MsgId);
+                }
+                catch { }
+            }
+            await ctx.telegram.editMessageText(chatId, progressMsg.message_id, undefined, `⚠️ ${tfLabel(timeframe)} is not available on the ${tierCfg.label} tier. Upgrade for access.`).catch(() => { });
+            return;
+        }
+        if (!tierCfg.pairs.includes(pair)) {
+            if (l7MsgId) {
+                try {
+                    await ctx.telegram.deleteMessage(chatId, l7MsgId);
+                }
+                catch { }
+            }
+            await ctx.telegram.editMessageText(chatId, progressMsg.message_id, undefined, `⚠️ ${pair} is not available on the ${tierCfg.label} tier. Upgrade for access.`).catch(() => { });
+            return;
+        }
         let analysis;
         try {
             analysis = await analyzePairWithSdk(sdk, pair, timeframe, analysisTier);
@@ -818,13 +871,14 @@ bot.action(/^pair:(.+)$/, async (ctx) => {
         if (opportunityMsg)
             preTradeMessageIds.push(opportunityMsg.message_id);
         const tradeUser = getUser(ctx.from.id);
-        const tradeTier = (tradeUser?.tier ?? 'NEWBIE').toUpperCase();
-        const maxConcurrent = tradeTier === 'PRO' ? 3 : 1;
+        const tradeTier = normalizeTier(tradeUser?.tier);
+        const tradeCfg = getTierConfig(tradeTier);
+        const maxConcurrent = tradeCfg.maxConcurrentTrades;
         const currentCount = activeTradeSessions.get(ctx.from.id) ?? 0;
         if (currentCount >= maxConcurrent) {
-            await ctx.reply(tradeTier === 'NEWBIE'
-                ? '⚠️ You already have an active trade. Newbie allows 1 trade at a time. Upgrade to PRO for up to 3 concurrent trades.'
-                : `⚠️ You already have ${currentCount} active trade(s). Max 3 concurrent trades reached. Wait for one to finish.`);
+            await ctx.reply(maxConcurrent === 1
+                ? `⚠️ You already have an active trade. ${tradeCfg.label} allows 1 trade at a time. Upgrade for more concurrent trades.`
+                : `⚠️ You already have ${currentCount} active trade(s). Max ${maxConcurrent} concurrent trades reached. Wait for one to finish.`);
             return;
         }
         const mgSettings = userMartingaleSettings.get(ctx.from.id);
@@ -1239,7 +1293,7 @@ bot.action('admin:generate_token', async (ctx) => {
     await ctx.answerCbQuery();
     await ctx.reply('🔑 Select tier for new token:', { reply_markup: tokenTierKeyboard() });
 });
-bot.action(/^token_tier:(NEWBIE|PRO)$/, async (ctx) => {
+bot.action(/^token_tier:(DEMO|PRO|MASTER)$/, async (ctx) => {
     await ctx.answerCbQuery();
     const tier = ctx.match[1];
     const token = generateToken(tier);
@@ -1617,6 +1671,153 @@ bot.action(/^giveaway:(all|24h)$/, async (ctx) => {
         `📤 Sent: ${sent} | ❌ Failed: ${failed}\n\n` +
         `*Generated Winner IDs:*\n${generatedIds.map(id => `\`${id}\``).join('\n')}`, { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
 });
+// ─── Module 11b: Giveaway V2 ─────────────────────────────────────────────────
+bot.action('admin:giveaways', async (ctx) => {
+    await ctx.answerCbQuery();
+    const stats = getGiveawayStats();
+    await ctx.reply(`🎁 *Giveaway Manager*\n\nActive: ${stats.active} | Scheduled: ${stats.scheduled} | Completed: ${stats.completed}`, { parse_mode: 'Markdown', reply_markup: giveawayManagerKeyboard(stats) });
+});
+bot.action('giveaway_v2:create', async (ctx) => {
+    await ctx.answerCbQuery();
+    await ctx.reply('🎁 *New Giveaway — Step 1*\n\nSelect the giveaway type:', {
+        parse_mode: 'Markdown',
+        reply_markup: giveawayTypeKeyboard(),
+    });
+});
+bot.action(/^giveaway_type:(giveaway|promo_code|marathon)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const type = ctx.match[1];
+    adminSessions.set(ctx.chat.id, { step: 'giveaway_v2_title', giveawayV2Type: type });
+    await ctx.reply(`✅ Type: *${type}*\n\nStep 2: Enter a *title* for this giveaway:`, { parse_mode: 'Markdown' });
+});
+bot.action('giveaway_v2:active', async (ctx) => {
+    await ctx.answerCbQuery();
+    const giveaways = getGiveawayEvents('active');
+    if (giveaways.length === 0) {
+        await ctx.reply('📋 No active giveaways.', { reply_markup: adminBackKeyboard() });
+        return;
+    }
+    await ctx.reply('📋 *Active Giveaways*', {
+        parse_mode: 'Markdown',
+        reply_markup: activeGiveawaysKeyboard(giveaways, 'view'),
+    });
+});
+bot.action('giveaway_v2:scheduled', async (ctx) => {
+    await ctx.answerCbQuery();
+    const giveaways = getGiveawayEvents('pending');
+    if (giveaways.length === 0) {
+        await ctx.reply('📅 No scheduled giveaways.', { reply_markup: adminBackKeyboard() });
+        return;
+    }
+    const lines = giveaways.map(g => `• *${g.title}* — starts: ${g.starts_at ?? 'now'}`).join('\n');
+    await ctx.reply(`📅 *Scheduled Giveaways*\n\n${lines}`, { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
+});
+bot.action('giveaway_v2:pick_winners', async (ctx) => {
+    await ctx.answerCbQuery();
+    const giveaways = getGiveawayEvents('active');
+    if (giveaways.length === 0) {
+        await ctx.reply('📋 No active giveaways to pick winners from.', { reply_markup: adminBackKeyboard() });
+        return;
+    }
+    await ctx.reply('🏆 *Pick Winners — Select a giveaway:*', {
+        parse_mode: 'Markdown',
+        reply_markup: activeGiveawaysKeyboard(giveaways, 'winners'),
+    });
+});
+bot.action(/^giveaway_winners:(\d+)$/, async (ctx) => {
+    await ctx.answerCbQuery('🏆 Selecting winners…');
+    const giveawayId = parseInt(ctx.match[1], 10);
+    const winners = giveawaySelectWinners(giveawayId);
+    if (winners.length === 0) {
+        await ctx.reply('❌ No eligible participants found.', { reply_markup: adminBackKeyboard() });
+        return;
+    }
+    const event = getGiveawayEvent(giveawayId);
+    await ctx.reply(`✅ *${winners.length} winner${winners.length !== 1 ? 's' : ''} selected* for *${event?.title ?? 'giveaway'}*!\n\nWinner notifications queued. They will be notified shortly.`, { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
+});
+bot.action(/^giveaway_view:(\d+)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const giveawayId = parseInt(ctx.match[1], 10);
+    const event = getGiveawayEvent(giveawayId);
+    if (!event) {
+        await ctx.reply('❌ Giveaway not found.', { reply_markup: adminBackKeyboard() });
+        return;
+    }
+    const participantCount = getGiveawayParticipantCount(giveawayId);
+    const info = [
+        `🎁 *${event.title}*`,
+        event.description ?? '',
+        `Type: ${event.event_type}`,
+        `Status: ${event.status}`,
+        `Participants: ${participantCount}`,
+        event.prize_pool != null ? `Prize Pool: $${event.prize_pool.toFixed(2)}` : '',
+        `Max Winners: ${event.max_winners}`,
+        event.criteria_type ? `Criteria: ${event.criteria_type} = ${event.criteria_value ?? ''}` : '',
+    ].filter(Boolean).join('\n');
+    await ctx.reply(info, { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
+});
+bot.action(/^giveaway_criteria:(none|new_user|min_balance|top_traders)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const chatId = ctx.chat.id;
+    const as = adminSessions.get(chatId);
+    if (!as || !as.giveawayV2Title) {
+        await ctx.reply('❌ Session expired. Start over.', { reply_markup: adminBackKeyboard() });
+        return;
+    }
+    const criteria = ctx.match[1];
+    if (criteria === 'none') {
+        adminSessions.set(chatId, { ...as, step: 'giveaway_v2_max_winners', giveawayV2CriteriaType: 'none' });
+        await ctx.reply('✅ No criteria.\n\nStep 5: How many *winners*? (e.g. 3):', { parse_mode: 'Markdown' });
+    }
+    else {
+        adminSessions.set(chatId, { ...as, step: 'giveaway_v2_criteria_value', giveawayV2CriteriaType: criteria });
+        const hint = criteria === 'new_user' ? 'days (e.g. 7)' : criteria === 'min_balance' ? 'minimum $ amount (e.g. 20)' : 'number of trades (e.g. 10)';
+        await ctx.reply(`✅ Criteria: *${criteria}*\n\nStep 4b: Enter the criteria value — ${hint}:`, { parse_mode: 'Markdown' });
+    }
+});
+bot.action(/^giveaway_schedule:(now|\d+)$/, async (ctx) => {
+    await ctx.answerCbQuery('⏳ Creating giveaway…');
+    const chatId = ctx.chat.id;
+    const as = adminSessions.get(chatId);
+    if (!as || !as.giveawayV2Type || !as.giveawayV2Title || !as.giveawayV2MaxWinners) {
+        await ctx.reply('❌ Session expired. Start over.', { reply_markup: adminBackKeyboard() });
+        return;
+    }
+    adminSessions.delete(chatId);
+    const scheduleArg = ctx.match[1];
+    const startsAt = scheduleArg === 'now'
+        ? null
+        : new Date(Date.now() + parseInt(scheduleArg, 10) * 1000).toISOString().replace('T', ' ').split('.')[0];
+    const input = {
+        event_type: as.giveawayV2Type,
+        title: as.giveawayV2Title,
+        description: as.giveawayV2Desc,
+        criteria_type: as.giveawayV2CriteriaType !== 'none' ? as.giveawayV2CriteriaType : undefined,
+        criteria_value: as.giveawayV2CriteriaValue,
+        prize_pool: as.giveawayV2Prize,
+        max_winners: as.giveawayV2MaxWinners,
+        starts_at: startsAt ?? undefined,
+    };
+    const giveawayId = createGiveawayEvent(input);
+    if (scheduleArg === 'now') {
+        await activateGiveaway(giveawayId);
+        await ctx.reply(`✅ *Giveaway created and activated!*\n\nID: ${giveawayId}\nTitle: *${input.title}*\nWinners: ${input.max_winners}\n\nAnnouncement queued to all approved users.`, { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
+    }
+    else {
+        await ctx.reply(`✅ *Giveaway scheduled!*\n\nID: ${giveawayId}\nTitle: *${input.title}*\nStarts: ${startsAt}`, { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
+    }
+});
+// User participate handler
+bot.action(/^giveaway:participate:(\d+)$/, async (ctx) => {
+    await ctx.answerCbQuery('⏳ Processing…');
+    const telegramId = ctx.from.id;
+    const giveawayId = parseInt(ctx.match[1], 10);
+    const result = await giveawayParticipate(giveawayId, telegramId);
+    await ctx.reply(result.message, {
+        parse_mode: 'Markdown',
+        ...(result.replyMarkup ? { reply_markup: result.replyMarkup } : {}),
+    });
+});
 // ─── /connect & /disconnect ───────────────────────────────────────────────────
 bot.command('connect', async (ctx) => {
     connectSessions.set(ctx.chat.id, { step: 'email' });
@@ -1976,6 +2177,56 @@ bot.on('text', async (ctx) => {
                     await ctx.reply(`✅ Prize pool: *$${prize.toFixed(2)}* → *$${perWinner}* per winner\n\n📡 Who should receive this broadcast?`, { parse_mode: 'Markdown', reply_markup: giveawayTargetKeyboard() });
                     return;
                 }
+                // ── Giveaway V2 wizard text steps ────────────────────────────────
+                if (as.step === 'giveaway_v2_title') {
+                    if (!text.trim()) {
+                        await ctx.reply('❌ Please enter a title:');
+                        return;
+                    }
+                    adminSessions.set(chatId, { ...as, step: 'giveaway_v2_desc', giveawayV2Title: text.trim() });
+                    await ctx.reply(`✅ Title: *${text.trim()}*\n\nStep 3: Enter a *description* (or type \`skip\`):`, { parse_mode: 'Markdown' });
+                    return;
+                }
+                if (as.step === 'giveaway_v2_desc') {
+                    const desc = text.trim().toLowerCase() === 'skip' ? undefined : text.trim();
+                    adminSessions.set(chatId, { ...as, step: 'giveaway_v2_criteria_value', giveawayV2Desc: desc });
+                    await ctx.reply('Step 4: Select *eligibility criteria*:', {
+                        parse_mode: 'Markdown',
+                        reply_markup: giveawayCriteriaKeyboard(),
+                    });
+                    return;
+                }
+                if (as.step === 'giveaway_v2_criteria_value') {
+                    if (!text.trim()) {
+                        await ctx.reply('❌ Enter a value:');
+                        return;
+                    }
+                    adminSessions.set(chatId, { ...as, step: 'giveaway_v2_max_winners', giveawayV2CriteriaValue: text.trim() });
+                    await ctx.reply(`✅ Criteria value: *${text.trim()}*\n\nStep 5: How many *winners*? (e.g. 3):`, { parse_mode: 'Markdown' });
+                    return;
+                }
+                if (as.step === 'giveaway_v2_max_winners') {
+                    const n = parseInt(text, 10);
+                    if (isNaN(n) || n < 1 || n > 100) {
+                        await ctx.reply('❌ Enter a number between 1 and 100:');
+                        return;
+                    }
+                    adminSessions.set(chatId, { ...as, step: 'giveaway_v2_prize', giveawayV2MaxWinners: n });
+                    await ctx.reply(`✅ *${n}* winner${n !== 1 ? 's' : ''}.\n\nStep 6: Enter the *total prize pool* in USD (e.g. 500), or \`0\` to skip:`, { parse_mode: 'Markdown' });
+                    return;
+                }
+                if (as.step === 'giveaway_v2_prize' && as.giveawayV2MaxWinners) {
+                    const prize = parseFloat(text);
+                    if (isNaN(prize) || prize < 0) {
+                        await ctx.reply('❌ Enter a valid amount (e.g. 500) or 0:');
+                        return;
+                    }
+                    const prizeVal = prize > 0 ? prize : undefined;
+                    adminSessions.set(chatId, { ...as, giveawayV2Prize: prizeVal });
+                    const perWinner = prizeVal ? ` ($${(prizeVal / as.giveawayV2MaxWinners).toFixed(2)} per winner)` : '';
+                    await ctx.reply(`✅ Prize pool: *${prizeVal ? `$${prizeVal.toFixed(2)}${perWinner}` : 'none'}*\n\nStep 7: When should it start?`, { parse_mode: 'Markdown', reply_markup: giveawayScheduleKeyboard() });
+                    return;
+                }
                 return;
             }
             catch (err) {
@@ -2028,9 +2279,15 @@ bot.on('text', async (ctx) => {
                 else {
                     setManualApproval(ctx.from.id);
                     onboardSessions.delete(chatId);
+                    const failAffLink = process.env.AFFILIATE_LINK ?? 'https://iqbroker.com/lp/regframe-01-light-nosocials/?aff=749367&aff_model=revenue';
+                    const failAdminLink = process.env.ADMIN_CONTACT_LINK ?? 'https://t.me/shiloh_is_10xing';
                     await ctx.reply('⏳ We were not able to confirm your User ID.\n\n' +
                         'Please consider creating a new account the right way using our link 👇👾\n\n' +
-                        'You can as-well contact admin 👇💜', { reply_markup: affiliateFailKeyboard() });
+                        'You can as-well contact admin 👇💜', { reply_markup: { inline_keyboard: [
+                                [{ text: '🆕 Create free account (takes 2 min)', url: failAffLink }],
+                                [{ text: '🤖 Let us create one for you', callback_data: 'onboard:autocreate' }],
+                                [{ text: '👾 Contact admin', url: failAdminLink }],
+                            ] } });
                     try {
                         const userTag = ctx.from.username
                             ? `@${escapeMd(ctx.from.username)}`
@@ -2061,6 +2318,26 @@ bot.on('text', async (ctx) => {
             onboardSessions.set(chatId, ob);
             await ctx.reply('🛡️ Your password is safe\n\nWe use the official IQ Option API.\nWe can\'t read or store it.\nYour message auto-deletes from this chat in 10 seconds.');
             await ctx.reply('🔑 Enter your IQ Option password:');
+            return;
+        }
+        if (ob.step === 'auto_create_email') {
+            const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text);
+            if (!emailOk) {
+                await ctx.reply('That doesn\'t look like a valid email. Please try again.');
+                return;
+            }
+            onboardSessions.delete(chatId);
+            await ctx.reply('✅ Got it! We\'ve received your email.\n\n' +
+                'Our team will set up your IQ Option account and message you the login details shortly. ' +
+                'This usually takes a few hours during business hours.');
+            try {
+                const userTag = ctx.from.username
+                    ? `@${escapeMd(ctx.from.username)}`
+                    : `[User](tg://user?id=${ctx.from.id})`;
+                await bot.telegram.sendMessage(getAdminId(), `🤖 *Auto-account request*\nTelegram: ${userTag}\nEmail: \`${escapeMd(text)}\`\n\nManually create an IQ Option account, then DM the user the credentials and approve: /admin approve ${ctx.from.id}`, { parse_mode: 'Markdown' });
+            }
+            catch { }
+            console.log(`[auto-create] requested by ${ctx.from.id}: ${text}`);
             return;
         }
         if (ob.step === 'connect_password' && ob.email) {
@@ -2186,7 +2463,8 @@ bot.on('text', async (ctx) => {
         wiz.lastImageMsgId = m.message_id;
     }
     catch { }
-    await ctx.reply('⏱ Pick your expiry timeframe 👇\n⏱ Faster timeframes settle quicker.\n🐢 Longer timeframes ride bigger moves.', { reply_markup: timeframeKeyboard() });
+    const tfWizUser = getUser(ctx.from.id);
+    await ctx.reply('⏱ Pick your expiry timeframe 👇\n⏱ Faster timeframes settle quicker.\n🐢 Longer timeframes ride bigger moves.', { reply_markup: timeframeKeyboard(tfWizUser?.tier ?? undefined) });
 });
 bot.catch((err, ctx) => {
     const msg = err instanceof Error ? err.message : String(err);
@@ -2245,6 +2523,23 @@ function scheduleMidnightReset() {
     }, midnight.getTime() - now.getTime());
 }
 scheduleMidnightReset();
+// ─── Giveaway V2: update queue + notifications queue ─────────────────────────
+setInterval(async () => {
+    try {
+        await processUpdateQueue(bot.telegram);
+    }
+    catch (err) {
+        console.error('[giveaway] processUpdateQueue error:', err instanceof Error ? err.message : err);
+    }
+}, 30_000);
+setInterval(async () => {
+    try {
+        await processNotificationsQueue(bot.telegram);
+    }
+    catch (err) {
+        console.error('[giveaway] processNotificationsQueue error:', err instanceof Error ? err.message : err);
+    }
+}, 30_000);
 // ─── Keepalive ────────────────────────────────────────────────────────────────
 setInterval(async () => {
     try {

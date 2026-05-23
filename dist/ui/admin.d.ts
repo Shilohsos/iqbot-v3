@@ -33,5 +33,17 @@ export declare function activationsKeyboard(pendingUsers: Array<{
 }>): IKMarkup;
 export declare function funnelKeyboard(): IKMarkup;
 export declare function giveawayTargetKeyboard(): IKMarkup;
+export declare function giveawayManagerKeyboard(stats: {
+    active: number;
+    scheduled: number;
+    completed: number;
+}): IKMarkup;
+export declare function giveawayTypeKeyboard(): IKMarkup;
+export declare function giveawayCriteriaKeyboard(): IKMarkup;
+export declare function giveawayScheduleKeyboard(): IKMarkup;
+export declare function activeGiveawaysKeyboard(giveaways: Array<{
+    id: number;
+    title: string;
+}>, action: 'view' | 'winners'): IKMarkup;
 export declare function memberManagementKeyboard(): IKMarkup;
 export {};

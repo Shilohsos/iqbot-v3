@@ -35,7 +35,7 @@ db.exec(`
     approval_status TEXT    NOT NULL DEFAULT 'pending',
     approved_at     TEXT,
     affiliate_data  TEXT,
-    tier            TEXT    NOT NULL DEFAULT 'NEWBIE',
+    tier            TEXT    NOT NULL DEFAULT 'DEMO',
     created_at      TEXT    NOT NULL DEFAULT (datetime('now')),
     last_used       TEXT    NOT NULL DEFAULT (datetime('now'))
   )
@@ -55,7 +55,7 @@ if (ssidColNotNull) {
             approval_status TEXT    NOT NULL DEFAULT 'pending',
             approved_at     TEXT,
             affiliate_data  TEXT,
-            tier            TEXT    NOT NULL DEFAULT 'NEWBIE',
+            tier            TEXT    NOT NULL DEFAULT 'DEMO',
             created_at      TEXT    NOT NULL DEFAULT (datetime('now')),
             last_used       TEXT    NOT NULL DEFAULT (datetime('now'))
         );
@@ -75,7 +75,7 @@ else {
     if (!userColNames.includes('affiliate_data'))
         db.exec('ALTER TABLE users ADD COLUMN affiliate_data TEXT');
     if (!userColNames.includes('tier'))
-        db.exec("ALTER TABLE users ADD COLUMN tier TEXT NOT NULL DEFAULT 'NEWBIE'");
+        db.exec("ALTER TABLE users ADD COLUMN tier TEXT NOT NULL DEFAULT 'DEMO'");
 }
 // Additional column migrations (run after main table setup to get final state)
 const finalUserCols = db.prepare('PRAGMA table_info(users)').all().map(c => c.name);
@@ -83,6 +83,12 @@ if (!finalUserCols.includes('username'))
     db.exec('ALTER TABLE users ADD COLUMN username TEXT');
 if (!finalUserCols.includes('currency'))
     db.exec("ALTER TABLE users ADD COLUMN currency TEXT DEFAULT 'USD'");
+if (!finalUserCols.includes('simultaneous_trades'))
+    db.exec('ALTER TABLE users ADD COLUMN simultaneous_trades INTEGER NOT NULL DEFAULT 1');
+if (!finalUserCols.includes('gale_disabled'))
+    db.exec('ALTER TABLE users ADD COLUMN gale_disabled INTEGER NOT NULL DEFAULT 0');
+// V4 tier migration: NEWBIE → DEMO (run-once, idempotent)
+db.prepare("UPDATE users SET tier = 'DEMO' WHERE tier = 'NEWBIE'").run();
 // ─── Section 10 tables ────────────────────────────────────────────────────────
 db.exec(`
   CREATE TABLE IF NOT EXISTS tokens (
@@ -121,6 +127,130 @@ db.exec(`
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
   )
 `);
+// ─── V4 tables ───────────────────────────────────────────────────────────────
+db.exec(`
+  CREATE TABLE IF NOT EXISTS giveaway_events (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_type       TEXT    NOT NULL,
+    title            TEXT    NOT NULL,
+    description      TEXT,
+    criteria_type    TEXT,
+    criteria_value   TEXT,
+    prize_pool       REAL,
+    prize_per_winner REAL,
+    max_winners      INTEGER,
+    status           TEXT    NOT NULL DEFAULT 'pending',
+    starts_at        TEXT,
+    ends_at          TEXT,
+    created_at       TEXT    NOT NULL DEFAULT (datetime('now'))
+  )
+`);
+db.exec(`
+  CREATE TABLE IF NOT EXISTS giveaway_participants (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    giveaway_id  INTEGER NOT NULL REFERENCES giveaway_events(id),
+    telegram_id  INTEGER NOT NULL,
+    trade_count  INTEGER NOT NULL DEFAULT 0,
+    eligible     INTEGER NOT NULL DEFAULT 1,
+    joined_at    TEXT    NOT NULL DEFAULT (datetime('now'))
+  )
+`);
+db.exec(`
+  CREATE TABLE IF NOT EXISTS broadcast_messages (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    type          TEXT    NOT NULL,
+    category      TEXT,
+    content       TEXT    NOT NULL,
+    image_file_id TEXT,
+    enabled       INTEGER NOT NULL DEFAULT 1,
+    last_sent_at  TEXT,
+    created_at    TEXT    NOT NULL DEFAULT (datetime('now'))
+  )
+`);
+db.exec(`
+  CREATE TABLE IF NOT EXISTS channel_approvals (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    telegram_id INTEGER NOT NULL UNIQUE,
+    approved    INTEGER NOT NULL DEFAULT 0,
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+  )
+`);
+// ─── V4.2 Giveaway table migrations ──────────────────────────────────────────
+{
+    const geCols = db.prepare('PRAGMA table_info(giveaway_events)').all().map(c => c.name);
+    if (!geCols.includes('winner_count'))
+        db.exec('ALTER TABLE giveaway_events ADD COLUMN winner_count INTEGER NOT NULL DEFAULT 0');
+}
+{
+    const gpCols = db.prepare('PRAGMA table_info(giveaway_participants)').all().map(c => c.name);
+    if (!gpCols.includes('disqualify_reason'))
+        db.exec('ALTER TABLE giveaway_participants ADD COLUMN disqualify_reason TEXT');
+    if (!gpCols.includes('winner'))
+        db.exec('ALTER TABLE giveaway_participants ADD COLUMN winner INTEGER NOT NULL DEFAULT 0');
+}
+db.exec(`
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_gp_unique ON giveaway_participants(giveaway_id, telegram_id);
+`);
+db.exec(`
+  CREATE TABLE IF NOT EXISTS giveaway_updates (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    giveaway_id     INTEGER NOT NULL REFERENCES giveaway_events(id),
+    participant_id  INTEGER NOT NULL REFERENCES giveaway_participants(id),
+    telegram_id     INTEGER NOT NULL,
+    update_type     TEXT    NOT NULL,
+    update_text     TEXT,
+    sent            INTEGER NOT NULL DEFAULT 0,
+    send_at         TEXT    NOT NULL DEFAULT (datetime('now')),
+    created_at      TEXT    NOT NULL DEFAULT (datetime('now'))
+  )
+`);
+db.exec(`
+  CREATE TABLE IF NOT EXISTS motivational_messages (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    category   TEXT    NOT NULL,
+    content    TEXT    NOT NULL,
+    enabled    INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT    NOT NULL DEFAULT (datetime('now'))
+  )
+`);
+db.exec(`
+  CREATE TABLE IF NOT EXISTS notifications_queue (
+    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+    telegram_id          INTEGER NOT NULL,
+    message              TEXT    NOT NULL,
+    reply_markup         TEXT,
+    image_file_id        TEXT,
+    delete_after_seconds INTEGER DEFAULT NULL,
+    priority             INTEGER NOT NULL DEFAULT 0,
+    status               TEXT    NOT NULL DEFAULT 'pending',
+    send_after           TEXT,
+    created_at           TEXT    NOT NULL DEFAULT (datetime('now'))
+  )
+`);
+db.exec(`
+  CREATE INDEX IF NOT EXISTS idx_gp_giveaway_id ON giveaway_participants(giveaway_id);
+  CREATE INDEX IF NOT EXISTS idx_gp_telegram_id ON giveaway_participants(telegram_id);
+  CREATE INDEX IF NOT EXISTS idx_gu_send_at ON giveaway_updates(send_at, sent);
+  CREATE INDEX IF NOT EXISTS idx_nq_status ON notifications_queue(status, send_after);
+`);
+{
+    const motCount = db.prepare('SELECT COUNT(*) AS cnt FROM motivational_messages').get().cnt;
+    if (motCount === 0) {
+        const templates = [
+            ['persuasion', "Giveaway is still on — you still have a chance to win *${prize_per_winner}*. Don't sit this one out 👇"],
+            ['urgency', "⏳ Winners will be selected soon. You can still participate and claim your share of *${prize_pool}*."],
+            ['social_proof', "🔥 *${count}* traders already joined this giveaway. Every second you wait = less chance to win."],
+            ['persuasion', "Someone's going to win *${prize_per_winner}*. Why not you? Join now 👇"],
+            ['urgency', "🚨 Last chance! Winners picked in *${time_left}*. Tap Participate now."],
+            ['social_proof', "💸 *${recent_winner}* just claimed a prize last giveaway. This could be you next."],
+            ['persuasion', "Trade more, win more. The *${title}* giveaway rewards the most active traders 🏆"],
+            ['urgency', "Not in yet? *${spots_left}* winners will split *${prize_pool}*. Your move 👇"],
+        ];
+        const ins = db.prepare('INSERT INTO motivational_messages (category, content) VALUES (?, ?)');
+        for (const [cat, content] of templates)
+            ins.run(cat, content);
+    }
+}
 const insertStmt = db.prepare(`
     INSERT INTO trades (telegram_id, pair, direction, amount, status, pnl, trade_id, error, martingale_run)
     VALUES (@telegram_id, @pair, @direction, @amount, @status, @pnl, @trade_id, @error, @martingale_run)
@@ -678,4 +808,136 @@ export function getRealTraderLeaderboard() {
         WHERE l.date = ?
         ORDER BY total_pnl DESC
     `).all(today);
+}
+export function dbCreateGiveawayEvent(input) {
+    const prizePerWinner = (input.prize_pool != null && input.max_winners > 0)
+        ? input.prize_pool / input.max_winners : null;
+    const result = db.prepare(`
+        INSERT INTO giveaway_events
+            (event_type, title, description, criteria_type, criteria_value,
+             prize_pool, prize_per_winner, max_winners, starts_at, ends_at, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
+    `).run(input.event_type, input.title, input.description ?? null, input.criteria_type ?? null, input.criteria_value ?? null, input.prize_pool ?? null, prizePerWinner, input.max_winners, input.starts_at ?? null, input.ends_at ?? null);
+    return result.lastInsertRowid;
+}
+export function getGiveawayEvent(id) {
+    return db.prepare('SELECT * FROM giveaway_events WHERE id = ?').get(id);
+}
+export function getGiveawayEvents(status) {
+    if (status) {
+        return db.prepare('SELECT * FROM giveaway_events WHERE status = ? ORDER BY created_at DESC').all(status);
+    }
+    return db.prepare('SELECT * FROM giveaway_events ORDER BY created_at DESC LIMIT 50').all();
+}
+export function getActiveGiveaways() {
+    return db.prepare("SELECT * FROM giveaway_events WHERE status = 'active' ORDER BY created_at DESC").all();
+}
+export function setGiveawayStatus(id, status) {
+    db.prepare('UPDATE giveaway_events SET status = ? WHERE id = ?').run(status, id);
+}
+export function incrementGiveawayWinnerCount(id) {
+    db.prepare('UPDATE giveaway_events SET winner_count = winner_count + 1 WHERE id = ?').run(id);
+}
+export function getGiveawayParticipant(giveawayId, telegramId) {
+    return db.prepare('SELECT * FROM giveaway_participants WHERE giveaway_id = ? AND telegram_id = ?').get(giveawayId, telegramId);
+}
+export function insertGiveawayParticipant(giveawayId, telegramId) {
+    const result = db.prepare(`
+        INSERT INTO giveaway_participants (giveaway_id, telegram_id)
+        VALUES (?, ?)
+        ON CONFLICT(giveaway_id, telegram_id) DO NOTHING
+    `).run(giveawayId, telegramId);
+    if (result.changes === 0) {
+        return getGiveawayParticipant(giveawayId, telegramId).id;
+    }
+    return result.lastInsertRowid;
+}
+export function getGiveawayParticipants(giveawayId, eligibleOnly = false) {
+    if (eligibleOnly) {
+        return db.prepare('SELECT * FROM giveaway_participants WHERE giveaway_id = ? AND eligible = 1 ORDER BY trade_count DESC, joined_at').all(giveawayId);
+    }
+    return db.prepare('SELECT * FROM giveaway_participants WHERE giveaway_id = ? ORDER BY joined_at').all(giveawayId);
+}
+export function getGiveawayParticipantCount(giveawayId) {
+    return db.prepare('SELECT COUNT(*) AS cnt FROM giveaway_participants WHERE giveaway_id = ? AND eligible = 1').get(giveawayId).cnt;
+}
+export function incrementParticipantTradeCount(participantId) {
+    db.prepare('UPDATE giveaway_participants SET trade_count = trade_count + 1 WHERE id = ?').run(participantId);
+}
+export function setParticipantWinner(participantId) {
+    db.prepare('UPDATE giveaway_participants SET winner = 1 WHERE id = ?').run(participantId);
+}
+export function disqualifyParticipant(participantId, reason) {
+    db.prepare('UPDATE giveaway_participants SET eligible = 0, disqualify_reason = ? WHERE id = ?').run(reason, participantId);
+}
+export function getActiveParticipations(telegramId) {
+    return db.prepare(`
+        SELECT gp.id AS participation_id, gp.giveaway_id,
+               ge.criteria_type, ge.title, ge.prize_per_winner, ge.prize_pool
+        FROM giveaway_participants gp
+        JOIN giveaway_events ge ON ge.id = gp.giveaway_id
+        WHERE gp.telegram_id = ? AND ge.status = 'active' AND gp.eligible = 1
+    `).all(telegramId);
+}
+export function insertGiveawayUpdate(giveawayId, participantId, telegramId, type, text, sendAt) {
+    db.prepare(`
+        INSERT INTO giveaway_updates
+            (giveaway_id, participant_id, telegram_id, update_type, update_text, send_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+    `).run(giveawayId, participantId, telegramId, type, text, sendAt);
+}
+export function getPendingGiveawayUpdates() {
+    return db.prepare(`
+        SELECT * FROM giveaway_updates
+        WHERE sent = 0 AND send_at <= datetime('now')
+        ORDER BY send_at LIMIT 50
+    `).all();
+}
+export function markGiveawayUpdateSent(id) {
+    db.prepare('UPDATE giveaway_updates SET sent = 1 WHERE id = ?').run(id);
+}
+export function getRandomMotivationalMessage(category) {
+    if (category) {
+        return db.prepare('SELECT * FROM motivational_messages WHERE enabled = 1 AND category = ? ORDER BY RANDOM() LIMIT 1').get(category);
+    }
+    return db.prepare('SELECT * FROM motivational_messages WHERE enabled = 1 ORDER BY RANDOM() LIMIT 1').get();
+}
+export function insertNotification(telegramId, message, opts) {
+    db.prepare(`
+        INSERT INTO notifications_queue
+            (telegram_id, message, reply_markup, image_file_id, delete_after_seconds, priority, send_after)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(telegramId, message, opts?.replyMarkup ?? null, opts?.imageFileId ?? null, opts?.deleteAfterSeconds ?? null, opts?.priority ?? 0, opts?.sendAfter ?? null);
+}
+export function getPendingNotifications(limit = 20) {
+    return db.prepare(`
+        SELECT * FROM notifications_queue
+        WHERE status = 'pending'
+          AND (send_after IS NULL OR send_after <= datetime('now'))
+        ORDER BY priority DESC, created_at ASC
+        LIMIT ?
+    `).all(limit);
+}
+export function markNotificationSent(id) {
+    db.prepare("UPDATE notifications_queue SET status = 'sent' WHERE id = ?").run(id);
+}
+export function markNotificationFailed(id) {
+    db.prepare("UPDATE notifications_queue SET status = 'failed' WHERE id = ?").run(id);
+}
+export function getApprovedUsersWithTier() {
+    return db.prepare("SELECT telegram_id, tier FROM users WHERE approval_status = 'approved'").all();
+}
+export function getGiveawayStats() {
+    const row = db.prepare(`
+        SELECT
+            SUM(CASE WHEN status = 'active'    THEN 1 ELSE 0 END) AS active,
+            SUM(CASE WHEN status = 'pending'   THEN 1 ELSE 0 END) AS scheduled,
+            SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS completed
+        FROM giveaway_events
+    `).get();
+    return {
+        active: row.active ?? 0,
+        scheduled: row.scheduled ?? 0,
+        completed: row.completed ?? 0,
+    };
 }
