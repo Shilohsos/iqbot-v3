@@ -25,7 +25,12 @@ import {
     getGiveawayStats, getGiveawayParticipantCount,
     insertMessage,
     insertBroadcastMessage,
+    getUserMartingaleSettings, setUserMartingaleSettings,
+    getUserSessionStats, addUserSessionStats,
+    getUserBalanceCache, setUserBalanceCache, clearUserBalanceCache,
 } from './db.js';
+import { friendlyError } from './errors.js';
+import { logger } from './logger.js';
 import {
     createGiveawayEvent, activateGiveaway, participate as giveawayParticipate,
     recordTrade as giveawayRecordTrade, selectWinners as giveawaySelectWinners,
@@ -114,12 +119,6 @@ function ASSET(f: string): { source: string } {
 }
 
 // ─── Session / wizard state ───────────────────────────────────────────────────
-
-const sessionStats = new Map<number, { trades: number; pnl: number }>();
-function getSessionStats(uid: number) {
-    if (!sessionStats.has(uid)) sessionStats.set(uid, { trades: 0, pnl: 0 });
-    return sessionStats.get(uid)!;
-}
 
 function makeSessionMap<T>(prefix: string) {
     const cache = new Map<number, T>();
@@ -254,8 +253,18 @@ let nextScheduledId = 1;
 
 // userId → number of active martingale trades in flight
 const activeTradeSessions = new Map<number, number>();
-// per-user martingale config (Pro users can adjust)
-const userMartingaleSettings = makeSessionMap<{ enabled: boolean; maxRounds: number }>('mg');
+
+// Pending trade confirmations (ephemeral — user taps Confirm/Cancel)
+interface PendingTrade {
+    pair: string;
+    direction: 'call' | 'put';
+    amount: number;
+    timeframe: number;
+    mode: 'demo' | 'live';
+    ssid: string;
+    preTradeMessageIds: number[];
+}
+const pendingTrades = new Map<number, PendingTrade>();
 
 // Top picks cache — refreshed every 2 hours
 const PICKS_REFRESH_MS = 2 * 60 * 60 * 1000;
@@ -273,9 +282,8 @@ function getTopPicks(): PairWinRate[] {
     return cachedTopPicks;
 }
 
-// Balance cache — avoids a fresh WS connection on every /start
+// Balance cache TTL — stored in users table (balance_cache / balance_cache_ts columns)
 const BALANCE_CACHE_TTL = 5 * 60 * 1000;
-const balanceCache = new Map<number, { line: string; ts: number }>();
 
 // Messages queued for users who were trading when a broadcast was sent
 const pendingDeliveries = new Map<number, Array<{
@@ -453,13 +461,13 @@ async function sendStartMenu(ctx: Context): Promise<void> {
     }
 
     // Approved — build rich menu
-    const ss  = getSessionStats(telegramId);
+    const ss  = getUserSessionStats(telegramId);
     const tier = normalizeTier(user.tier);
     const tierEmoji = tier === 'MASTER' ? '👑' : tier === 'PRO' ? '⚡' : '🧪';
     const pnlSign   = ss.pnl >= 0 ? '+' : '';
 
     const ssid = getSsidForUser(telegramId);
-    const cached = ssid ? balanceCache.get(telegramId) : undefined;
+    const cached = ssid ? getUserBalanceCache(telegramId) : undefined;
     const cachedLine = (cached && Date.now() - cached.ts < BALANCE_CACHE_TTL) ? cached.line : '';
     const needsFetch = !!ssid && !cachedLine;
 
@@ -508,7 +516,7 @@ async function sendStartMenu(ctx: Context): Promise<void> {
                     real ? `Real ${fmtBalance(real)}` : '',
                 ].filter(Boolean).join(' | ');
                 if (newLine) {
-                    balanceCache.set(telegramId, { line: newLine, ts: Date.now() });
+                    setUserBalanceCache(telegramId, newLine);
                     await ctx.telegram.editMessageText(chatId, msgId, undefined, buildMenu(newLine),
                         { reply_markup: startKeyboard(userTier) });
                 }
@@ -597,7 +605,7 @@ async function runMartingale(
     existingSdk?: ClientSdk,
 ): Promise<void> {
     const userId = ctx.from!.id;
-    const effectiveRounds = martingaleRounds ?? userMartingaleSettings.get(userId)?.maxRounds ?? MAX_ROUNDS;
+    const effectiveRounds = martingaleRounds ?? getUserMartingaleSettings(userId).maxRounds;
     activeTradeSessions.set(userId, (activeTradeSessions.get(userId) ?? 0) + 1);
     try {
     const runId = crypto.randomUUID();
@@ -689,10 +697,7 @@ async function runMartingale(
 
         // Update session stats on any settled trade
         if (result.status === 'WIN' || result.status === 'LOSS' || result.status === 'TIE') {
-            const ss = getSessionStats(ctx.from!.id);
-            ss.trades++;
-            ss.pnl += roundPnl;
-            // Record for giveaway (round 1 = initial, round > 1 = martingale recovery)
+            addUserSessionStats(ctx.from!.id, 1, roundPnl);
             giveawayRecordTrade(ctx.from!.id, round > 1);
         }
         if (result.status === 'WIN') {
@@ -757,8 +762,8 @@ async function runMartingale(
     );
     sentMessages.push(lostReply.message_id);
     scheduleCleanup();
-    const mgPromoSettings = userMartingaleSettings.get(userId);
-    if (mgPromoSettings && !mgPromoSettings.enabled) {
+    const mgPromoSettings = getUserMartingaleSettings(userId);
+    if (!mgPromoSettings.enabled) {
         const promoImg = await ctx.replyWithPhoto(ASSET('recovery-promo.png')).catch(() => undefined);
         if (promoImg) sentMessages.push(promoImg.message_id);
         const promoText = await ctx.reply(
@@ -974,8 +979,8 @@ bot.action(/^pair:(.+)$/, async ctx => {
         if (l7MsgId) { try { await ctx.telegram.deleteMessage(chatId, l7MsgId); } catch {} }
         await ctx.telegram.editMessageText(
             chatId, progressMsg.message_id, undefined,
-            `❌ Could not connect to IQ Option.\n\nTry again in a moment.`
-        ).catch(() => ctx.reply('❌ Could not connect to IQ Option. Try again.'));
+            friendlyError(err, '🔌 Lost connection to IQ Option. Your account is safe — try again.')
+        ).catch(() => ctx.reply(friendlyError(err, '🔌 Could not connect to IQ Option. Try again.')));
         return;
     }
 
@@ -999,15 +1004,17 @@ bot.action(/^pair:(.+)$/, async ctx => {
             ).catch(() => {});
             return;
         }
+
+        ctx.telegram.sendChatAction(chatId, 'typing').catch(() => {});
+
         let analysis: AnalysisResult;
         try {
             analysis = await analyzePairWithSdk(sdk, pair, timeframe, analysisTier);
         } catch (err: unknown) {
             if (l7MsgId) { try { await ctx.telegram.deleteMessage(chatId, l7MsgId); } catch {} }
-            await ctx.telegram.editMessageText(
-                chatId, progressMsg.message_id, undefined,
-                `❌ Analysis failed: ${err instanceof Error ? err.message : 'Unknown error'}`
-            ).catch(() => ctx.reply(`❌ Analysis failed: ${err instanceof Error ? err.message : 'Unknown error'}`));
+            const errMsg = friendlyError(err, '⚠️ Could not analyze market. Please try again.');
+            await ctx.telegram.editMessageText(chatId, progressMsg.message_id, undefined, errMsg)
+                .catch(() => ctx.reply(errMsg));
             return;
         }
 
@@ -1045,14 +1052,32 @@ bot.action(/^pair:(.+)$/, async ctx => {
             return;
         }
 
-        const mgSettings = userMartingaleSettings.get(ctx.from!.id);
-        const martingaleRounds = mgSettings ? (mgSettings.enabled ? mgSettings.maxRounds : 1) : undefined;
-        try {
-            await runMartingale(ctx, ssid, pair, analysis.direction, amount, timeframe, mode === 'live' ? 'live' : 'demo', martingaleRounds, preTradeMessageIds, sdk);
-        } catch (err: unknown) {
-            console.error('[pair] runMartingale threw:', err);
-            await ctx.reply('⚠️ Trade session ended unexpectedly. Please try again.').catch(() => {});
-        }
+        // Show trade confirmation dialog
+        const modeLabel = (mode ?? 'demo') === 'live' ? 'Live 💰' : 'Demo 🎮';
+        const confirmCard = await ctx.reply(
+            `📋 *Trade Summary*\n\n` +
+            `Pair: ${pair}\n` +
+            `Direction: ${analysis.direction === 'call' ? '🟢 CALL (BUY)' : '🔴 PUT (SELL)'}\n` +
+            `Amount: $${amount.toFixed(2)}\n` +
+            `Expiry: ${tfLabel(timeframe)}\n` +
+            `Mode: ${modeLabel}`,
+            {
+                parse_mode: 'Markdown',
+                reply_markup: { inline_keyboard: [[
+                    { text: '✅ Confirm Trade', callback_data: 'trade:confirm' },
+                    { text: '❌ Cancel',         callback_data: 'trade:cancel' },
+                ]]},
+            }
+        ).catch(() => undefined);
+        if (confirmCard) preTradeMessageIds.push(confirmCard.message_id);
+
+        pendingTrades.set(ctx.from!.id, {
+            pair, direction: analysis.direction,
+            amount, timeframe,
+            mode: (mode ?? 'demo') as 'demo' | 'live',
+            ssid, preTradeMessageIds: [...preTradeMessageIds],
+        });
+        logger.trade('confirm_shown', pair, ctx.from!.id, `$${amount} ${tfLabel(timeframe)} ${mode}`);
     } finally {
         sdkPool.release(ctx.from!.id);
     }
@@ -1078,6 +1103,52 @@ bot.action('upsell:demo', async ctx => {
     wizardSessions.set(chatId, state);
     const upsellDemoUser = getUser(ctx.from!.id);
     await ctx.reply('💰 Enter amount for Demo trade:', { reply_markup: amountKeyboard(upsellDemoUser?.currency ?? 'USD') });
+});
+
+// ─── Trade confirmation ───────────────────────────────────────────────────────
+
+bot.action('trade:confirm', async ctx => {
+    await ctx.answerCbQuery();
+    const userId = ctx.from!.id;
+    const pt = pendingTrades.get(userId);
+    if (!pt) {
+        await ctx.editMessageText(
+            '⏰ This session timed out. Let\'s start fresh 👇',
+            { reply_markup: { inline_keyboard: [[{ text: '🏠 Start Over', callback_data: 'ui:start' }]] } }
+        ).catch(() => {});
+        return;
+    }
+    pendingTrades.delete(userId);
+    try { await ctx.deleteMessage(); } catch {}
+
+    const tradeUser = getUser(userId);
+    const tradeTier = normalizeTier(tradeUser?.tier);
+    const tradeCfg = getTierConfig(tradeTier);
+    const currentCount = activeTradeSessions.get(userId) ?? 0;
+    if (currentCount >= tradeCfg.maxConcurrentTrades) {
+        await ctx.reply('⚠️ You already have an active trade. Wait for it to finish before starting another.');
+        return;
+    }
+
+    const mgSettings = getUserMartingaleSettings(userId);
+    const martingaleRounds = mgSettings.enabled ? mgSettings.maxRounds : 1;
+    logger.trade('executing', pt.pair, userId, `$${pt.amount} ${tfLabel(pt.timeframe)} ${pt.mode}`);
+
+    try {
+        const sdk = await sdkPool.get(userId, pt.ssid);
+        await runMartingale(ctx, pt.ssid, pt.pair, pt.direction, pt.amount, pt.timeframe, pt.mode, martingaleRounds, pt.preTradeMessageIds, sdk);
+    } catch (err: unknown) {
+        logger.error('bot', 'trade:confirm runMartingale threw', err);
+        await ctx.reply(friendlyError(err, '⚠️ Trade session ended unexpectedly. Please try again.')).catch(() => {});
+    } finally {
+        sdkPool.release(userId);
+    }
+});
+
+bot.action('trade:cancel', async ctx => {
+    await ctx.answerCbQuery();
+    pendingTrades.delete(ctx.from!.id);
+    try { await ctx.editMessageText('❌ Trade cancelled. Tap Trade Now whenever you\'re ready.'); } catch {}
 });
 
 // ─── User menu actions ────────────────────────────────────────────────────────
@@ -1117,7 +1188,7 @@ bot.action('ui:stats', async ctx => {
     await ctx.answerCbQuery();
     const uid = ctx.from!.id;
     const stats = getTradeStats(uid);
-    const ss = getSessionStats(uid);
+    const ss = getUserSessionStats(uid);
     const pnlSign = stats.totalPnl >= 0 ? '+' : '';
     const ssPnlSign = ss.pnl >= 0 ? '+' : '';
     await ctx.reply(
@@ -1151,7 +1222,7 @@ bot.action('ui:upgrade', async ctx => {
 bot.action('ui:martingale_settings', async ctx => {
     await ctx.answerCbQuery();
     const userId = ctx.from!.id;
-    const settings = userMartingaleSettings.get(userId) ?? { enabled: true, maxRounds: 6 };
+    const settings = getUserMartingaleSettings(userId);
     await ctx.reply(
         `⚙️ *Smart Recovery Settings*\n\n` +
         `Current: ${settings.enabled ? 'ON' : 'OFF'} · ${settings.maxRounds} rounds max\n\n` +
@@ -1175,11 +1246,11 @@ bot.action(/^martingale:(\d+|off)$/, async ctx => {
     const userId = ctx.from!.id;
     const val = ctx.match[1];
     if (val === 'off') {
-        userMartingaleSettings.set(userId, { enabled: false, maxRounds: 1 });
+        setUserMartingaleSettings(userId, false, 1);
         await ctx.editMessageText('⛔ Smart Recovery disabled. Trades will run a single round with no recovery.').catch(() => {});
     } else {
         const rounds = parseInt(val, 10);
-        userMartingaleSettings.set(userId, { enabled: true, maxRounds: rounds });
+        setUserMartingaleSettings(userId, true, rounds);
         await ctx.editMessageText(`✅ Smart Recovery set to ${rounds} rounds.`).catch(() => {});
     }
 });
@@ -1283,6 +1354,47 @@ bot.command('balance', async ctx => {
     } finally {
         sdkPool.release(uid);
     }
+});
+
+bot.command('status', async ctx => {
+    const uid = ctx.from!.id;
+    const user = getUser(uid);
+    if (!user || user.approval_status !== 'approved') {
+        await ctx.reply('🟢 *10x Bot Online*\n\nConnect your account to see full status.', { parse_mode: 'Markdown' });
+        return;
+    }
+    const tier = normalizeTier(user.tier);
+    const tierEmoji = tier === 'MASTER' ? '👑' : tier === 'PRO' ? '⚡' : '🧪';
+    const ssid = getSsidForUser(uid);
+    const stats = getTradeStats(uid);
+    const ss = getUserSessionStats(uid);
+    const ssPnlSign = ss.pnl >= 0 ? '+' : '';
+    const cached = getUserBalanceCache(uid);
+    const balLine = (cached && Date.now() - cached.ts < BALANCE_CACHE_TTL)
+        ? cached.line
+        : 'Tap /balance to refresh';
+    await ctx.reply(
+        `🟢 *10x Bot Online*\n\n` +
+        `Tier: ${tierEmoji} ${tier} Trader\n` +
+        `IQ Option: ${ssid ? '✅ Connected' : '❌ Not connected'}\n` +
+        `Balance: ${balLine}\n` +
+        `Total Trades: ${stats.total} (${stats.wins}W / ${stats.losses}L)\n` +
+        `Session PnL: ${ssPnlSign}$${Math.abs(ss.pnl).toFixed(2)}`,
+        { parse_mode: 'Markdown', reply_markup: backKeyboard() }
+    );
+});
+
+bot.command('support', async ctx => {
+    await ctx.reply(
+        `🔋 *Support*\n\nNeed help? Contact the admin directly:`,
+        {
+            parse_mode: 'Markdown',
+            reply_markup: { inline_keyboard: [
+                [{ text: '💬 Contact Support', url: ADMIN_CONTACT_LINK }],
+                [{ text: '🔙 Back', callback_data: 'ui:start' }],
+            ]},
+        }
+    );
 });
 
 // ─── Admin ────────────────────────────────────────────────────────────────────
@@ -1936,6 +2048,7 @@ bot.action('giveaway_v2:pick_winners', async ctx => {
 bot.action(/^giveaway_winners:(\d+)$/, async ctx => {
     await ctx.answerCbQuery('🏆 Selecting winners…');
     const giveawayId = parseInt(ctx.match[1], 10);
+    ctx.telegram.sendChatAction(ctx.chat!.id, 'typing').catch(() => {});
     const winners = giveawaySelectWinners(giveawayId);
     if (winners.length === 0) {
         await ctx.reply('❌ No eligible participants found.', { reply_markup: adminBackKeyboard() });
@@ -2131,7 +2244,6 @@ bot.action(/^compose_delivery:(bot|channel|both)$/, async ctx => {
     const replyMarkup = { inline_keyboard: [[{ text: '🚀 Trade Now', callback_data: 'ui:trade' }]] };
 
     if (target === 'bot' || target === 'both') {
-        const { getAllUserIds } = await import('./db.js');
         const allIds = getAllUserIds();
         for (const uid of allIds) {
             try {
@@ -2217,13 +2329,13 @@ bot.command('refresh', async ctx => {
     const chatId = ctx.chat.id;
     const userId = ctx.from!.id;
     resetUser(userId);
-    balanceCache.delete(userId);
+    clearUserBalanceCache(userId);
     onboardSessions.delete(chatId);
     wizardSessions.delete(chatId);
     connectSessions.delete(chatId);
     adminSessions.delete(chatId);
     upgradeSessionsMap.delete(chatId);
-    userMartingaleSettings.delete(userId);
+    pendingTrades.delete(userId);
     await startOnboarding(ctx);
 });
 
@@ -2856,7 +2968,7 @@ bot.catch((err: unknown, ctx) => {
 
 cleanStaleSessions();
 bot.launch();
-console.log('[iqbot-v3] running');
+logger.info('bot', 'iqbot-v3 running');
 startWelcomeFollowUp(bot);
 startAutoBroadcast(bot);
 

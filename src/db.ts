@@ -95,6 +95,20 @@ if (!finalUserCols.includes('simultaneous_trades'))
 if (!finalUserCols.includes('gale_disabled'))
     db.exec('ALTER TABLE users ADD COLUMN gale_disabled INTEGER NOT NULL DEFAULT 0');
 
+// V4 Phase 6: session persistence columns
+if (!finalUserCols.includes('mg_enabled'))
+    db.exec('ALTER TABLE users ADD COLUMN mg_enabled INTEGER NOT NULL DEFAULT 1');
+if (!finalUserCols.includes('mg_max_rounds'))
+    db.exec('ALTER TABLE users ADD COLUMN mg_max_rounds INTEGER NOT NULL DEFAULT 6');
+if (!finalUserCols.includes('session_trades'))
+    db.exec('ALTER TABLE users ADD COLUMN session_trades INTEGER NOT NULL DEFAULT 0');
+if (!finalUserCols.includes('session_pnl'))
+    db.exec('ALTER TABLE users ADD COLUMN session_pnl REAL NOT NULL DEFAULT 0');
+if (!finalUserCols.includes('balance_cache'))
+    db.exec('ALTER TABLE users ADD COLUMN balance_cache TEXT');
+if (!finalUserCols.includes('balance_cache_ts'))
+    db.exec('ALTER TABLE users ADD COLUMN balance_cache_ts TEXT');
+
 // V4 tier migration: NEWBIE → DEMO (run-once, idempotent)
 db.prepare("UPDATE users SET tier = 'DEMO' WHERE tier = 'NEWBIE'").run();
 
@@ -599,6 +613,38 @@ export function getApprovalStats(): ApprovalStats {
         rejected: row.rejected ?? 0,
         total:    row.total    ?? 0,
     };
+}
+
+export function getUserMartingaleSettings(telegramId: number): { enabled: boolean; maxRounds: number } {
+    const row = db.prepare('SELECT mg_enabled, mg_max_rounds FROM users WHERE telegram_id = ?').get(telegramId) as { mg_enabled: number; mg_max_rounds: number } | undefined;
+    return { enabled: row?.mg_enabled !== 0, maxRounds: row?.mg_max_rounds ?? 6 };
+}
+
+export function setUserMartingaleSettings(telegramId: number, enabled: boolean, maxRounds: number): void {
+    db.prepare('UPDATE users SET mg_enabled = ?, mg_max_rounds = ? WHERE telegram_id = ?').run(enabled ? 1 : 0, maxRounds, telegramId);
+}
+
+export function getUserSessionStats(telegramId: number): { trades: number; pnl: number } {
+    const row = db.prepare('SELECT session_trades, session_pnl FROM users WHERE telegram_id = ?').get(telegramId) as { session_trades: number; session_pnl: number } | undefined;
+    return { trades: row?.session_trades ?? 0, pnl: row?.session_pnl ?? 0 };
+}
+
+export function addUserSessionStats(telegramId: number, tradeDelta: number, pnlDelta: number): void {
+    db.prepare('UPDATE users SET session_trades = session_trades + ?, session_pnl = session_pnl + ? WHERE telegram_id = ?').run(tradeDelta, pnlDelta, telegramId);
+}
+
+export function getUserBalanceCache(telegramId: number): { line: string; ts: number } | undefined {
+    const row = db.prepare('SELECT balance_cache, balance_cache_ts FROM users WHERE telegram_id = ?').get(telegramId) as { balance_cache: string | null; balance_cache_ts: string | null } | undefined;
+    if (!row?.balance_cache || !row.balance_cache_ts) return undefined;
+    return { line: row.balance_cache, ts: new Date(row.balance_cache_ts).getTime() };
+}
+
+export function setUserBalanceCache(telegramId: number, line: string): void {
+    db.prepare("UPDATE users SET balance_cache = ?, balance_cache_ts = datetime('now') WHERE telegram_id = ?").run(line, telegramId);
+}
+
+export function clearUserBalanceCache(telegramId: number): void {
+    db.prepare('UPDATE users SET balance_cache = NULL, balance_cache_ts = NULL WHERE telegram_id = ?').run(telegramId);
 }
 
 // ─── Tokens ───────────────────────────────────────────────────────────────────
