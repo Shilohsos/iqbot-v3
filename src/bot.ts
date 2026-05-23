@@ -23,6 +23,7 @@ import {
     countFabricatedTraders, seedFabricatedTraders, getFabricatedTradersDueForUpdate,
     updateFabricatedPnl, getAllFabricatedTraders, resetFabricatedPnl, getRealTraderLeaderboard,
     getGiveawayStats, getGiveawayParticipantCount,
+    insertMessage,
 } from './db.js';
 import {
     createGiveawayEvent, activateGiveaway, participate as giveawayParticipate,
@@ -48,6 +49,7 @@ import {
     giveawayScheduleKeyboard, activeGiveawaysKeyboard,
 } from './ui/admin.js';
 import { checkAffiliate } from './affiliate.js';
+import { setupChannelHandlers, startWelcomeFollowUp } from './channel.js';
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const IQ_SSID   = process.env.IQ_SSID;
@@ -60,6 +62,9 @@ if (!BOT_TOKEN) throw new Error('BOT_TOKEN missing from .env');
 process.on('unhandledRejection', (reason) => { console.error('[unhandledRejection]', reason); });
 
 const bot = new Telegraf(BOT_TOKEN, { handlerTimeout: Infinity });
+
+// ─── Channel integration ──────────────────────────────────────────────────────
+setupChannelHandlers(bot);
 
 // Save Telegram username on every interaction
 bot.use(async (ctx, next) => {
@@ -2117,6 +2122,7 @@ bot.on('text', async ctx => {
     if (ctx.message.text.startsWith('/')) return;
     const chatId = ctx.chat.id;
     const text   = ctx.message.text.trim();
+    insertMessage(ctx.from!.id, 'incoming');
 
     // ── Admin wizard ─────────────────────────────────────────────────────────
     if (ctx.from?.id === getAdminId()) {
@@ -2669,6 +2675,7 @@ bot.catch((err: unknown, ctx) => {
 cleanStaleSessions();
 bot.launch();
 console.log('[iqbot-v3] running');
+startWelcomeFollowUp(bot);
 
 // ─── Fabricated Leaderboard: seed + update checker + midnight reset ───────────
 

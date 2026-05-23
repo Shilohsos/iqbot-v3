@@ -840,6 +840,39 @@ export function getAuditReport(): AuditReport {
     };
 }
 
+// ─── Channel message tracking ────────────────────────────────────────────────
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS messages (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    telegram_id INTEGER NOT NULL,
+    direction   TEXT    NOT NULL,
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_messages_tid ON messages(telegram_id, created_at);
+`);
+
+export function insertMessage(telegramId: number, direction: 'incoming' | 'outgoing'): void {
+    db.prepare('INSERT INTO messages (telegram_id, direction) VALUES (?, ?)').run(telegramId, direction);
+}
+
+export function getRecentlyApprovedUsers(minutes: number): UserRecord[] {
+    return db.prepare(`
+        SELECT * FROM users
+        WHERE approval_status = 'approved'
+          AND approved_at >= datetime('now', ? || ' minutes')
+        ORDER BY approved_at DESC
+    `).all(`-${minutes}`) as UserRecord[];
+}
+
+export function userHasActivity(telegramId: number): boolean {
+    const user = getUser(telegramId);
+    if (!user || !user.last_used) return false;
+    const lastUsed = new Date(user.last_used).getTime();
+    const approvedAt = user.approved_at ? new Date(user.approved_at).getTime() : 0;
+    return lastUsed > approvedAt;
+}
+
 // ─── Session persistence ──────────────────────────────────────────────────────
 
 db.exec(`
