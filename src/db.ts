@@ -40,7 +40,7 @@ db.exec(`
     approval_status TEXT    NOT NULL DEFAULT 'pending',
     approved_at     TEXT,
     affiliate_data  TEXT,
-    tier            TEXT    NOT NULL DEFAULT 'NEWBIE',
+    tier            TEXT    NOT NULL DEFAULT 'DEMO',
     created_at      TEXT    NOT NULL DEFAULT (datetime('now')),
     last_used       TEXT    NOT NULL DEFAULT (datetime('now'))
   )
@@ -62,7 +62,7 @@ if (ssidColNotNull) {
             approval_status TEXT    NOT NULL DEFAULT 'pending',
             approved_at     TEXT,
             affiliate_data  TEXT,
-            tier            TEXT    NOT NULL DEFAULT 'NEWBIE',
+            tier            TEXT    NOT NULL DEFAULT 'DEMO',
             created_at      TEXT    NOT NULL DEFAULT (datetime('now')),
             last_used       TEXT    NOT NULL DEFAULT (datetime('now'))
         );
@@ -81,7 +81,7 @@ if (ssidColNotNull) {
     if (!userColNames.includes('affiliate_data'))
         db.exec('ALTER TABLE users ADD COLUMN affiliate_data TEXT');
     if (!userColNames.includes('tier'))
-        db.exec("ALTER TABLE users ADD COLUMN tier TEXT NOT NULL DEFAULT 'NEWBIE'");
+        db.exec("ALTER TABLE users ADD COLUMN tier TEXT NOT NULL DEFAULT 'DEMO'");
 }
 
 // Additional column migrations (run after main table setup to get final state)
@@ -90,6 +90,13 @@ if (!finalUserCols.includes('username'))
     db.exec('ALTER TABLE users ADD COLUMN username TEXT');
 if (!finalUserCols.includes('currency'))
     db.exec("ALTER TABLE users ADD COLUMN currency TEXT DEFAULT 'USD'");
+if (!finalUserCols.includes('simultaneous_trades'))
+    db.exec('ALTER TABLE users ADD COLUMN simultaneous_trades INTEGER NOT NULL DEFAULT 1');
+if (!finalUserCols.includes('gale_disabled'))
+    db.exec('ALTER TABLE users ADD COLUMN gale_disabled INTEGER NOT NULL DEFAULT 0');
+
+// V4 tier migration: NEWBIE → DEMO (run-once, idempotent)
+db.prepare("UPDATE users SET tier = 'DEMO' WHERE tier = 'NEWBIE'").run();
 
 // ─── Section 10 tables ────────────────────────────────────────────────────────
 
@@ -131,6 +138,59 @@ db.exec(`
     key        TEXT PRIMARY KEY,
     value      TEXT NOT NULL,
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  )
+`);
+
+// ─── V4 tables ───────────────────────────────────────────────────────────────
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS giveaway_events (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_type       TEXT    NOT NULL,
+    title            TEXT    NOT NULL,
+    description      TEXT,
+    criteria_type    TEXT,
+    criteria_value   TEXT,
+    prize_pool       REAL,
+    prize_per_winner REAL,
+    max_winners      INTEGER,
+    status           TEXT    NOT NULL DEFAULT 'pending',
+    starts_at        TEXT,
+    ends_at          TEXT,
+    created_at       TEXT    NOT NULL DEFAULT (datetime('now'))
+  )
+`);
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS giveaway_participants (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    giveaway_id  INTEGER NOT NULL REFERENCES giveaway_events(id),
+    telegram_id  INTEGER NOT NULL,
+    trade_count  INTEGER NOT NULL DEFAULT 0,
+    eligible     INTEGER NOT NULL DEFAULT 1,
+    joined_at    TEXT    NOT NULL DEFAULT (datetime('now'))
+  )
+`);
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS broadcast_messages (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    type          TEXT    NOT NULL,
+    category      TEXT,
+    content       TEXT    NOT NULL,
+    image_file_id TEXT,
+    enabled       INTEGER NOT NULL DEFAULT 1,
+    last_sent_at  TEXT,
+    created_at    TEXT    NOT NULL DEFAULT (datetime('now'))
+  )
+`);
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS channel_approvals (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    telegram_id INTEGER NOT NULL UNIQUE,
+    approved    INTEGER NOT NULL DEFAULT 0,
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
   )
 `);
 

@@ -1,18 +1,23 @@
+import { getTierConfig } from '../tiers.js';
+
 type Btn = { text: string; callback_data: string } | { text: string; url: string };
 type IKMarkup = { inline_keyboard: Btn[][] };
 
 export function startKeyboard(tier?: string): IKMarkup {
     const supportUrl = process.env.ADMIN_CONTACT_LINK ?? 'https://t.me/shiloh_is_10xing';
+    const cfg = getTierConfig(tier);
     const rows: Btn[][] = [
         [{ text: 'Take a trade 👾', callback_data: 'ui:trade' }],
         [
             { text: 'History 📆',  callback_data: 'ui:history' },
             { text: 'Stats 📈',    callback_data: 'ui:stats' },
         ],
-        [
-            { text: 'Upgrade 💡',     callback_data: 'ui:upgrade' },
-            { text: 'Leaderboard 🏆', callback_data: 'ui:leaderboard' },
-        ],
+        cfg.canViewLeaderboard
+            ? [
+                { text: 'Upgrade 💡',     callback_data: 'ui:upgrade' },
+                { text: 'Leaderboard 🏆', callback_data: 'ui:leaderboard' },
+            ]
+            : [{ text: 'Upgrade 💡', callback_data: 'ui:upgrade' }],
         [{ text: '⚙️ Smart Recovery Settings', callback_data: 'ui:martingale_settings' }],
     ];
     rows.push(

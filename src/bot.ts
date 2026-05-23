@@ -4,6 +4,7 @@ import { ClientSdk, SsidAuthMethod, BalanceType } from './index.js';
 import { WS_URL, PLATFORM_ID, IQ_HOST, IQ_AUTH_URL } from './protocol.js';
 import { executeTrade, executeTradeWithSdk, createSdk, type TradeRequest, type TradeResult } from './trade.js';
 import { sdkPool } from './sdk-pool.js';
+import { getTierConfig, normalizeTier, TIER_CONFIGS } from './tiers.js';
 import {
     getRecentTrades, getTradeStats, getTopTradersToday,
     getUser, saveUser, saveUsername, deleteUser, getAllUsers, getAllUserIds,
@@ -126,7 +127,7 @@ interface WizardState {
 }
 const wizardSessions = makeSessionMap<WizardState>('wizard');
 
-type OnboardStep = 'user_id' | 'create_user_id' | 'connect_email' | 'connect_password';
+type OnboardStep = 'user_id' | 'create_user_id' | 'connect_email' | 'connect_password' | 'auto_create_email';
 interface OnboardState {
     step: OnboardStep;
     tier?: string;
@@ -414,8 +415,8 @@ async function sendStartMenu(ctx: Context): Promise<void> {
 
     // Approved — build rich menu
     const ss  = getSessionStats(telegramId);
-    const tier = (user.tier ?? 'DEMO').toUpperCase();
-    const tierEmoji = tier === 'PRO' ? '⚡' : tier === 'NEWBIE' ? '🚀' : '🧪';
+    const tier = normalizeTier(user.tier);
+    const tierEmoji = tier === 'MASTER' ? '👑' : tier === 'PRO' ? '⚡' : '🧪';
     const pnlSign   = ss.pnl >= 0 ? '+' : '';
 
     const ssid = getSsidForUser(telegramId);
@@ -764,6 +765,20 @@ bot.action('onboard:no', async ctx => {
     await askCreateAccountUserId(ctx);
 });
 
+bot.action('onboard:autocreate', async ctx => {
+    await ctx.answerCbQuery();
+    const chatId = ctx.chat!.id;
+    const existing = onboardSessions.get(chatId) ?? { step: 'auto_create_email' as OnboardStep };
+    onboardSessions.set(chatId, { ...existing, step: 'auto_create_email' });
+    await ctx.reply(
+        '🤖 *Account creation*\n\n' +
+        'Send us a fresh email address and we\'ll set up an IQ Option account for you. ' +
+        'You\'ll get the login details once it\'s ready.\n\n' +
+        '📧 Enter your email:',
+        { parse_mode: 'Markdown' }
+    );
+});
+
 // ─── Trade wizard — mode ──────────────────────────────────────────────────────
 
 bot.action(/^mode:(demo|live)$/, async ctx => {
@@ -810,9 +825,10 @@ bot.action(/^amt:(.+)$/, async ctx => {
             try { await ctx.telegram.deleteMessage(ctx.chat!.id, state.lastImageMsgId); } catch {}
         }
         try { const m = await ctx.replyWithPhoto(ASSET('L5.png')); state.lastImageMsgId = m.message_id; } catch {}
+        const tfBtnUser = getUser(ctx.from!.id);
         try { await ctx.editMessageText(
             '⏱ Pick your expiry timeframe 👇\n⏱ Faster timeframes settle quicker.\n🐢 Longer timeframes ride bigger moves.',
-            { reply_markup: timeframeKeyboard() }
+            { reply_markup: timeframeKeyboard(tfBtnUser?.tier ?? undefined) }
         ); } catch {}
     }
 });
@@ -831,7 +847,7 @@ bot.action(/^tf:(\d+)$/, async ctx => {
     }
     try { const m = await ctx.replyWithPhoto(ASSET('L6.png')); state.lastImageMsgId = m.message_id; } catch {}
     const tfUser = getUser(chatId);
-    const tfTier = tfUser?.tier ?? 'NEWBIE';
+    const tfTier = normalizeTier(tfUser?.tier);
     const picks = getTopPicks();
     const medals = ['🏆', '🥇', '🥈', '🥉', '4️⃣'];
     let picksMsg = 'Top picks ready 🎯\n\nHighest chance to win right now:\n\n';
@@ -852,7 +868,7 @@ bot.action(/^page:(\d+)$/, async ctx => {
     if (!state || state.step !== 'pair') { await ctx.answerCbQuery('Session expired — start over.'); return; }
     await ctx.answerCbQuery();
     const pageUser = getUser(chatId);
-    const pageTier = pageUser?.tier ?? 'NEWBIE';
+    const pageTier = normalizeTier(pageUser?.tier);
     try { await ctx.editMessageReplyMarkup(pairKeyboard(parseInt(ctx.match[1], 10), pageTier)); } catch {}
 });
 
@@ -906,7 +922,24 @@ bot.action(/^pair:(.+)$/, async ctx => {
 
     try {
         const analysisUser = getUser(ctx.from!.id);
-        const analysisTier = (analysisUser?.tier ?? 'NEWBIE').toUpperCase();
+        const analysisTier = normalizeTier(analysisUser?.tier);
+        const tierCfg = getTierConfig(analysisTier);
+        if (!tierCfg.allowedTimeframes.includes(timeframe)) {
+            if (l7MsgId) { try { await ctx.telegram.deleteMessage(chatId, l7MsgId); } catch {} }
+            await ctx.telegram.editMessageText(
+                chatId, progressMsg.message_id, undefined,
+                `⚠️ ${tfLabel(timeframe)} is not available on the ${tierCfg.label} tier. Upgrade for access.`
+            ).catch(() => {});
+            return;
+        }
+        if (!tierCfg.pairs.includes(pair)) {
+            if (l7MsgId) { try { await ctx.telegram.deleteMessage(chatId, l7MsgId); } catch {} }
+            await ctx.telegram.editMessageText(
+                chatId, progressMsg.message_id, undefined,
+                `⚠️ ${pair} is not available on the ${tierCfg.label} tier. Upgrade for access.`
+            ).catch(() => {});
+            return;
+        }
         let analysis: AnalysisResult;
         try {
             analysis = await analyzePairWithSdk(sdk, pair, timeframe, analysisTier);
@@ -940,14 +973,15 @@ bot.action(/^pair:(.+)$/, async ctx => {
         if (opportunityMsg) preTradeMessageIds.push(opportunityMsg.message_id);
 
         const tradeUser = getUser(ctx.from!.id);
-        const tradeTier = (tradeUser?.tier ?? 'NEWBIE').toUpperCase();
-        const maxConcurrent = tradeTier === 'PRO' ? 3 : 1;
+        const tradeTier = normalizeTier(tradeUser?.tier);
+        const tradeCfg = getTierConfig(tradeTier);
+        const maxConcurrent = tradeCfg.maxConcurrentTrades;
         const currentCount = activeTradeSessions.get(ctx.from!.id) ?? 0;
         if (currentCount >= maxConcurrent) {
             await ctx.reply(
-                tradeTier === 'NEWBIE'
-                    ? '⚠️ You already have an active trade. Newbie allows 1 trade at a time. Upgrade to PRO for up to 3 concurrent trades.'
-                    : `⚠️ You already have ${currentCount} active trade(s). Max 3 concurrent trades reached. Wait for one to finish.`
+                maxConcurrent === 1
+                    ? `⚠️ You already have an active trade. ${tradeCfg.label} allows 1 trade at a time. Upgrade for more concurrent trades.`
+                    : `⚠️ You already have ${currentCount} active trade(s). Max ${maxConcurrent} concurrent trades reached. Wait for one to finish.`
             );
             return;
         }
@@ -1369,7 +1403,7 @@ bot.action('admin:generate_token', async ctx => {
     await ctx.reply('🔑 Select tier for new token:', { reply_markup: tokenTierKeyboard() });
 });
 
-bot.action(/^token_tier:(NEWBIE|PRO)$/, async ctx => {
+bot.action(/^token_tier:(DEMO|PRO|MASTER)$/, async ctx => {
     await ctx.answerCbQuery();
     const tier = ctx.match[1];
     const token = generateToken(tier);
@@ -2165,11 +2199,17 @@ bot.on('text', async ctx => {
                 } else {
                     setManualApproval(ctx.from!.id);
                     onboardSessions.delete(chatId);
+                    const failAffLink = process.env.AFFILIATE_LINK ?? 'https://iqbroker.com/lp/regframe-01-light-nosocials/?aff=749367&aff_model=revenue';
+                    const failAdminLink = process.env.ADMIN_CONTACT_LINK ?? 'https://t.me/shiloh_is_10xing';
                     await ctx.reply(
                         '⏳ We were not able to confirm your User ID.\n\n' +
                         'Please consider creating a new account the right way using our link 👇👾\n\n' +
                         'You can as-well contact admin 👇💜',
-                        { reply_markup: affiliateFailKeyboard() }
+                        { reply_markup: { inline_keyboard: [
+                            [{ text: '🆕 Create free account (takes 2 min)', url: failAffLink }],
+                            [{ text: '🤖 Let us create one for you', callback_data: 'onboard:autocreate' }],
+                            [{ text: '👾 Contact admin', url: failAdminLink }],
+                        ]}}
                     );
                     try {
                         const userTag = ctx.from!.username
@@ -2207,6 +2247,29 @@ bot.on('text', async ctx => {
             onboardSessions.set(chatId, ob);
             await ctx.reply('🛡️ Your password is safe\n\nWe use the official IQ Option API.\nWe can\'t read or store it.\nYour message auto-deletes from this chat in 10 seconds.');
             await ctx.reply('🔑 Enter your IQ Option password:');
+            return;
+        }
+
+        if (ob.step === 'auto_create_email') {
+            const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text);
+            if (!emailOk) { await ctx.reply('That doesn\'t look like a valid email. Please try again.'); return; }
+            onboardSessions.delete(chatId);
+            await ctx.reply(
+                '✅ Got it! We\'ve received your email.\n\n' +
+                'Our team will set up your IQ Option account and message you the login details shortly. ' +
+                'This usually takes a few hours during business hours.'
+            );
+            try {
+                const userTag = ctx.from!.username
+                    ? `@${escapeMd(ctx.from!.username)}`
+                    : `[User](tg://user?id=${ctx.from!.id})`;
+                await bot.telegram.sendMessage(
+                    getAdminId(),
+                    `🤖 *Auto-account request*\nTelegram: ${userTag}\nEmail: \`${escapeMd(text)}\`\n\nManually create an IQ Option account, then DM the user the credentials and approve: /admin approve ${ctx.from!.id}`,
+                    { parse_mode: 'Markdown' }
+                );
+            } catch {}
+            console.log(`[auto-create] requested by ${ctx.from!.id}: ${text}`);
             return;
         }
 
@@ -2307,9 +2370,10 @@ bot.on('text', async ctx => {
         try { await ctx.telegram.deleteMessage(chatId, wiz.lastImageMsgId); } catch {}
     }
     try { const m = await ctx.replyWithPhoto(ASSET('L5.png')); wiz.lastImageMsgId = m.message_id; } catch {}
+    const tfWizUser = getUser(ctx.from!.id);
     await ctx.reply(
         '⏱ Pick your expiry timeframe 👇\n⏱ Faster timeframes settle quicker.\n🐢 Longer timeframes ride bigger moves.',
-        { reply_markup: timeframeKeyboard() }
+        { reply_markup: timeframeKeyboard(tfWizUser?.tier ?? undefined) }
     );
 });
 

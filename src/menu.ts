@@ -1,3 +1,5 @@
+import { getTierConfig } from './tiers.js';
+
 export const OTC_PAIRS = [
     'EURUSD-OTC', 'GBPUSD-OTC', 'EURJPY-OTC', 'GBPJPY-OTC',
     'AUDUSD-OTC', 'USDCAD-OTC', 'EURGBP-OTC', 'USDCHF-OTC',
@@ -28,23 +30,20 @@ export function amountKeyboard(currency = 'USD'): IKMarkup {
     };
 }
 
-export function timeframeKeyboard(): IKMarkup {
+export function timeframeKeyboard(tier?: string): IKMarkup {
+    const allowed = getTierConfig(tier).allowedTimeframes;
+    const labels: Record<number, string> = { 30: '30s', 60: '1m', 300: '5m' };
+    const row: Btn[] = allowed.map(s => ({ text: labels[s] ?? `${s}s`, callback_data: `tf:${s}` }));
     return {
         inline_keyboard: [
-            [
-                { text: '30s', callback_data: 'tf:30' },
-                { text: '1m',  callback_data: 'tf:60' },
-                { text: '5m',  callback_data: 'tf:300' },
-            ],
+            row,
             [{ text: '❌ Cancel', callback_data: 'wizard:cancel' }],
         ],
     };
 }
 
-const NEWBIE_PAIRS = ['EURUSD-OTC', 'GBPUSD-OTC', 'AUDUSD-OTC'];
-
 export function pairKeyboard(page = 0, tier?: string): IKMarkup {
-    const available = (tier ?? '').toUpperCase() === 'PRO' ? OTC_PAIRS : NEWBIE_PAIRS;
+    const available = getTierConfig(tier).pairs;
     const PAGE_SIZE = 6;
     const start = page * PAGE_SIZE;
     const pagePairs = available.slice(start, start + PAGE_SIZE);

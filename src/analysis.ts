@@ -7,11 +7,11 @@ export interface AnalysisResult {
     reason: string;
 }
 
-export async function analyzePairWithSdk(sdk: ClientSdk, pair: string, timeframeSec: number, tier = 'NEWBIE'): Promise<AnalysisResult> {
+export async function analyzePairWithSdk(sdk: ClientSdk, pair: string, timeframeSec: number, tier = 'DEMO'): Promise<AnalysisResult> {
     return runAnalysis(sdk, pair, timeframeSec, tier);
 }
 
-export async function analyzePair(ssid: string, pair: string, timeframeSec: number, tier = 'NEWBIE'): Promise<AnalysisResult> {
+export async function analyzePair(ssid: string, pair: string, timeframeSec: number, tier = 'DEMO'): Promise<AnalysisResult> {
     const sdk = await Promise.race([
         createSdk(ssid),
         new Promise<never>((_, reject) =>
@@ -45,7 +45,8 @@ async function runAnalysis(sdk: ClientSdk, pair: string, timeframeSec: number, t
     const ema9  = computeEMA(closes, 9);
     const ema21 = computeEMA(closes, 21);
 
-    if (tier === 'PRO') {
+    const upperTier = tier.toUpperCase();
+    if (upperTier === 'PRO' || upperTier === 'MASTER') {
         const { macd, signal: macdSignal } = computeMACD(closes, 12, 26, 9);
         const { mid, lower } = computeBollinger(closes, 20, 2);
         const lastClose = closes[closes.length - 1];
