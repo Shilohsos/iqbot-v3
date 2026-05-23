@@ -24,6 +24,7 @@ import {
     updateFabricatedPnl, getAllFabricatedTraders, resetFabricatedPnl, getRealTraderLeaderboard,
     getGiveawayStats, getGiveawayParticipantCount,
     insertMessage,
+    insertBroadcastMessage,
 } from './db.js';
 import {
     createGiveawayEvent, activateGiveaway, participate as giveawayParticipate,
@@ -47,9 +48,12 @@ import {
     giveawayTargetKeyboard,
     giveawayManagerKeyboard, giveawayTypeKeyboard, giveawayCriteriaKeyboard,
     giveawayScheduleKeyboard, activeGiveawaysKeyboard,
+    composeTopicKeyboard, composeResultKeyboard, composeDeliveryKeyboard,
 } from './ui/admin.js';
 import { checkAffiliate } from './affiliate.js';
 import { setupChannelHandlers, startWelcomeFollowUp } from './channel.js';
+import { startAutoBroadcast } from './auto-broadcast.js';
+import { generatePost, type LlmRequest } from './llm.js';
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const IQ_SSID   = process.env.IQ_SSID;
@@ -180,7 +184,9 @@ type AdminStep =
     | 'giveaway_v2_desc'
     | 'giveaway_v2_criteria_value'
     | 'giveaway_v2_max_winners'
-    | 'giveaway_v2_prize';
+    | 'giveaway_v2_prize'
+    | 'compose_description'
+    | 'compose_image';
 
 interface AdminSessionState {
     step: AdminStep;
@@ -199,6 +205,11 @@ interface AdminSessionState {
     giveawayV2CriteriaValue?: string;
     giveawayV2MaxWinners?: number;
     giveawayV2Prize?: number;
+    // Compose post wizard state
+    composeTopic?: LlmRequest['topic'];
+    composeDescription?: string;
+    composeContent?: string;
+    composeImageFileId?: string;
 }
 const adminSessions = makeSessionMap<AdminSessionState>('admin');
 
@@ -2029,6 +2040,133 @@ bot.action(/^giveaway:participate:(\d+)$/, async ctx => {
     });
 });
 
+// ─── Module 12: Compose Post (LLM-Powered) ───────────────────────────────────
+
+bot.action('admin:compose', async ctx => {
+    await ctx.answerCbQuery();
+    await ctx.reply('✍️ *Compose Motivational Post*\n\nChoose the post topic:', {
+        parse_mode: 'Markdown',
+        reply_markup: composeTopicKeyboard(),
+    });
+});
+
+bot.action(/^compose_topic:(reviews|motivation|trade_win|life_win)$/, async ctx => {
+    await ctx.answerCbQuery();
+    const topic = ctx.match[1] as LlmRequest['topic'];
+    adminSessions.set(ctx.chat!.id, { step: 'compose_description', composeTopic: topic });
+    const hints: Record<string, string> = {
+        reviews:    '"made $263 within 2 weeks of trading"',
+        motivation: '"just hit 10 wins in a row"',
+        trade_win:  '"turned $50 into $400 in one session"',
+        life_win:   '"just bought his first car from profits"',
+    };
+    await ctx.reply(
+        `✅ Topic: *${topic}*\n\nDescribe in ≤10 words:\ne.g. ${hints[topic] ?? '""'}`,
+        { parse_mode: 'Markdown' }
+    );
+});
+
+bot.action('compose:regenerate', async ctx => {
+    await ctx.answerCbQuery('🔄 Regenerating…');
+    const chatId = ctx.chat!.id;
+    const as = adminSessions.get(chatId);
+    if (!as?.composeTopic || !as.composeDescription) {
+        await ctx.reply('❌ Session expired. Start over.', { reply_markup: adminBackKeyboard() });
+        return;
+    }
+    try {
+        const loading = await ctx.reply('⏳ Generating with AI…');
+        const result = await generatePost({ topic: as.composeTopic, description: as.composeDescription });
+        await ctx.telegram.deleteMessage(chatId, loading.message_id).catch(() => {});
+        adminSessions.set(chatId, { ...as, composeContent: result.content });
+        await ctx.reply(
+            `✍️ *Generated Post:*\n\n"${result.content}"`,
+            { parse_mode: 'Markdown', reply_markup: composeResultKeyboard() }
+        );
+    } catch (err) {
+        await ctx.reply(`❌ AI error: ${err instanceof Error ? err.message : 'unknown'}`, { reply_markup: adminBackKeyboard() });
+    }
+});
+
+bot.action('compose:edit', async ctx => {
+    await ctx.answerCbQuery();
+    const chatId = ctx.chat!.id;
+    const as = adminSessions.get(chatId);
+    if (!as?.composeTopic) {
+        await ctx.reply('❌ Session expired.', { reply_markup: adminBackKeyboard() });
+        return;
+    }
+    adminSessions.set(chatId, { ...as, step: 'compose_description' });
+    await ctx.reply('✏️ Enter a new description (≤10 words):');
+});
+
+bot.action('compose:approve', async ctx => {
+    await ctx.answerCbQuery();
+    const chatId = ctx.chat!.id;
+    const as = adminSessions.get(chatId);
+    if (!as?.composeContent) {
+        await ctx.reply('❌ Session expired.', { reply_markup: adminBackKeyboard() });
+        return;
+    }
+    adminSessions.set(chatId, { ...as, step: 'compose_image' });
+    await ctx.reply('📎 Send an image to attach, or type *skip* to send text-only:', { parse_mode: 'Markdown' });
+});
+
+bot.action(/^compose_delivery:(bot|channel|both)$/, async ctx => {
+    await ctx.answerCbQuery('📤 Sending…');
+    const chatId = ctx.chat!.id;
+    const as = adminSessions.get(chatId);
+    if (!as?.composeContent) {
+        await ctx.reply('❌ Session expired.', { reply_markup: adminBackKeyboard() });
+        return;
+    }
+    adminSessions.delete(chatId);
+
+    const target = ctx.match[1] as 'bot' | 'channel' | 'both';
+    const content = as.composeContent;
+    const imageFileId = as.composeImageFileId;
+    const CHANNEL_ID = parseInt(process.env.CHANNEL_ID ?? '-1002766084283', 10);
+
+    let botSent = 0, botFailed = 0;
+    const replyMarkup = { inline_keyboard: [[{ text: '🚀 Trade Now', callback_data: 'ui:trade' }]] };
+
+    if (target === 'bot' || target === 'both') {
+        const { getAllUserIds } = await import('./db.js');
+        const allIds = getAllUserIds();
+        for (const uid of allIds) {
+            try {
+                if (imageFileId) {
+                    await bot.telegram.sendPhoto(uid, imageFileId, { caption: content, reply_markup: replyMarkup });
+                } else {
+                    await bot.telegram.sendMessage(uid, content, { reply_markup: replyMarkup });
+                }
+                botSent++;
+            } catch { botFailed++; }
+            await new Promise(r => setTimeout(r, 40));
+        }
+    }
+
+    if (target === 'channel' || target === 'both') {
+        try {
+            if (imageFileId) {
+                await bot.telegram.sendPhoto(CHANNEL_ID, imageFileId, { caption: content });
+            } else {
+                await bot.telegram.sendMessage(CHANNEL_ID, content);
+            }
+        } catch (err) {
+            console.error('[compose] channel send failed:', err instanceof Error ? err.message : err);
+        }
+    }
+
+    insertBroadcastMessage('approved', content, as.composeTopic, imageFileId);
+
+    const summary = target === 'channel'
+        ? `✅ Post sent to channel.`
+        : `✅ Sent to *${botSent}* users (${botFailed} failed)${target === 'both' ? ' + channel' : ''}.`;
+
+    await ctx.reply(summary, { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
+});
+
 // ─── /connect & /disconnect ───────────────────────────────────────────────────
 
 bot.command('connect', async ctx => {
@@ -2095,10 +2233,19 @@ bot.on('photo', async ctx => {
     if (ctx.from?.id !== getAdminId()) return;
     const chatId = ctx.chat.id;
     const as = adminSessions.get(chatId);
-    if (!as || as.step !== 'broadcast_media') return;
+    if (!as) return;
+
+    const photo = ctx.message.photo.at(-1)!;
+
+    if (as.step === 'compose_image' && as.composeContent) {
+        adminSessions.set(chatId, { ...as, composeImageFileId: photo.file_id });
+        await ctx.reply('📤 *Send to:*', { parse_mode: 'Markdown', reply_markup: composeDeliveryKeyboard() });
+        return;
+    }
+
+    if (as.step !== 'broadcast_media') return;
     const pending = pendingBroadcasts.get(chatId);
     if (!pending) { await ctx.reply('❌ Session expired.'); return; }
-    const photo = ctx.message.photo.at(-1)!;
     pendingBroadcasts.set(chatId, { ...pending, media: { type: 'photo', fileId: photo.file_id } });
     adminSessions.delete(chatId);
     await ctx.reply('📎 Image received! Include a link button?', { reply_markup: broadcastLinkKeyboard() });
@@ -2413,6 +2560,41 @@ bot.on('text', async ctx => {
                 return;
             }
 
+            // ── Compose post wizard text steps ────────────────────────────────
+            if (as.step === 'compose_description' && as.composeTopic) {
+                if (!text.trim()) { await ctx.reply('❌ Please enter a description:'); return; }
+                const desc = text.trim();
+                adminSessions.set(chatId, { ...as, composeDescription: desc });
+                const loading = await ctx.reply('⏳ Generating with AI…');
+                try {
+                    const result = await generatePost({ topic: as.composeTopic, description: desc });
+                    await ctx.telegram.deleteMessage(chatId, loading.message_id).catch(() => {});
+                    adminSessions.set(chatId, { ...as, composeDescription: desc, composeContent: result.content });
+                    await ctx.reply(
+                        `✍️ *Generated Post:*\n\n"${result.content}"`,
+                        { parse_mode: 'Markdown', reply_markup: composeResultKeyboard() }
+                    );
+                } catch (err) {
+                    await ctx.telegram.deleteMessage(chatId, loading.message_id).catch(() => {});
+                    await ctx.reply(`❌ AI error: ${err instanceof Error ? err.message : 'unknown'}`, { reply_markup: adminBackKeyboard() });
+                }
+                return;
+            }
+
+            if (as.step === 'compose_image' && as.composeContent) {
+                if (text.toLowerCase() === 'skip') {
+                    adminSessions.set(chatId, { ...as, composeImageFileId: undefined });
+                } else {
+                    await ctx.reply('❌ Please send a photo or type *skip*:', { parse_mode: 'Markdown' });
+                    return;
+                }
+                await ctx.reply(
+                    `📤 *Send to:*`,
+                    { parse_mode: 'Markdown', reply_markup: composeDeliveryKeyboard() }
+                );
+                return;
+            }
+
             return;
             } catch (err) {
                 console.error('[admin-wizard] unhandled error in step', as.step, ':', err);
@@ -2676,6 +2858,7 @@ cleanStaleSessions();
 bot.launch();
 console.log('[iqbot-v3] running');
 startWelcomeFollowUp(bot);
+startAutoBroadcast(bot);
 
 // ─── Fabricated Leaderboard: seed + update checker + midnight reset ───────────
 

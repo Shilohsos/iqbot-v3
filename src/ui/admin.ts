@@ -32,6 +32,7 @@ export function adminKeyboard(): IKMarkup {
                 { text: '📋 Audits',      callback_data: 'admin:audits' },
                 { text: '🛡️ Admin',      callback_data: 'admin:admin' },
             ],
+            [{ text: '✍️ Compose Post',   callback_data: 'admin:compose' }],
             [{ text: '🔙 Back', callback_data: 'ui:start' }],
         ],
     };
@@ -253,6 +254,42 @@ export function memberManagementKeyboard(): IKMarkup {
                 { text: '✉️ Message', callback_data: 'member:message' },
             ],
             [{ text: '🔙 Admin Menu', callback_data: 'admin:back' }],
+        ],
+    };
+}
+
+export function composeTopicKeyboard(): IKMarkup {
+    return {
+        inline_keyboard: [
+            [{ text: '⭐ Reviews',    callback_data: 'compose_topic:reviews' }],
+            [{ text: '💪 Motivation', callback_data: 'compose_topic:motivation' }],
+            [{ text: '💰 Trade Wins', callback_data: 'compose_topic:trade_win' }],
+            [{ text: '🏖️ Life Wins', callback_data: 'compose_topic:life_win' }],
+            [{ text: '🔙 Admin Menu', callback_data: 'admin:back' }],
+        ],
+    };
+}
+
+export function composeResultKeyboard(): IKMarkup {
+    return {
+        inline_keyboard: [
+            [
+                { text: '✅ Approve & Send', callback_data: 'compose:approve' },
+                { text: '🔄 Regenerate',     callback_data: 'compose:regenerate' },
+            ],
+            [{ text: '✏️ Edit (new description)', callback_data: 'compose:edit' }],
+            [{ text: '❌ Cancel',                  callback_data: 'admin:back' }],
+        ],
+    };
+}
+
+export function composeDeliveryKeyboard(): IKMarkup {
+    return {
+        inline_keyboard: [
+            [{ text: '🤖 Bot Users Only',     callback_data: 'compose_delivery:bot' }],
+            [{ text: '📢 Channel Only',        callback_data: 'compose_delivery:channel' }],
+            [{ text: '📱 Both Bot + Channel',  callback_data: 'compose_delivery:both' }],
+            [{ text: '🔙 Cancel',              callback_data: 'admin:back' }],
         ],
     };
 }
