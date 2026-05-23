@@ -22,7 +22,7 @@ export function adminKeyboard(): IKMarkup {
                 { text: '📢 Broadcast',   callback_data: 'admin:broadcast' },
             ],
             [
-                { text: '🎁 Giveaway',   callback_data: 'admin:giveaway' },
+                { text: '🎁 Giveaways',  callback_data: 'admin:giveaways' },
             ],
             [
                 { text: '🏆 Top Traders', callback_data: 'admin:top_traders' },
@@ -179,6 +179,62 @@ export function giveawayTargetKeyboard(): IKMarkup {
             [{ text: '🔙 Admin Menu',                  callback_data: 'admin:back' }],
         ],
     };
+}
+
+export function giveawayManagerKeyboard(stats: { active: number; scheduled: number; completed: number }): IKMarkup {
+    return {
+        inline_keyboard: [
+            [{ text: '➕ New Giveaway',   callback_data: 'giveaway_v2:create' }],
+            [{ text: '📋 View Active',    callback_data: 'giveaway_v2:active' }],
+            [{ text: '📅 Scheduled',      callback_data: 'giveaway_v2:scheduled' }],
+            [{ text: '✅ Pick Winners',   callback_data: 'giveaway_v2:pick_winners' }],
+            [{ text: '🔙 Admin Menu',     callback_data: 'admin:back' }],
+        ],
+    };
+}
+
+export function giveawayTypeKeyboard(): IKMarkup {
+    return {
+        inline_keyboard: [
+            [{ text: '🎁 Giveaway',    callback_data: 'giveaway_type:giveaway' }],
+            [{ text: '🏷️ Promo Code', callback_data: 'giveaway_type:promo_code' }],
+            [{ text: '🏃 Marathon',    callback_data: 'giveaway_type:marathon' }],
+            [{ text: '🔙 Admin Menu',  callback_data: 'admin:back' }],
+        ],
+    };
+}
+
+export function giveawayCriteriaKeyboard(): IKMarkup {
+    return {
+        inline_keyboard: [
+            [{ text: '🚫 No Criteria',    callback_data: 'giveaway_criteria:none' }],
+            [{ text: '🆕 New User',       callback_data: 'giveaway_criteria:new_user' }],
+            [{ text: '💰 Min Balance',    callback_data: 'giveaway_criteria:min_balance' }],
+            [{ text: '🏆 Top Traders',    callback_data: 'giveaway_criteria:top_traders' }],
+            [{ text: '🔙 Admin Menu',     callback_data: 'admin:back' }],
+        ],
+    };
+}
+
+export function giveawayScheduleKeyboard(): IKMarkup {
+    return {
+        inline_keyboard: [
+            [{ text: '🚀 Send Now',       callback_data: 'giveaway_schedule:now' }],
+            [{ text: '⏰ In 1h',          callback_data: 'giveaway_schedule:3600' }],
+            [{ text: '⏰ In 6h',          callback_data: 'giveaway_schedule:21600' }],
+            [{ text: '⏰ In 24h',         callback_data: 'giveaway_schedule:86400' }],
+            [{ text: '🔙 Admin Menu',     callback_data: 'admin:back' }],
+        ],
+    };
+}
+
+export function activeGiveawaysKeyboard(giveaways: Array<{ id: number; title: string }>, action: 'view' | 'winners'): IKMarkup {
+    const rows: Btn[][] = giveaways.map(g => [{
+        text: action === 'winners' ? `🏆 ${g.title}` : `📋 ${g.title}`,
+        callback_data: action === 'winners' ? `giveaway_winners:${g.id}` : `giveaway_view:${g.id}`,
+    }]);
+    rows.push([{ text: '🔙 Giveaways', callback_data: 'admin:giveaways' }]);
+    return { inline_keyboard: rows };
 }
 
 export function memberManagementKeyboard(): IKMarkup {
