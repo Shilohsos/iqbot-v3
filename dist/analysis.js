@@ -5,7 +5,7 @@ export async function analyzePairWithSdk(sdk, pair, timeframeSec, tier = 'NEWBIE
 export async function analyzePair(ssid, pair, timeframeSec, tier = 'NEWBIE') {
     const sdk = await Promise.race([
         createSdk(ssid),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('Analysis SDK connection timed out')), 120_000)),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Analysis SDK connection timed out')), 180_000)),
     ]);
     try {
         return await runAnalysis(sdk, pair, timeframeSec, tier);

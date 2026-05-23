@@ -3,6 +3,7 @@ import { Telegraf } from 'telegraf';
 import { BalanceType } from './index.js';
 import { IQ_AUTH_URL } from './protocol.js';
 import { executeTrade, executeTradeWithSdk, createSdk } from './trade.js';
+import { sdkPool } from './sdk-pool.js';
 import { getRecentTrades, getTradeStats, getTopTradersToday, getUser, saveUser, saveUsername, deleteUser, getAllUsers, getAllUserIds, getActiveTraderIds, getInactiveTraderIds, findUsersByUsername, upsertOnboardingUser, approveUser, setManualApproval, rejectUser, resetUser, getApprovalStats, getRecentApprovals, getPendingManualUsers, setUserTier, saveUserCurrency, pauseUser, resumeUser, generateToken, validateToken, useToken, getTokens, updateLeaderboardAuto, addLeaderboardManual, getLeaderboardDetailed, updateLeaderboardManual, getFunnelStats, getConfig, setConfig, getAuditReport, maskUserId, calculatePairWinRates, selectTopPicks, setSession, getSession, deleteSession, cleanStaleSessions, saveGeneratedGiveawayId, isGeneratedIdUsed, getTradersIqUserIds, getGiveawayTargetIds, countFabricatedTraders, seedFabricatedTraders, getFabricatedTradersDueForUpdate, updateFabricatedPnl, getAllFabricatedTraders, resetFabricatedPnl, getRealTraderLeaderboard, } from './db.js';
 import { analyzePairWithSdk } from './analysis.js';
 import { amountKeyboard, timeframeKeyboard, pairKeyboard, tfLabel, OTC_PAIRS, tradeModeKeyboard, demoUpsellKeyboard, affiliateFailKeyboard, } from './menu.js';
@@ -17,7 +18,7 @@ const ASSETS_DIR = process.env.ASSETS_DIR ?? '/root/iqbot-v3/assets';
 if (!BOT_TOKEN)
     throw new Error('BOT_TOKEN missing from .env');
 process.on('unhandledRejection', (reason) => { console.error('[unhandledRejection]', reason); });
-const bot = new Telegraf(BOT_TOKEN);
+const bot = new Telegraf(BOT_TOKEN, { handlerTimeout: Infinity });
 // Save Telegram username on every interaction
 bot.use(async (ctx, next) => {
     const id = ctx.from?.id;
@@ -304,9 +305,8 @@ async function sendStartMenu(ctx) {
         const msgId = sentMsg.message_id;
         const userTier = user.tier ?? undefined;
         setImmediate(async () => {
-            let sdk;
             try {
-                sdk = await withTimeout(createSdk(ssid), 30_000, 'balance');
+                const sdk = await sdkPool.get(telegramId, ssid);
                 const all = (await withTimeout(sdk.balances(), 15_000, 'balance')).getBalances();
                 const demo = all.find(b => b.type === BalanceType.Demo);
                 const real = all.find(b => b.type === BalanceType.Real);
@@ -325,7 +325,7 @@ async function sendStartMenu(ctx) {
             }
             catch { }
             finally {
-                sdk?.shutdown().catch(() => { });
+                sdkPool.release(telegramId);
             }
         });
     }
@@ -393,7 +393,7 @@ async function runMartingale(ctx, ssid, pair, direction, amount, timeframeSec = 
     activeTradeSessions.set(userId, (activeTradeSessions.get(userId) ?? 0) + 1);
     try {
         const runId = crypto.randomUUID();
-        const roundTimeoutMs = (timeframeSec + 90) * 1000 + 120_000;
+        const roundTimeoutMs = (timeframeSec + 90) * 1000 + 180_000;
         let currentAmount = amount;
         let totalPnl = 0;
         const logLines = ['✦ Trade session initialized…'];
@@ -432,7 +432,7 @@ async function runMartingale(ctx, ssid, pair, direction, amount, timeframeSec = 
             }
             catch { }
         };
-        for (let round = 1; round <= effectiveRounds; round++) {
+        for (let round = 1; round <= effectiveRounds + 1; round++) {
             logLines.push(`⚡ Trade 1|🟡 $${currentAmount.toFixed(2)} → in flight`);
             await syncLog();
             const roundTrade = { pair, direction, amount: currentAmount, martingaleRunId: runId, timeframeSec, balanceType, telegramId: ctx.from.id };
@@ -762,30 +762,21 @@ bot.action(/^pair:(.+)$/, async (ctx) => {
         l7MsgId = m.message_id;
     }
     catch { }
-    const progressMsg = await ctx.reply(`Selected: ${pair}\n\n🔌 Connecting to IQ Option...\n⏱ May take 1–2 minutes...`);
+    const progressMsg = await ctx.reply(`Selected: ${pair}\n\n🔌 Connecting to IQ Option...\n⏱ Usually instant if you traded recently`);
     preTradeMessageIds.push(progressMsg.message_id);
-    const keepAlive = setInterval(() => {
-        ctx.telegram.editMessageText(chatId, progressMsg.message_id, undefined, `Selected: ${pair}\n\n🔄 Still connecting...\n⏱ Hold on, almost there..`).catch(() => { });
-    }, 30_000);
-    // Create ONE SDK connection — shared across analysis + all martingale rounds
     let sdk;
     try {
-        sdk = await Promise.race([
-            createSdk(ssid),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('Connection timed out')), 120_000)),
-        ]);
-        clearInterval(keepAlive);
+        sdk = await sdkPool.get(ctx.from.id, ssid);
         await ctx.telegram.editMessageText(chatId, progressMsg.message_id, undefined, `✅ Connected! Analyzing market data for ${pair}...`).catch(() => { });
     }
     catch (err) {
-        clearInterval(keepAlive);
         if (l7MsgId) {
             try {
                 await ctx.telegram.deleteMessage(chatId, l7MsgId);
             }
             catch { }
         }
-        await ctx.telegram.editMessageText(chatId, progressMsg.message_id, undefined, `❌ IQ Option server took too long to respond.\n\nTry again in a few minutes. If this keeps happening, check your connection or contact support.`).catch(() => ctx.reply('❌ IQ Option server took too long to respond. Please try again.'));
+        await ctx.telegram.editMessageText(chatId, progressMsg.message_id, undefined, `❌ Could not connect to IQ Option.\n\nTry again in a moment.`).catch(() => ctx.reply('❌ Could not connect to IQ Option. Try again.'));
         return;
     }
     try {
@@ -847,7 +838,7 @@ bot.action(/^pair:(.+)$/, async (ctx) => {
         }
     }
     finally {
-        await sdk.shutdown();
+        sdkPool.release(ctx.from.id);
     }
 });
 // ─── Demo upsell ──────────────────────────────────────────────────────────────
@@ -1049,10 +1040,9 @@ bot.command('balance', async (ctx) => {
         await ctx.reply('❌ Not connected. Use /connect first.', { reply_markup: backKeyboard() });
         return;
     }
-    let _sdk;
     try {
-        _sdk = await withTimeout(createSdk(ssid), 30_000, 'balance');
-        const all = (await withTimeout(_sdk.balances(), 15_000, 'balance')).getBalances();
+        const sdk = await sdkPool.get(uid, ssid);
+        const all = (await withTimeout(sdk.balances(), 15_000, 'balance')).getBalances();
         const demo = all.find(b => b.type === BalanceType.Demo);
         const real = all.find(b => b.type === BalanceType.Real);
         if (real?.currency)
@@ -1073,7 +1063,7 @@ bot.command('balance', async (ctx) => {
         await ctx.reply(isTimeout ? '⚠️ IQ Option is taking too long. Try again in a moment.' : `❌ Balance fetch failed: ${err instanceof Error ? err.message : 'Unknown error'}`, { reply_markup: backKeyboard() });
     }
     finally {
-        _sdk?.shutdown().catch(() => { });
+        sdkPool.release(uid);
     }
 });
 // ─── Admin ────────────────────────────────────────────────────────────────────
@@ -1639,15 +1629,15 @@ bot.command('disconnect', async (ctx) => {
 });
 // ─── /pairs debug ─────────────────────────────────────────────────────────────
 bot.command('pairs', async (ctx) => {
-    const ssid = getSsidForUser(ctx.from.id);
+    const uid = ctx.from.id;
+    const ssid = getSsidForUser(uid);
     if (!ssid) {
         await ctx.reply('❌ Not connected. Use /connect first.');
         return;
     }
-    let _sdk;
     try {
-        _sdk = await withTimeout(createSdk(ssid), 60_000, 'pairs');
-        const actives = (await withTimeout(_sdk.turboOptions(), 60_000, 'pairs')).getActives();
+        const sdk = await sdkPool.get(uid, ssid);
+        const actives = (await withTimeout(sdk.turboOptions(), 60_000, 'pairs')).getActives();
         const normTicker = (s) => s.toUpperCase().replace(/^front\./i, '').replace(/[-/\s]/g, '');
         const otcNorms = OTC_PAIRS.map(p => normTicker(p));
         let msg = '📋 *Turbo Actives*\n\n';
@@ -1662,7 +1652,7 @@ bot.command('pairs', async (ctx) => {
         await ctx.reply(isTimeout ? '⚠️ IQ Option is taking too long. Try again in a moment.' : `❌ Failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
     }
     finally {
-        _sdk?.shutdown().catch(() => { });
+        sdkPool.release(uid);
     }
 });
 bot.command('ping', ctx => ctx.reply('pong'));
