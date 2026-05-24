@@ -3321,7 +3321,7 @@ cleanStaleSessions();
 bot.launch();
 logger.info('bot', 'iqbot-v3 running');
 startWelcomeFollowUp(bot);
-startAutoBroadcast(bot);
+// startAutoBroadcast(bot); // DISABLED — pending interval fix + images
 
 // ─── Fabricated Leaderboard: seed + update checker + midnight reset ───────────
 

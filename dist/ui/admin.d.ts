@@ -41,6 +41,9 @@ export declare function giveawayManagerKeyboard(stats: {
 export declare function giveawayTypeKeyboard(): IKMarkup;
 export declare function giveawayCriteriaKeyboard(): IKMarkup;
 export declare function giveawayScheduleKeyboard(): IKMarkup;
+export declare function promoScheduleKeyboard(): IKMarkup;
+export declare function marathonDurationKeyboard(): IKMarkup;
+export declare function marathonScheduleKeyboard(): IKMarkup;
 export declare function activeGiveawaysKeyboard(giveaways: Array<{
     id: number;
     title: string;

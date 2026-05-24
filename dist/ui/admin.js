@@ -204,6 +204,39 @@ export function giveawayScheduleKeyboard() {
         ],
     };
 }
+export function promoScheduleKeyboard() {
+    return {
+        inline_keyboard: [
+            [{ text: '🚀 Send Now', callback_data: 'promo_schedule:now' }],
+            [{ text: '⏰ In 1h', callback_data: 'promo_schedule:3600' }],
+            [{ text: '⏰ In 6h', callback_data: 'promo_schedule:21600' }],
+            [{ text: '⏰ In 24h', callback_data: 'promo_schedule:86400' }],
+            [{ text: '🔙 Admin Menu', callback_data: 'admin:back' }],
+        ],
+    };
+}
+export function marathonDurationKeyboard() {
+    return {
+        inline_keyboard: [
+            [{ text: '24 hours', callback_data: 'marathon_duration:86400' }],
+            [{ text: '3 days', callback_data: 'marathon_duration:259200' }],
+            [{ text: '7 days', callback_data: 'marathon_duration:604800' }],
+            [{ text: '14 days', callback_data: 'marathon_duration:1209600' }],
+            [{ text: '🔙 Admin Menu', callback_data: 'admin:back' }],
+        ],
+    };
+}
+export function marathonScheduleKeyboard() {
+    return {
+        inline_keyboard: [
+            [{ text: '🚀 Start Now', callback_data: 'marathon_schedule:now' }],
+            [{ text: '⏰ In 1h', callback_data: 'marathon_schedule:3600' }],
+            [{ text: '⏰ In 6h', callback_data: 'marathon_schedule:21600' }],
+            [{ text: '⏰ In 24h', callback_data: 'marathon_schedule:86400' }],
+            [{ text: '🔙 Admin Menu', callback_data: 'admin:back' }],
+        ],
+    };
+}
 export function activeGiveawaysKeyboard(giveaways, action) {
     const rows = giveaways.map(g => [{
             text: action === 'winners' ? `🏆 ${g.title}` : `📋 ${g.title}`,

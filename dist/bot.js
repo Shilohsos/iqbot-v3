@@ -8,14 +8,13 @@ import { getTierConfig, normalizeTier, autoPromoteTier } from './tiers.js';
 import { getRecentTrades, getTradeStats, getTopTradersToday, getUser, saveUser, saveUsername, deleteUser, getAllUsers, getAllUserIds, getActiveTraderIds, getInactiveTraderIds, findUsersByUsername, upsertOnboardingUser, approveUser, setManualApproval, rejectUser, resetUser, getApprovalStats, getRecentApprovals, getPendingManualUsers, setUserTier, saveUserCurrency, pauseUser, resumeUser, generateToken, validateToken, useToken, getTokens, updateLeaderboardAuto, addLeaderboardManual, getLeaderboardDetailed, updateLeaderboardManual, getFunnelStats, getConfig, setConfig, getAuditReport, maskUserId, calculatePairWinRates, selectTopPicks, setSession, getSession, deleteSession, cleanStaleSessions, saveGeneratedGiveawayId, isGeneratedIdUsed, getTradersIqUserIds, getGiveawayTargetIds, countFabricatedTraders, seedFabricatedTraders, getFabricatedTradersDueForUpdate, updateFabricatedPnl, getAllFabricatedTraders, resetFabricatedPnl, getRealTraderLeaderboard, getGiveawayStats, getGiveawayParticipantCount, insertMessage, insertBroadcastMessage, getUserMartingaleSettings, setUserMartingaleSettings, getUserSessionStats, addUserSessionStats, getUserBalanceCache, setUserBalanceCache, clearUserBalanceCache, } from './db.js';
 import { friendlyError } from './errors.js';
 import { logger } from './logger.js';
-import { createGiveawayEvent, activateGiveaway, participate as giveawayParticipate, recordTrade as giveawayRecordTrade, selectWinners as giveawaySelectWinners, getActiveGiveaways, getGiveawayEvents, getGiveawayEvent, processUpdateQueue, processNotificationsQueue, } from './giveaway.js';
+import { createGiveawayEvent, activateGiveaway, activatePromoCode, activateMarathon, participate as giveawayParticipate, claimPromoCode, getMarathonLeaderboard, checkMarathonDeadlines, recordTrade as giveawayRecordTrade, selectWinners as giveawaySelectWinners, getActiveGiveaways, getGiveawayEvents, getGiveawayEvent, processUpdateQueue, processNotificationsQueue, } from './giveaway.js';
 import { analyzePairWithSdk } from './analysis.js';
 import { amountKeyboard, timeframeKeyboard, pairKeyboard, tfLabel, OTC_PAIRS, tradeModeKeyboard, demoUpsellKeyboard, } from './menu.js';
 import { startKeyboard, backKeyboard, onboardKeyboard } from './ui/user.js';
-import { getAdminId, adminKeyboard, adminBackKeyboard, broadcastTargetKeyboard, broadcastLinkKeyboard, broadcastActionKeyboard, broadcastTimerKeyboard, broadcastSendOrScheduleKeyboard, broadcastDelayKeyboard, scheduledBroadcastsKeyboard, tokenTierKeyboard, generateTokenKeyboard, topTradersAdminKeyboard, funnelKeyboard, memberManagementKeyboard, activationsKeyboard, giveawayTargetKeyboard, giveawayManagerKeyboard, giveawayTypeKeyboard, giveawayCriteriaKeyboard, giveawayScheduleKeyboard, activeGiveawaysKeyboard, composeTopicKeyboard, composeResultKeyboard, composeDeliveryKeyboard, } from './ui/admin.js';
+import { getAdminId, adminKeyboard, adminBackKeyboard, broadcastTargetKeyboard, broadcastLinkKeyboard, broadcastActionKeyboard, broadcastTimerKeyboard, broadcastSendOrScheduleKeyboard, broadcastDelayKeyboard, scheduledBroadcastsKeyboard, tokenTierKeyboard, generateTokenKeyboard, topTradersAdminKeyboard, funnelKeyboard, memberManagementKeyboard, activationsKeyboard, giveawayTargetKeyboard, giveawayManagerKeyboard, giveawayTypeKeyboard, giveawayCriteriaKeyboard, giveawayScheduleKeyboard, activeGiveawaysKeyboard, promoScheduleKeyboard, marathonDurationKeyboard, marathonScheduleKeyboard, composeTopicKeyboard, composeResultKeyboard, composeDeliveryKeyboard, } from './ui/admin.js';
 import { checkAffiliate } from './affiliate.js';
 import { setupChannelHandlers, startWelcomeFollowUp } from './channel.js';
-import { startAutoBroadcast } from './auto-broadcast.js';
 import { generatePost } from './llm.js';
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const IQ_SSID = process.env.IQ_SSID;
@@ -336,9 +335,10 @@ async function sendStartMenu(ctx) {
                 if (real && user.tier !== 'MASTER') {
                     const newTier = autoPromoteTier(telegramId, real.amount, user.tier ?? 'DEMO');
                     if (newTier && newTier !== user.tier) {
+                        const oldTier = user.tier;
                         setUserTier(telegramId, newTier);
                         user.tier = newTier;
-                        logger.info('bot', `auto-promoted user ${telegramId} from ${user.tier} to ${newTier} (balance: $${real.amount.toFixed(2)})`);
+                        logger.info('bot', `auto-promoted user ${telegramId} from ${oldTier} to ${newTier} (balance: $${real.amount.toFixed(2)})`);
                     }
                 }
                 const newLine = [
@@ -1125,27 +1125,58 @@ bot.action('ui:giveaways', async (ctx) => {
     const telegramId = ctx.from.id;
     const user = getUser(telegramId);
     const tier = normalizeTier(user?.tier);
+    const canAct = tier === 'PRO' || tier === 'MASTER';
     const activeGiveaways = getActiveGiveaways();
     if (activeGiveaways.length === 0) {
-        await ctx.reply('🎁 *Giveaways*\n\nNo active giveaways right now. Check back soon!', { parse_mode: 'Markdown', reply_markup: backKeyboard() });
+        await ctx.reply('🎁 *Giveaways & Promos*\n\nNo active events right now. Check back soon!', { parse_mode: 'Markdown', reply_markup: backKeyboard() });
         return;
     }
-    let msg = '🎁 *Active Giveaways*\n\n';
     for (const g of activeGiveaways) {
-        const prizeText = g.prize_pool != null ? `Prize: *$${g.prize_pool.toFixed(2)}*` : '';
-        const canJoin = tier === 'PRO' || tier === 'MASTER';
-        msg += `${g.title}\n${prizeText}\n`;
-        if (canJoin) {
-            msg += `Tap Participate to join 👇\n\n`;
+        let header;
+        let details;
+        let btnText;
+        let btnData;
+        if (g.event_type === 'promo_code') {
+            header = `🏷️ *PROMO CODE*`;
+            details = [
+                `*${g.title}*`,
+                g.description ?? '',
+                g.max_winners != null ? `${g.max_winners} claims available` : '',
+            ].filter(Boolean).join('\n');
+            btnText = '🎁 Claim Code';
+            btnData = `promo:claim:${g.id}`;
+        }
+        else if (g.event_type === 'marathon') {
+            const prizeText = g.prize_pool != null ? `Prize Pool: *$${g.prize_pool.toFixed(2)}*` : '';
+            const endsText = g.ends_at ? `Ends: ${g.ends_at.split(' ')[0]}` : '';
+            header = `🏃 *MARATHON*`;
+            details = [
+                `*${g.title}*`,
+                g.description ?? '',
+                prizeText,
+                `Top ${g.max_winners} traders win`,
+                endsText,
+            ].filter(Boolean).join('\n');
+            btnText = '🏃 Join Marathon';
+            btnData = `giveaway:participate:${g.id}`;
         }
         else {
-            msg += `🔒 Upgrade to PRO to participate\n\n`;
+            const prizeText = g.prize_pool != null ? `Prize: *$${g.prize_pool.toFixed(2)}*` : '';
+            header = `🎁 *GIVEAWAY*`;
+            details = [
+                `*${g.title}*`,
+                g.description ?? '',
+                prizeText,
+            ].filter(Boolean).join('\n');
+            btnText = '🎯 Participate';
+            btnData = `giveaway:participate:${g.id}`;
         }
+        const msg = `${header}\n\n${details}`;
+        const markup = canAct
+            ? { inline_keyboard: [[{ text: btnText, callback_data: btnData }], [{ text: '🔙 Back', callback_data: 'ui:start' }]] }
+            : { inline_keyboard: [[{ text: '⚡ Upgrade to PRO', callback_data: 'ui:upgrade' }], [{ text: '🔙 Back', callback_data: 'ui:start' }]] };
+        await ctx.reply(msg, { parse_mode: 'Markdown', reply_markup: markup });
     }
-    const markup = activeGiveaways.length === 1 && (tier === 'PRO' || tier === 'MASTER')
-        ? { inline_keyboard: [[{ text: '🎯 Participate', callback_data: `giveaway:participate:${activeGiveaways[0].id}` }], [{ text: '🔙 Back', callback_data: 'ui:start' }]] }
-        : backKeyboard();
-    await ctx.reply(msg, { parse_mode: 'Markdown', reply_markup: markup });
 });
 // ─── Legacy commands (keep for power users) ───────────────────────────────────
 bot.command('trade', async (ctx) => {
@@ -1202,8 +1233,9 @@ bot.command('balance', async (ctx) => {
         if (real && user && user.tier !== 'MASTER') {
             const newTier = autoPromoteTier(uid, real.amount, user.tier ?? 'DEMO');
             if (newTier && newTier !== user.tier) {
+                const oldTier = user.tier;
                 setUserTier(uid, newTier);
-                logger.info('bot', `auto-promoted user ${uid} from ${user.tier} to ${newTier} via /balance`);
+                logger.info('bot', `auto-promoted user ${uid} from ${oldTier} to ${newTier} via /balance`);
             }
         }
         let msg = '💰 *Balances*\n\n';
@@ -1822,9 +1854,20 @@ bot.action('giveaway_v2:create', async (ctx) => {
 });
 bot.action(/^giveaway_type:(giveaway|promo_code|marathon)$/, async (ctx) => {
     await ctx.answerCbQuery();
+    const chatId = ctx.chat.id;
     const type = ctx.match[1];
-    adminSessions.set(ctx.chat.id, { step: 'giveaway_v2_title', giveawayV2Type: type });
-    await ctx.reply(`✅ Type: *${type}*\n\nStep 2: Enter a *title* for this giveaway:`, { parse_mode: 'Markdown' });
+    if (type === 'giveaway') {
+        adminSessions.set(chatId, { step: 'giveaway_v2_title', giveawayV2Type: 'giveaway' });
+        await ctx.reply(`✅ Type: *Giveaway* (9-step)\n\nStep 2: Enter a *title*:`, { parse_mode: 'Markdown' });
+    }
+    else if (type === 'promo_code') {
+        adminSessions.set(chatId, { step: 'promo_v2_title', giveawayV2Type: 'promo_code' });
+        await ctx.reply(`✅ Type: *Promo Code* (5-step)\n\nStep 1: Enter a *title* (e.g. "150% BONUS CODE"):`, { parse_mode: 'Markdown' });
+    }
+    else {
+        adminSessions.set(chatId, { step: 'marathon_v2_title', giveawayV2Type: 'marathon' });
+        await ctx.reply(`✅ Type: *Marathon* (6-step)\n\nStep 1: Enter a *title* (e.g. "7-Day Trading Marathon"):`, { parse_mode: 'Markdown' });
+    }
 });
 bot.action('giveaway_v2:active', async (ctx) => {
     await ctx.answerCbQuery();
@@ -1950,10 +1993,148 @@ bot.action(/^giveaway:participate:(\d+)$/, async (ctx) => {
     const telegramId = ctx.from.id;
     const giveawayId = parseInt(ctx.match[1], 10);
     const result = await giveawayParticipate(giveawayId, telegramId);
+    const event = getGiveawayEvent(giveawayId);
+    const markup = event?.event_type === 'marathon' && result.success
+        ? { inline_keyboard: [[{ text: '📊 Leaderboard', callback_data: `marathon:leaderboard:${giveawayId}` }]] }
+        : result.replyMarkup;
+    await ctx.reply(result.message, {
+        parse_mode: 'Markdown',
+        ...(markup ? { reply_markup: markup } : {}),
+    });
+});
+// Promo code schedule handler
+bot.action(/^promo_schedule:(now|\d+)$/, async (ctx) => {
+    await ctx.answerCbQuery('⏳ Creating promo code…');
+    const chatId = ctx.chat.id;
+    const as = adminSessions.get(chatId);
+    if (!as || !as.promoV2Title || !as.promoV2Code) {
+        await ctx.reply('❌ Session expired. Start over.', { reply_markup: adminBackKeyboard() });
+        return;
+    }
+    adminSessions.delete(chatId);
+    const scheduleArg = ctx.match[1];
+    const startsAt = scheduleArg === 'now'
+        ? undefined
+        : new Date(Date.now() + parseInt(scheduleArg, 10) * 1000).toISOString().replace('T', ' ').split('.')[0];
+    const input = {
+        event_type: 'promo_code',
+        title: as.promoV2Title,
+        description: as.promoV2Desc,
+        criteria_value: as.promoV2Code,
+        max_winners: as.promoV2MaxClaims ?? 9999,
+        starts_at: startsAt,
+    };
+    const promoId = createGiveawayEvent(input);
+    if (scheduleArg === 'now') {
+        await activatePromoCode(promoId);
+        await ctx.reply(`✅ *Promo code created and activated!*\n\nID: ${promoId}\nTitle: *${input.title}*\nCode: \`${as.promoV2Code}\`${as.promoV2MaxClaims ? `\nMax claims: ${as.promoV2MaxClaims}` : ''}\n\nAnnouncement queued to all approved users.`, { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
+    }
+    else {
+        await ctx.reply(`✅ *Promo code scheduled!*\n\nID: ${promoId}\nTitle: *${input.title}*\nStarts: ${startsAt}`, { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
+    }
+});
+// Marathon duration selection handler
+bot.action(/^marathon_duration:(\d+)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const chatId = ctx.chat.id;
+    const as = adminSessions.get(chatId);
+    if (!as || !as.marathonV2Title) {
+        await ctx.reply('❌ Session expired. Start over.', { reply_markup: adminBackKeyboard() });
+        return;
+    }
+    const durationSec = parseInt(ctx.match[1], 10);
+    const durationLabel = durationSec < 86400 ? `${durationSec / 3600}h`
+        : durationSec === 86400 ? '24 hours'
+            : durationSec === 259200 ? '3 days'
+                : durationSec === 604800 ? '7 days'
+                    : '14 days';
+    adminSessions.set(chatId, { ...as, step: 'marathon_v2_winners', marathonV2DurationSec: durationSec });
+    await ctx.reply(`✅ Duration: *${durationLabel}*\n\nStep 4: How many *top winners*? (e.g. 10):`, { parse_mode: 'Markdown' });
+});
+// Marathon schedule handler
+bot.action(/^marathon_schedule:(now|\d+)$/, async (ctx) => {
+    await ctx.answerCbQuery('⏳ Creating marathon…');
+    const chatId = ctx.chat.id;
+    const as = adminSessions.get(chatId);
+    if (!as || !as.marathonV2Title || !as.marathonV2Winners || !as.marathonV2DurationSec) {
+        await ctx.reply('❌ Session expired. Start over.', { reply_markup: adminBackKeyboard() });
+        return;
+    }
+    adminSessions.delete(chatId);
+    const scheduleArg = ctx.match[1];
+    const startMs = scheduleArg === 'now' ? Date.now() : Date.now() + parseInt(scheduleArg, 10) * 1000;
+    const startsAt = scheduleArg === 'now'
+        ? undefined
+        : new Date(startMs).toISOString().replace('T', ' ').split('.')[0];
+    const endsAt = new Date(startMs + as.marathonV2DurationSec * 1000).toISOString().replace('T', ' ').split('.')[0];
+    const input = {
+        event_type: 'marathon',
+        title: as.marathonV2Title,
+        description: as.marathonV2Desc,
+        criteria_type: 'top_traders',
+        max_winners: as.marathonV2Winners,
+        prize_pool: as.marathonV2Prize,
+        starts_at: startsAt,
+        ends_at: endsAt,
+    };
+    const marathonId = createGiveawayEvent(input);
+    if (scheduleArg === 'now') {
+        await activateMarathon(marathonId);
+        await ctx.reply(`✅ *Marathon created and started!*\n\nID: ${marathonId}\nTitle: *${input.title}*\nTop ${input.max_winners} winners\nEnds: ${endsAt}\n\nAnnouncement queued to all approved users.`, { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
+    }
+    else {
+        await ctx.reply(`✅ *Marathon scheduled!*\n\nID: ${marathonId}\nTitle: *${input.title}*\nStarts: ${startsAt}\nEnds: ${endsAt}`, { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
+    }
+});
+// Promo claim handler
+bot.action(/^promo:claim:(\d+)$/, async (ctx) => {
+    await ctx.answerCbQuery('⏳ Claiming…');
+    const telegramId = ctx.from.id;
+    const giveawayId = parseInt(ctx.match[1], 10);
+    const result = await claimPromoCode(giveawayId, telegramId);
     await ctx.reply(result.message, {
         parse_mode: 'Markdown',
         ...(result.replyMarkup ? { reply_markup: result.replyMarkup } : {}),
     });
+});
+// Marathon leaderboard handler
+bot.action(/^marathon:leaderboard:(\d+)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const telegramId = ctx.from.id;
+    const giveawayId = parseInt(ctx.match[1], 10);
+    const event = getGiveawayEvent(giveawayId);
+    if (!event) {
+        await ctx.reply('❌ Marathon not found.');
+        return;
+    }
+    const board = getMarathonLeaderboard(giveawayId);
+    if (board.length === 0) {
+        await ctx.reply(`🏃 *${event.title}*\n\nNo participants yet. Be the first to trade!`, { parse_mode: 'Markdown' });
+        return;
+    }
+    const medals = ['🥇', '🥈', '🥉'];
+    const lines = board.slice(0, 10).map(e => {
+        const medal = medals[e.rank - 1] ?? `${e.rank}.`;
+        const you = e.telegram_id === telegramId ? ' ← you' : '';
+        return `${medal} ${e.trade_count} trade${e.trade_count !== 1 ? 's' : ''}${you}`;
+    });
+    const userRank = board.find(e => e.telegram_id === telegramId);
+    let msg = `🏃 *${event.title} — Leaderboard*\n\n${lines.join('\n')}`;
+    if (userRank && userRank.rank > 10) {
+        msg += `\n\n📍 *Your rank: #${userRank.rank}* (${userRank.trade_count} trades)`;
+    }
+    if (!userRank) {
+        msg += `\n\n💡 Join the marathon to compete!`;
+    }
+    if (event.ends_at) {
+        const remaining = new Date(event.ends_at).getTime() - Date.now();
+        if (remaining > 0) {
+            const hours = Math.floor(remaining / 3_600_000);
+            const mins = Math.floor((remaining % 3_600_000) / 60_000);
+            msg += `\n\n⏱️ Ends in: ${hours}h ${mins}m — top ${event.max_winners} win`;
+        }
+    }
+    await ctx.reply(msg, { parse_mode: 'Markdown' });
 });
 // ─── Module 12: Compose Post (LLM-Powered) ───────────────────────────────────
 bot.action('admin:compose', async (ctx) => {
@@ -2435,6 +2616,84 @@ bot.on('text', async (ctx) => {
                     await ctx.reply(`✅ Prize pool: *$${prize.toFixed(2)}* → *$${perWinner}* per winner\n\n📡 Who should receive this broadcast?`, { parse_mode: 'Markdown', reply_markup: giveawayTargetKeyboard() });
                     return;
                 }
+                // ── Promo Code wizard text steps ─────────────────────────────────
+                if (as.step === 'promo_v2_title') {
+                    if (!text.trim()) {
+                        await ctx.reply('❌ Please enter a title:');
+                        return;
+                    }
+                    adminSessions.set(chatId, { ...as, step: 'promo_v2_desc', promoV2Title: text.trim() });
+                    await ctx.reply(`✅ Title: *${text.trim()}*\n\nStep 2: Enter a *description* (or type \`skip\`):`, { parse_mode: 'Markdown' });
+                    return;
+                }
+                if (as.step === 'promo_v2_desc') {
+                    const desc = text.trim().toLowerCase() === 'skip' ? undefined : text.trim();
+                    adminSessions.set(chatId, { ...as, step: 'promo_v2_code', promoV2Desc: desc });
+                    await ctx.reply(`✅ Description set.\n\nStep 3: Enter the *promo code* string (e.g. \`10xfirst\`):`, { parse_mode: 'Markdown' });
+                    return;
+                }
+                if (as.step === 'promo_v2_code') {
+                    if (!text.trim()) {
+                        await ctx.reply('❌ Please enter the code:');
+                        return;
+                    }
+                    adminSessions.set(chatId, { ...as, step: 'promo_v2_max_claims', promoV2Code: text.trim() });
+                    await ctx.reply(`✅ Code: \`${text.trim()}\`\n\nStep 4: Enter *max claims* (e.g. 50), or type \`unlimited\`:`, { parse_mode: 'Markdown' });
+                    return;
+                }
+                if (as.step === 'promo_v2_max_claims') {
+                    const isUnlimited = text.trim().toLowerCase() === 'unlimited';
+                    const n = isUnlimited ? undefined : parseInt(text.trim(), 10);
+                    if (!isUnlimited && (isNaN(n) || n < 1)) {
+                        await ctx.reply('❌ Enter a number (e.g. 50) or type unlimited:');
+                        return;
+                    }
+                    adminSessions.set(chatId, { ...as, promoV2MaxClaims: n });
+                    const claimsLabel = n != null ? `${n} max claims` : 'unlimited';
+                    await ctx.reply(`✅ Claims: *${claimsLabel}*\n\nStep 5: When should it go live?`, { parse_mode: 'Markdown', reply_markup: promoScheduleKeyboard() });
+                    return;
+                }
+                // ── Marathon wizard text steps ────────────────────────────────────
+                if (as.step === 'marathon_v2_title') {
+                    if (!text.trim()) {
+                        await ctx.reply('❌ Please enter a title:');
+                        return;
+                    }
+                    adminSessions.set(chatId, { ...as, step: 'marathon_v2_desc', marathonV2Title: text.trim() });
+                    await ctx.reply(`✅ Title: *${text.trim()}*\n\nStep 2: Enter a *description* (or type \`skip\`):`, { parse_mode: 'Markdown' });
+                    return;
+                }
+                if (as.step === 'marathon_v2_desc') {
+                    const desc = text.trim().toLowerCase() === 'skip' ? undefined : text.trim();
+                    adminSessions.set(chatId, { ...as, marathonV2Desc: desc });
+                    await ctx.reply(`✅ Description set.\n\nStep 3: Select the *marathon duration*:`, {
+                        parse_mode: 'Markdown',
+                        reply_markup: marathonDurationKeyboard(),
+                    });
+                    return;
+                }
+                if (as.step === 'marathon_v2_winners') {
+                    const n = parseInt(text.trim(), 10);
+                    if (isNaN(n) || n < 1 || n > 100) {
+                        await ctx.reply('❌ Enter a number between 1 and 100:');
+                        return;
+                    }
+                    adminSessions.set(chatId, { ...as, step: 'marathon_v2_prize', marathonV2Winners: n });
+                    await ctx.reply(`✅ *${n}* winner${n !== 1 ? 's' : ''}.\n\nStep 5: Enter the *total prize pool* in USD (e.g. 500), or \`0\` to skip:`, { parse_mode: 'Markdown' });
+                    return;
+                }
+                if (as.step === 'marathon_v2_prize' && as.marathonV2Winners) {
+                    const prize = parseFloat(text.trim());
+                    if (isNaN(prize) || prize < 0) {
+                        await ctx.reply('❌ Enter a valid amount (e.g. 500) or 0:');
+                        return;
+                    }
+                    const prizeVal = prize > 0 ? prize : undefined;
+                    adminSessions.set(chatId, { ...as, marathonV2Prize: prizeVal });
+                    const perWinner = prizeVal ? ` ($${(prizeVal / as.marathonV2Winners).toFixed(2)} per winner)` : '';
+                    await ctx.reply(`✅ Prize pool: *${prizeVal ? `$${prizeVal.toFixed(2)}${perWinner}` : 'none'}*\n\nStep 6: When should the marathon start?`, { parse_mode: 'Markdown', reply_markup: marathonScheduleKeyboard() });
+                    return;
+                }
                 // ── Giveaway V2 wizard text steps ────────────────────────────────
                 if (as.step === 'giveaway_v2_title') {
                     if (!text.trim()) {
@@ -2786,7 +3045,7 @@ cleanStaleSessions();
 bot.launch();
 logger.info('bot', 'iqbot-v3 running');
 startWelcomeFollowUp(bot);
-startAutoBroadcast(bot);
+// startAutoBroadcast(bot); // DISABLED — pending interval fix + images
 // ─── Fabricated Leaderboard: seed + update checker + midnight reset ───────────
 if (countFabricatedTraders() === 0) {
     seedFabricatedTraders();
@@ -2832,6 +3091,14 @@ setInterval(async () => {
         console.error('[giveaway] processNotificationsQueue error:', err instanceof Error ? err.message : err);
     }
 }, 30_000);
+setInterval(async () => {
+    try {
+        await checkMarathonDeadlines(bot.telegram);
+    }
+    catch (err) {
+        console.error('[marathon] deadline check error:', err instanceof Error ? err.message : err);
+    }
+}, 5 * 60_000);
 // ─── Keepalive ────────────────────────────────────────────────────────────────
 setInterval(async () => {
     try {

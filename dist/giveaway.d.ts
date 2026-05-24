@@ -26,5 +26,19 @@ export declare function selectWinners(giveawayId: number): Array<{
 }>;
 export declare function queueParticipantUpdate(giveawayId: number, participantId: number, telegramId: number, type: string, text: string): void;
 export declare function sendMotivationalMessages(giveawayId: number): void;
+export declare function activatePromoCode(giveawayId: number): Promise<void>;
+export declare function activateMarathon(giveawayId: number): Promise<void>;
+export declare function claimPromoCode(giveawayId: number, telegramId: number): Promise<{
+    success: boolean;
+    code?: string;
+    message: string;
+    replyMarkup?: ParticipateResult['replyMarkup'];
+}>;
+export declare function getMarathonLeaderboard(giveawayId: number): Array<{
+    telegram_id: number;
+    trade_count: number;
+    rank: number;
+}>;
+export declare function checkMarathonDeadlines(telegram: Telegram): Promise<void>;
 export declare function processUpdateQueue(telegram: Telegram): Promise<void>;
 export declare function processNotificationsQueue(telegram: Telegram): Promise<void>;
