@@ -1007,6 +1007,7 @@ bot.action(/^pair:(.+)$/, async ctx => {
         return;
     }
 
+    let tradeStarted = false;
     try {
         const analysisUser = getUser(ctx.from!.id);
         const analysisTier = normalizeTier(analysisUser?.tier);
@@ -1075,20 +1076,17 @@ bot.action(/^pair:(.+)$/, async ctx => {
             return;
         }
 
-        // Execute trade immediately
+        // Fire trade in background — don't block the update pipeline.
         const mgSettings = getUserMartingaleSettings(ctx.from!.id);
         const martingaleRounds = mgSettings.enabled ? mgSettings.maxRounds : 1;
         logger.trade('executing', pair, ctx.from!.id, `$${amount} ${tfLabel(timeframe)} ${mode}`);
-        // Fire trade in background — don't block the update pipeline.
-        // Telegraf processes updates sequentially; awaiting a 10-30 min martingale
-        // run freezes all other handlers. The trade reports its own results to the user.
         const tradePromise = runMartingale(ctx, ssid, pair, analysis.direction, amount, timeframe, (mode ?? 'demo') as 'demo' | 'live', martingaleRounds, preTradeMessageIds, sdk);
+        tradeStarted = true;
         tradePromise.finally(() => sdkPool.release(ctx.from!.id));
-        return;  // handler returns immediately — no more awaiting
-    } catch {
-        // SDK already released by tradePromise.finally if runMartingale started.
-        // If we never got that far, release now.
-        sdkPool.release(ctx.from!.id);
+    } finally {
+        // Release SDK on any early return (tier/pair check, analysis error, concurrent limit).
+        // If the trade was launched, tradePromise.finally() handles release instead.
+        if (!tradeStarted) sdkPool.release(ctx.from!.id);
     }
 });
 
