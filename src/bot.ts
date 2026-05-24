@@ -201,7 +201,7 @@ type AdminStep =
 
 interface AdminSessionState {
     step: AdminStep;
-    broadcastTarget?: 'active' | 'inactive' | 'activated' | 'nonactivated' | 'all';
+    broadcastTarget?: 'active' | 'inactive' | 'activated' | 'nonactivated' | 'all' | 'testuser';
     broadcastLinkUrl?: string;
     manualAddUserId?: number;
     editTraderTelegramId?: number;
@@ -1678,11 +1678,12 @@ bot.action('admin:broadcast', async ctx => {
     await ctx.reply('📢 *Broadcast* — Select target group:', { parse_mode: 'Markdown', reply_markup: broadcastTargetKeyboard() });
 });
 
-bot.action(/^broadcast:(active|inactive|activated|nonactivated|all)$/, async ctx => {
+bot.action(/^broadcast:(active|inactive|activated|nonactivated|all|testuser)$/, async ctx => {
     await ctx.answerCbQuery();
-    const target = ctx.match[1] as 'active' | 'inactive' | 'activated' | 'nonactivated' | 'all';
+    const target = ctx.match[1] as 'active' | 'inactive' | 'activated' | 'nonactivated' | 'all' | 'testuser';
     adminSessions.set(ctx.chat!.id, { step: 'broadcast_message', broadcastTarget: target });
-    await ctx.reply(`📝 Send your broadcast message for *${target}* users:`, { parse_mode: 'Markdown' });
+    const label = target === 'testuser' ? 'test user (Shara)' : `${target} users`;
+    await ctx.reply(`📝 Send your broadcast message for *${label}*:`, { parse_mode: 'Markdown' });
 });
 
 // Button type selection
@@ -2661,11 +2662,16 @@ bot.on('text', async ctx => {
                     else if (target === 'inactive') targetIds = getInactiveTraderIds(5);
                     else if (target === 'activated') targetIds = getActivatedUserIds();
                     else if (target === 'nonactivated') targetIds = getNonActivatedUserIds();
+                    else if (target === 'testuser') {
+                        const tid = getTestUserId();
+                        targetIds = tid ? [tid] : [];
+                    }
                     else targetIds = getAllUserIds();
 
+                    const targetLabel = target === 'testuser' ? 'test user (Shara)' : `${target} user(s)`;
                     pendingBroadcasts.set(chatId, { message: text, targetIds });
                     adminSessions.set(chatId, { ...as, step: 'broadcast_media' });
-                    await ctx.reply(`📎 Send to *${targetIds.length}* ${target} user(s).\n\nInclude an image or video? Send the file, or type "skip":`, { parse_mode: 'Markdown' });
+                    await ctx.reply(`📎 Send to *${targetIds.length}* ${targetLabel}.\n\nInclude an image or video? Send the file, or type "skip":`, { parse_mode: 'Markdown' });
                 } catch (err) {
                     console.error('[broadcast] broadcast_message error:', err);
                     await ctx.reply('❌ Broadcast setup failed. Check server logs.', { reply_markup: adminBackKeyboard() });

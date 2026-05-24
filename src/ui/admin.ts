@@ -54,6 +54,7 @@ export function broadcastTargetKeyboard(): IKMarkup {
             [{ text: '✅ Activated (IQ connected)',           callback_data: 'broadcast:activated' }],
             [{ text: '❌ Non-Activated (no IQ / rejected)',  callback_data: 'broadcast:nonactivated' }],
             [{ text: '👥 All Users',                          callback_data: 'broadcast:all' }],
+            [{ text: '🧪 Test User Only',                     callback_data: 'broadcast:testuser' }],
             [{ text: '📅 Scheduled',                          callback_data: 'admin:scheduled' }],
             [{ text: '🔙 Admin Menu',                         callback_data: 'admin:back' }],
         ],
