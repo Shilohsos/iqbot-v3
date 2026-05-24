@@ -23,6 +23,7 @@ import {
     saveGeneratedGiveawayId, isGeneratedIdUsed, getTradersIqUserIds, getGiveawayTargetIds,
     countFabricatedTraders, seedFabricatedTraders, getFabricatedTradersDueForUpdate,
     updateFabricatedPnl, getAllFabricatedTraders, resetFabricatedPnl, getRealTraderLeaderboard,
+    getMarathonFabricantsDueForUpdate, updateMarathonFabricantTrades,
     getGiveawayStats, getGiveawayParticipantCount,
     insertMessage,
     insertBroadcastMessage,
@@ -2366,6 +2367,9 @@ bot.action(/^marathon:leaderboard:(\d+)$/, async ctx => {
     const medals = ['🥇', '🥈', '🥉'];
     const lines = board.slice(0, 10).map(e => {
         const medal = medals[e.rank - 1] ?? `${e.rank}.`;
+        if (e.display_name) {
+            return `${medal} ${e.display_name} — ${e.trade_count} trade${e.trade_count !== 1 ? 's' : ''}`;
+        }
         const you = e.telegram_id === telegramId ? ' ← you' : '';
         return `${medal} ${e.trade_count} trade${e.trade_count !== 1 ? 's' : ''}${you}`;
     });
@@ -3306,6 +3310,18 @@ setInterval(() => {
         const intervalSec = 3600 + Math.floor(Math.random() * 32401);
         const nextUpdateAt = new Date(Date.now() + intervalSec * 1000).toISOString().replace('T', ' ').split('.')[0];
         updateFabricatedPnl(t.id, newPnl, nextUpdateAt);
+    }
+}, 60_000);
+
+setInterval(() => {
+    const due = getMarathonFabricantsDueForUpdate();
+    for (const f of due) {
+        if (Math.random() < 0.2) continue; // 20% chance: no change this tick
+        const increase = 1 + Math.floor(Math.random() * 5);
+        const newCount = f.trade_count + increase;
+        const intervalSec = 3600 + Math.floor(Math.random() * 18001); // 1-6h
+        const nextUpdateAt = new Date(Date.now() + intervalSec * 1000).toISOString().replace('T', ' ').split('.')[0];
+        updateMarathonFabricantTrades(f.id, newCount, nextUpdateAt);
     }
 }, 60_000);
 

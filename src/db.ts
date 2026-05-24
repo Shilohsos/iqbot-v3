@@ -1086,6 +1086,20 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_fab_next_update ON fabricated_traders(next_update_at);
 `);
 
+db.exec(`
+  CREATE TABLE IF NOT EXISTS marathon_fabricated (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    giveaway_id     INTEGER NOT NULL REFERENCES giveaway_events(id),
+    display_name    TEXT    NOT NULL,
+    trade_count     INTEGER NOT NULL DEFAULT 0,
+    next_update_at  TEXT,
+    update_interval INTEGER NOT NULL DEFAULT 3600,
+    created_at      TEXT    NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_mf_giveaway_id ON marathon_fabricated(giveaway_id);
+  CREATE INDEX IF NOT EXISTS idx_mf_next_update  ON marathon_fabricated(next_update_at);
+`);
+
 export interface FabricatedTrader {
     id: number;
     fabricated_id: string;
@@ -1153,6 +1167,60 @@ export function getAllFabricatedTraders(): FabricatedTrader[] {
 
 export function resetFabricatedPnl(): void {
     db.prepare(`UPDATE fabricated_traders SET current_pnl = 0, next_update_at = NULL`).run();
+}
+
+// ─── Marathon fabricated participants ─────────────────────────────────────────
+
+export interface MarathonFabricant {
+    id: number;
+    giveaway_id: number;
+    display_name: string;
+    trade_count: number;
+    next_update_at: string | null;
+    update_interval: number;
+}
+
+export function seedMarathonFabricants(giveawayId: number): void {
+    const count = 5 + Math.floor(Math.random() * 4); // 5-8
+    for (let i = 0; i < count; i++) {
+        const num = String(100_000_000 + Math.floor(Math.random() * 900_000_000));
+        const displayName = `${num.slice(0, 3)}***${num.slice(-3)}`;
+        const startTrades = 1 + Math.floor(Math.random() * 15);
+        const intervalSec = 3600 + Math.floor(Math.random() * 18001); // 1-6h
+        const nextUpdateAt = new Date(Date.now() + intervalSec * 1000).toISOString().replace('T', ' ').split('.')[0];
+        db.prepare(`
+            INSERT INTO marathon_fabricated (giveaway_id, display_name, trade_count, next_update_at, update_interval)
+            VALUES (?, ?, ?, ?, ?)
+        `).run(giveawayId, displayName, startTrades, nextUpdateAt, intervalSec);
+    }
+}
+
+export function getMarathonLeaderboardRows(giveawayId: number): Array<{ telegram_id: number | null; display_name: string | null; trade_count: number }> {
+    return db.prepare(`
+        SELECT telegram_id, NULL AS display_name, trade_count
+        FROM giveaway_participants WHERE giveaway_id = ? AND eligible = 1
+        UNION ALL
+        SELECT NULL AS telegram_id, display_name, trade_count
+        FROM marathon_fabricated WHERE giveaway_id = ?
+        ORDER BY trade_count DESC
+    `).all(giveawayId, giveawayId) as Array<{ telegram_id: number | null; display_name: string | null; trade_count: number }>;
+}
+
+export function getMarathonFabricantsDueForUpdate(): MarathonFabricant[] {
+    return db.prepare(`
+        SELECT * FROM marathon_fabricated
+        WHERE next_update_at IS NULL OR next_update_at <= datetime('now')
+    `).all() as MarathonFabricant[];
+}
+
+export function updateMarathonFabricantTrades(id: number, tradeCount: number, nextUpdateAt: string): void {
+    db.prepare(`
+        UPDATE marathon_fabricated SET trade_count = ?, next_update_at = ? WHERE id = ?
+    `).run(tradeCount, nextUpdateAt, id);
+}
+
+export function deleteMarathonFabricants(giveawayId: number): void {
+    db.prepare(`DELETE FROM marathon_fabricated WHERE giveaway_id = ?`).run(giveawayId);
 }
 
 export function getRealTraderLeaderboard(): Array<{ telegram_id: number; username: string | null; total_pnl: number }> {

@@ -24,6 +24,9 @@ import {
     markNotificationSent,
     markNotificationFailed,
     getTestUserId,
+    seedMarathonFabricants,
+    getMarathonLeaderboardRows,
+    deleteMarathonFabricants,
     type GiveawayEventInput,
     type GiveawayEvent,
 } from './db.js';
@@ -289,6 +292,7 @@ export async function activatePromoCode(giveawayId: number): Promise<void> {
 
 export async function activateMarathon(giveawayId: number): Promise<void> {
     setGiveawayStatus(giveawayId, 'active');
+    seedMarathonFabricants(giveawayId);
     const event = getGiveawayEvent(giveawayId);
     if (!event) return;
 
@@ -372,13 +376,9 @@ export async function claimPromoCode(
     };
 }
 
-export function getMarathonLeaderboard(giveawayId: number): Array<{ telegram_id: number; trade_count: number; rank: number }> {
-    const participants = getGiveawayParticipants(giveawayId, true);
-    return participants.map((p, i) => ({
-        telegram_id: p.telegram_id,
-        trade_count: p.trade_count,
-        rank: i + 1,
-    }));
+export function getMarathonLeaderboard(giveawayId: number): Array<{ telegram_id: number | null; display_name: string | null; trade_count: number; rank: number }> {
+    const rows = getMarathonLeaderboardRows(giveawayId);
+    return rows.map((r, i) => ({ ...r, rank: i + 1 }));
 }
 
 export async function checkMarathonDeadlines(telegram: Telegram): Promise<void> {
@@ -396,6 +396,7 @@ export async function checkMarathonDeadlines(telegram: Telegram): Promise<void> 
                 : `📊 Marathon *${m.title}* has ended. Thanks for competing! Top ${m.max_winners} won.`;
             try { await telegram.sendMessage(p.telegram_id, msg, { parse_mode: 'Markdown' }); } catch {}
         }
+        deleteMarathonFabricants(m.id);
     }
 }
 
