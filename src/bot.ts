@@ -16,7 +16,7 @@ import {
     generateToken, validateToken, useToken, getTokens,
     updateLeaderboardAuto, addLeaderboardManual, getLeaderboard,
     getLeaderboardDetailed, updateLeaderboardManual,
-    getFunnelStats, getConfig, setConfig,
+    getFunnelStats, getConfig, setConfig, getTestUserId, setTestUser,
     getAuditReport, maskUserId,
     calculatePairWinRates, selectTopPicks, type PairWinRate,
     setSession, getSession, deleteSession, cleanStaleSessions,
@@ -1642,6 +1642,26 @@ bot.action('admin:system', async ctx => {
         `📦 Database: ✅ OK`,
         { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() }
     );
+});
+
+// ─── Test Mode ────────────────────────────────────────────────────────────────
+
+bot.action(/^admin:testmode:(on|off)$/, async ctx => {
+    await ctx.answerCbQuery();
+    const action = ctx.match[1];
+    if (action === 'on') {
+        setTestUser(6622587977);
+        await ctx.reply('🔴 *Test mode ON*\n\nAll mass sends will go only to Shara (6622587977).', {
+            parse_mode: 'Markdown',
+            reply_markup: adminBackKeyboard(),
+        });
+    } else {
+        setTestUser(null);
+        await ctx.reply('🟢 *Test mode OFF*\n\nMass sends will go to the full audience.', {
+            parse_mode: 'Markdown',
+            reply_markup: adminBackKeyboard(),
+        });
+    }
 });
 
 // ─── Module 6: Broadcast ─────────────────────────────────────────────────────

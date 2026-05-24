@@ -33,6 +33,10 @@ export function adminKeyboard(): IKMarkup {
                 { text: '🛡️ Admin',      callback_data: 'admin:admin' },
             ],
             [{ text: '✍️ Compose Post',   callback_data: 'admin:compose' }],
+            [
+                { text: '🔴 Test Mode ON',  callback_data: 'admin:testmode:on' },
+                { text: '🟢 Test Mode OFF', callback_data: 'admin:testmode:off' },
+            ],
             [{ text: '🔙 Back', callback_data: 'ui:start' }],
         ],
     };

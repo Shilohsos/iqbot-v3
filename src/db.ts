@@ -155,6 +155,13 @@ db.exec(`
   )
 `);
 
+db.exec(`
+  CREATE TABLE IF NOT EXISTS broadcast_schedule (
+    id           INTEGER PRIMARY KEY CHECK (id = 1),
+    next_send_at TEXT NOT NULL
+  )
+`);
+
 // ─── V4 tables ───────────────────────────────────────────────────────────────
 
 db.exec(`
@@ -800,6 +807,28 @@ export function setConfig(key: string, value: string): void {
         INSERT INTO config (key, value, updated_at) VALUES (?, ?, datetime('now'))
         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')
     `).run(key, value);
+}
+
+export function getTestUserId(): number | null {
+    const row = db.prepare("SELECT value FROM config WHERE key = 'test_user'").get() as { value: string } | undefined;
+    return row ? Number(row.value) || null : null;
+}
+
+export function setTestUser(id: number | null): void {
+    if (id) {
+        db.prepare("REPLACE INTO config (key, value) VALUES ('test_user', ?)").run(String(id));
+    } else {
+        db.prepare("DELETE FROM config WHERE key = 'test_user'").run();
+    }
+}
+
+export function getNextBroadcastAt(): string | null {
+    const row = db.prepare('SELECT next_send_at FROM broadcast_schedule WHERE id = 1').get() as { next_send_at: string } | undefined;
+    return row?.next_send_at ?? null;
+}
+
+export function saveNextBroadcastAt(isoStr: string): void {
+    db.prepare('INSERT OR REPLACE INTO broadcast_schedule (id, next_send_at) VALUES (1, ?)').run(isoStr);
 }
 
 // ─── Pair win rates ───────────────────────────────────────────────────────────

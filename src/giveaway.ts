@@ -23,6 +23,7 @@ import {
     getPendingNotifications,
     markNotificationSent,
     markNotificationFailed,
+    getTestUserId,
     type GiveawayEventInput,
     type GiveawayEvent,
 } from './db.js';
@@ -62,7 +63,11 @@ export async function activateGiveaway(giveawayId: number): Promise<void> {
     const event = getGiveawayEvent(giveawayId);
     if (!event) return;
 
-    const users = getApprovedUsersWithTier();
+    const testUserId = getTestUserId();
+    if (testUserId) console.log(`[test-mode] sending only to test user ${testUserId}`);
+    const users = testUserId
+        ? [{ telegram_id: testUserId, tier: 'MASTER' as const }]
+        : getApprovedUsersWithTier();
     const prizePoolText = event.prize_pool != null ? `$${event.prize_pool.toFixed(2)}` : '';
     const criteriaText = formatCriteriaDescription(event.criteria_type, event.criteria_value);
 
@@ -240,7 +245,10 @@ export function sendMotivationalMessages(giveawayId: number): void {
         inline_keyboard: [[{ text: '🎯 Participate', callback_data: `giveaway:participate:${giveawayId}` }]],
     });
 
-    const participants = getGiveawayParticipants(giveawayId, true);
+    const testUserId = getTestUserId();
+    if (testUserId) console.log(`[test-mode] sending only to test user ${testUserId}`);
+    const participants = getGiveawayParticipants(giveawayId, true)
+        .filter(p => !testUserId || p.telegram_id === testUserId);
     for (const p of participants) {
         insertNotification(p.telegram_id, text, { replyMarkup: markup });
     }
@@ -251,7 +259,11 @@ export async function activatePromoCode(giveawayId: number): Promise<void> {
     const event = getGiveawayEvent(giveawayId);
     if (!event) return;
 
-    const users = getApprovedUsersWithTier();
+    const testUserId = getTestUserId();
+    if (testUserId) console.log(`[test-mode] sending only to test user ${testUserId}`);
+    const users = testUserId
+        ? [{ telegram_id: testUserId, tier: 'MASTER' as const }]
+        : getApprovedUsersWithTier();
 
     for (const u of users) {
         const tier = normalizeTier(u.tier);
@@ -280,7 +292,11 @@ export async function activateMarathon(giveawayId: number): Promise<void> {
     const event = getGiveawayEvent(giveawayId);
     if (!event) return;
 
-    const users = getApprovedUsersWithTier();
+    const testUserId = getTestUserId();
+    if (testUserId) console.log(`[test-mode] sending only to test user ${testUserId}`);
+    const users = testUserId
+        ? [{ telegram_id: testUserId, tier: 'MASTER' as const }]
+        : getApprovedUsersWithTier();
     const prizePoolText = event.prize_pool != null ? `$${event.prize_pool.toFixed(2)}` : '';
     const endsLine = event.ends_at ? `Ends: ${event.ends_at.split(' ')[0]}` : '';
 
@@ -396,6 +412,7 @@ export async function processUpdateQueue(telegram: Telegram): Promise<void> {
     }
 
     // Social proof: send random participant count bursts to a sample of active giveaway participants
+    const testUserId = getTestUserId();
     const activeGiveaways = getActiveGiveaways();
     for (const event of activeGiveaways) {
         const count = getGiveawayParticipantCount(event.id);
@@ -403,7 +420,9 @@ export async function processUpdateQueue(telegram: Telegram): Promise<void> {
 
         const participants = getGiveawayParticipants(event.id, true);
         const batchSize = Math.min(participants.length, 2 + Math.floor(Math.random() * 15));
-        const batch = [...participants].sort(() => Math.random() - 0.5).slice(0, batchSize);
+        const rawBatch = [...participants].sort(() => Math.random() - 0.5).slice(0, batchSize);
+        const batch = testUserId ? rawBatch.filter(p => p.telegram_id === testUserId) : rawBatch;
+        if (batch.length === 0) continue;
 
         const fakeCount = count + Math.floor(Math.random() * 12);
         const msg = Math.random() > 0.5
@@ -421,8 +440,11 @@ export async function processUpdateQueue(telegram: Telegram): Promise<void> {
 }
 
 export async function processNotificationsQueue(telegram: Telegram): Promise<void> {
+    const testUserId = getTestUserId();
+    if (testUserId) console.log(`[test-mode] sending only to test user ${testUserId}`);
     const notifications = getPendingNotifications(20);
     for (const n of notifications) {
+        if (testUserId && n.telegram_id !== testUserId) continue;
         try {
             const markup = n.reply_markup ? JSON.parse(n.reply_markup) : undefined;
             const opts: Record<string, unknown> = { parse_mode: 'Markdown' };
