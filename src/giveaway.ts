@@ -246,6 +246,143 @@ export function sendMotivationalMessages(giveawayId: number): void {
     }
 }
 
+export async function activatePromoCode(giveawayId: number): Promise<void> {
+    setGiveawayStatus(giveawayId, 'active');
+    const event = getGiveawayEvent(giveawayId);
+    if (!event) return;
+
+    const users = getApprovedUsersWithTier();
+
+    for (const u of users) {
+        const tier = normalizeTier(u.tier);
+        const canClaim = tier === 'PRO' || tier === 'MASTER';
+
+        const lines = [
+            `🏷️ *NEW PROMO CODE*`,
+            ``,
+            `*${event.title}*`,
+            event.description ?? '',
+            event.max_winners != null ? `Limited: ${event.max_winners} claims available` : '',
+            ``,
+            canClaim ? `Tap below to claim your code 👇` : `🔒 Upgrade to PRO to claim`,
+        ].filter(Boolean);
+
+        const markup = canClaim
+            ? { inline_keyboard: [[{ text: '🎁 Claim Code', callback_data: `promo:claim:${giveawayId}` }]] }
+            : { inline_keyboard: [[{ text: '⚡ Upgrade to PRO', callback_data: 'ui:upgrade' }]] };
+
+        insertNotification(u.telegram_id, lines.join('\n'), { replyMarkup: JSON.stringify(markup) });
+    }
+}
+
+export async function activateMarathon(giveawayId: number): Promise<void> {
+    setGiveawayStatus(giveawayId, 'active');
+    const event = getGiveawayEvent(giveawayId);
+    if (!event) return;
+
+    const users = getApprovedUsersWithTier();
+    const prizePoolText = event.prize_pool != null ? `$${event.prize_pool.toFixed(2)}` : '';
+    const endsLine = event.ends_at ? `Ends: ${event.ends_at.split(' ')[0]}` : '';
+
+    for (const u of users) {
+        const tier = normalizeTier(u.tier);
+        const canJoin = tier === 'PRO' || tier === 'MASTER';
+
+        const lines = [
+            `🏃 *LIVE MARATHON*`,
+            ``,
+            `*${event.title}*`,
+            event.description ?? '',
+            prizePoolText ? `Prize Pool: ${prizePoolText}` : '',
+            `Top ${event.max_winners} traders win`,
+            endsLine,
+            ``,
+            canJoin ? `Trade the most to win! 👇` : `🔒 Upgrade to PRO to join`,
+        ].filter(Boolean);
+
+        const markup = canJoin
+            ? { inline_keyboard: [[{ text: '🏃 Join Marathon', callback_data: `giveaway:participate:${giveawayId}` }]] }
+            : { inline_keyboard: [[{ text: '⚡ Upgrade to PRO', callback_data: 'ui:upgrade' }]] };
+
+        insertNotification(u.telegram_id, lines.join('\n'), { replyMarkup: JSON.stringify(markup) });
+    }
+}
+
+export async function claimPromoCode(
+    giveawayId: number,
+    telegramId: number
+): Promise<{ success: boolean; code?: string; message: string; replyMarkup?: ParticipateResult['replyMarkup'] }> {
+    const event = getGiveawayEvent(giveawayId);
+    if (!event || event.status !== 'active' || event.event_type !== 'promo_code') {
+        return { success: false, message: '❌ This promo code is no longer available.' };
+    }
+
+    const user = getUser(telegramId);
+    if (!user) return { success: false, message: '❌ User not found.' };
+
+    const tier = normalizeTier(user.tier);
+    if (tier === 'DEMO') {
+        return {
+            success: false,
+            message: '❌ Only Pro and Master traders can claim promo codes.\n\nUpgrade to claim!',
+            replyMarkup: { inline_keyboard: [[{ text: '⚡ Upgrade to PRO', callback_data: 'ui:upgrade' }]] },
+        };
+    }
+
+    const code = event.criteria_value ?? '';
+
+    const existing = getGiveawayParticipant(giveawayId, telegramId);
+    if (existing) {
+        return { success: true, code, message: `✅ Already claimed!\n\n🎉 Your code: *${code}*\n\nUse this when funding your account.` };
+    }
+
+    const claimed = getGiveawayParticipantCount(giveawayId);
+    if (event.max_winners != null && claimed >= event.max_winners) {
+        return { success: false, message: '❌ This promo code has reached its maximum number of claims. Check back for more promos!' };
+    }
+
+    const participantId = insertGiveawayParticipant(giveawayId, telegramId);
+    setParticipantWinner(participantId);
+
+    const newCount = getGiveawayParticipantCount(giveawayId);
+    if (event.max_winners != null && newCount >= event.max_winners) {
+        setGiveawayStatus(giveawayId, 'completed');
+    }
+
+    return {
+        success: true,
+        code,
+        message: `🎉 Your code: *${code}*\n\nUse this when funding your account.`,
+    };
+}
+
+export function getMarathonLeaderboard(giveawayId: number): Array<{ telegram_id: number; trade_count: number; rank: number }> {
+    const participants = getGiveawayParticipants(giveawayId, true);
+    return participants.map((p, i) => ({
+        telegram_id: p.telegram_id,
+        trade_count: p.trade_count,
+        rank: i + 1,
+    }));
+}
+
+export async function checkMarathonDeadlines(telegram: Telegram): Promise<void> {
+    const now = new Date();
+    const expired = getActiveGiveaways().filter(
+        g => g.event_type === 'marathon' && g.ends_at && new Date(g.ends_at) <= now
+    );
+    for (const m of expired) {
+        const winners = selectWinners(m.id);
+        const winnerIds = new Set(winners.map(w => w.telegram_id));
+        const all = getGiveawayParticipants(m.id, true);
+        for (const p of all) {
+            const msg = winnerIds.has(p.telegram_id)
+                ? `🏆 Marathon *${m.title}* has ended — you're a top winner! The admin will contact you shortly.`
+                : `📊 Marathon *${m.title}* has ended. Thanks for competing! Top ${m.max_winners} won.`;
+            try { await telegram.sendMessage(p.telegram_id, msg, { parse_mode: 'Markdown' }); } catch {}
+        }
+    }
+}
+
 export async function processUpdateQueue(telegram: Telegram): Promise<void> {
     const updates = getPendingGiveawayUpdates();
     for (const update of updates) {
