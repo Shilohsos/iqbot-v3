@@ -2,8 +2,9 @@ import { Telegraf } from 'telegraf';
 import { insertFunnelEvent, getRecentlyApprovedUsers, userHasActivity } from './db.js';
 import { onboardKeyboard } from './ui/user.js';
 
-const CHANNEL_ID = parseInt(process.env.CHANNEL_ID ?? '-1002766084283', 10);
-const ASSETS_DIR = process.env.ASSETS_DIR ?? '/root/iqbot-v3/assets';
+const CHANNEL_ID    = parseInt(process.env.CHANNEL_ID ?? '-1002766084283', 10);
+const ASSETS_DIR    = process.env.ASSETS_DIR ?? '/root/iqbot-v3/assets';
+const META_TRACK_URL = process.env.META_TRACK_URL ?? 'http://localhost:8766/track';
 
 export function setupChannelHandlers(bot: Telegraf): void {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -23,6 +24,23 @@ export function setupChannelHandlers(bot: Telegraf): void {
             await ctx.telegram.approveChatJoinRequest(chatId, userId);
             console.log(`[channel] auto-approved user ${userId}`);
             insertFunnelEvent('channel_join_approved', JSON.stringify({ telegram_id: userId }));
+
+            // Fire Meta CompleteRegistration — tells Meta this ad click became a channel join
+            const lang: string = (req.from as any)?.language_code ?? '';
+            fetch(META_TRACK_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    event_name: 'CompleteRegistration',
+                    event_source_url: 'https://t.me/10xpremium',
+                    custom_data: { source: 'telegram_channel', telegram_id: userId, language_code: lang },
+                }),
+            }).then(() => {
+                console.log(`[meta] CompleteRegistration sent for user ${userId}`);
+            }).catch((err: unknown) => {
+                console.error(`[meta] failed to send join event for ${userId}:`, err);
+            });
+
             await sendOnboarding(ctx.telegram, userId);
         } catch (err) {
             console.error(`[channel] failed to approve user ${userId}:`, err instanceof Error ? err.message : err);

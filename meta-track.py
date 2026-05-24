@@ -37,6 +37,18 @@ def track():
                  request.headers.get("X-Forwarded-For", request.remote_addr) or "")
     client_ua = request.headers.get("User-Agent", "")
 
+    # IP geolocation via ip-api.com — free, no key, 3s timeout, non-blocking
+    geo: dict = {}
+    try:
+        import urllib.request as ureq
+        geo_resp = ureq.urlopen(
+            f"http://ip-api.com/json/{client_ip}?fields=city,regionName,countryCode",
+            timeout=3
+        )
+        geo = json.loads(geo_resp.read().decode())
+    except Exception:
+        pass
+
     # Build user_data — omit keys with empty values so Meta ignores missing params
     # rather than counting them as mismatches
     user_data: dict = {
@@ -47,6 +59,13 @@ def track():
         val = data.get(field, "")
         if val:
             user_data[field] = val
+
+    if geo.get("countryCode"):
+        user_data["country"] = geo["countryCode"]
+    if geo.get("regionName"):
+        user_data["st"] = geo["regionName"]
+    if geo.get("city"):
+        user_data["ct"] = geo["city"]
 
     # Build CAPI payload
     payload = {
