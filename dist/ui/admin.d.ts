@@ -46,4 +46,7 @@ export declare function activeGiveawaysKeyboard(giveaways: Array<{
     title: string;
 }>, action: 'view' | 'winners'): IKMarkup;
 export declare function memberManagementKeyboard(): IKMarkup;
+export declare function composeTopicKeyboard(): IKMarkup;
+export declare function composeResultKeyboard(): IKMarkup;
+export declare function composeDeliveryKeyboard(): IKMarkup;
 export {};

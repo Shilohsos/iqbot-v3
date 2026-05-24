@@ -14,3 +14,4 @@ export interface TierConfig {
 export declare const TIER_CONFIGS: Record<string, TierConfig>;
 export declare function getTierConfig(tier: string | null | undefined): TierConfig;
 export declare function normalizeTier(tier: string | null | undefined): 'DEMO' | 'PRO' | 'MASTER';
+export declare function autoPromoteTier(telegramId: number, realBalance: number, currentTier: string): string | null;

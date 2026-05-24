@@ -69,6 +69,22 @@ export interface ApprovalStats {
     total: number;
 }
 export declare function getApprovalStats(): ApprovalStats;
+export declare function getUserMartingaleSettings(telegramId: number): {
+    enabled: boolean;
+    maxRounds: number;
+};
+export declare function setUserMartingaleSettings(telegramId: number, enabled: boolean, maxRounds: number): void;
+export declare function getUserSessionStats(telegramId: number): {
+    trades: number;
+    pnl: number;
+};
+export declare function addUserSessionStats(telegramId: number, tradeDelta: number, pnlDelta: number): void;
+export declare function getUserBalanceCache(telegramId: number): {
+    line: string;
+    ts: number;
+} | undefined;
+export declare function setUserBalanceCache(telegramId: number, line: string): void;
+export declare function clearUserBalanceCache(telegramId: number): void;
 export interface TokenRecord {
     id: number;
     token: string;
@@ -133,6 +149,9 @@ export interface AuditReport {
     topPerformerProfit?: number;
 }
 export declare function getAuditReport(): AuditReport;
+export declare function insertMessage(telegramId: number, direction: 'incoming' | 'outgoing'): void;
+export declare function getRecentlyApprovedUsers(minutes: number): UserRecord[];
+export declare function userHasActivity(telegramId: number): boolean;
 export declare function setSession(key: string, value: unknown): void;
 export declare function getSession<T>(key: string): T | undefined;
 export declare function deleteSession(key: string): void;
@@ -264,6 +283,22 @@ export declare function getApprovedUsersWithTier(): Array<{
     telegram_id: number;
     tier: string | null;
 }>;
+export interface BroadcastMessage {
+    id: number;
+    type: string;
+    category: string | null;
+    content: string;
+    image_file_id: string | null;
+    enabled: number;
+    last_sent_at: string | null;
+    sent_count: number;
+    created_at: string;
+}
+export declare function getEnabledAutoMessages(): BroadcastMessage[];
+export declare function getBroadcastMessages(type?: string): BroadcastMessage[];
+export declare function insertBroadcastMessage(type: string, content: string, category?: string, imageFileId?: string): number;
+export declare function markBroadcastSent(id: number, count: number): void;
+export declare function updateBroadcastImageFileId(id: number, imageFileId: string): void;
 export declare function getGiveawayStats(): {
     active: number;
     scheduled: number;

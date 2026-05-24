@@ -51,3 +51,15 @@ export function normalizeTier(tier) {
         return 'MASTER';
     return 'DEMO';
 }
+export function autoPromoteTier(telegramId, realBalance, currentTier) {
+    // User is already MASTER — no promotion needed
+    if (currentTier === 'MASTER')
+        return null;
+    // $50+ → MASTER (if not already)
+    if (realBalance >= 50)
+        return 'MASTER';
+    // $10+ → PRO (only if currently DEMO)
+    if (realBalance >= 10 && currentTier === 'DEMO')
+        return 'PRO';
+    return null;
+}

@@ -4,7 +4,7 @@ import { ClientSdk, SsidAuthMethod, BalanceType } from './index.js';
 import { WS_URL, PLATFORM_ID, IQ_HOST, IQ_AUTH_URL } from './protocol.js';
 import { executeTrade, executeTradeWithSdk, createSdk, type TradeRequest, type TradeResult } from './trade.js';
 import { sdkPool } from './sdk-pool.js';
-import { getTierConfig, normalizeTier, TIER_CONFIGS } from './tiers.js';
+import { getTierConfig, normalizeTier, autoPromoteTier, TIER_CONFIGS } from './tiers.js';
 import {
     getRecentTrades, getTradeStats, getTopTradersToday,
     getUser, saveUser, saveUsername, deleteUser, getAllUsers, getAllUserIds,
@@ -34,7 +34,7 @@ import { logger } from './logger.js';
 import {
     createGiveawayEvent, activateGiveaway, participate as giveawayParticipate,
     recordTrade as giveawayRecordTrade, selectWinners as giveawaySelectWinners,
-    getGiveawayEvents, getActiveGiveaways, getGiveawayEvent,
+    getActiveGiveaways, getGiveawayEvents, getGiveawayEvent,
     processUpdateQueue, processNotificationsQueue,
     type GiveawayEventInput,
 } from './giveaway.js';
@@ -511,6 +511,15 @@ async function sendStartMenu(ctx: Context): Promise<void> {
                 const real = all.find(b => b.type === BalanceType.Real);
                 if (real?.currency) saveUserCurrency(telegramId, real.currency);
                 else if (demo?.currency) saveUserCurrency(telegramId, demo.currency);
+                // Auto-promote tier based on live balance
+                if (real && user.tier !== 'MASTER') {
+                    const newTier = autoPromoteTier(telegramId, real.amount, user.tier ?? 'DEMO');
+                    if (newTier && newTier !== user.tier) {
+                        setUserTier(telegramId, newTier);
+                        user.tier = newTier;
+                        logger.info('bot', `auto-promoted user ${telegramId} from ${user.tier} to ${newTier} (balance: $${real.amount.toFixed(2)})`);
+                    }
+                }
                 const newLine = [
                     demo ? `Practice ${fmtBalance(demo)}` : '',
                     real ? `Real ${fmtBalance(real)}` : '',
@@ -1300,6 +1309,40 @@ bot.action('ui:support', async ctx => {
     );
 });
 
+bot.action('ui:giveaways', async ctx => {
+    await ctx.answerCbQuery();
+    const telegramId = ctx.from!.id;
+    const user = getUser(telegramId);
+    const tier = normalizeTier(user?.tier);
+    const activeGiveaways = getActiveGiveaways();
+
+    if (activeGiveaways.length === 0) {
+        await ctx.reply(
+            '🎁 *Giveaways*\n\nNo active giveaways right now. Check back soon!',
+            { parse_mode: 'Markdown', reply_markup: backKeyboard() }
+        );
+        return;
+    }
+
+    let msg = '🎁 *Active Giveaways*\n\n';
+    for (const g of activeGiveaways) {
+        const prizeText = g.prize_pool != null ? `Prize: *$${g.prize_pool.toFixed(2)}*` : '';
+        const canJoin = tier === 'PRO' || tier === 'MASTER';
+        msg += `${g.title}\n${prizeText}\n`;
+        if (canJoin) {
+            msg += `Tap Participate to join 👇\n\n`;
+        } else {
+            msg += `🔒 Upgrade to PRO to participate\n\n`;
+        }
+    }
+
+    const markup = activeGiveaways.length === 1 && (tier === 'PRO' || tier === 'MASTER')
+        ? { inline_keyboard: [[{ text: '🎯 Participate', callback_data: `giveaway:participate:${activeGiveaways[0].id}` }], [{ text: '🔙 Back', callback_data: 'ui:start' }]] }
+        : backKeyboard();
+
+    await ctx.reply(msg, { parse_mode: 'Markdown', reply_markup: markup });
+});
+
 // ─── Legacy commands (keep for power users) ───────────────────────────────────
 
 bot.command('trade', async ctx => {
@@ -1340,6 +1383,15 @@ bot.command('balance', async ctx => {
         const real = all.find(b => b.type === BalanceType.Real);
         if (real?.currency) saveUserCurrency(uid, real.currency);
         else if (demo?.currency) saveUserCurrency(uid, demo.currency);
+        // Auto-promote tier based on live balance
+        const user = getUser(uid);
+        if (real && user && user.tier !== 'MASTER') {
+            const newTier = autoPromoteTier(uid, real.amount, user.tier ?? 'DEMO');
+            if (newTier && newTier !== user.tier) {
+                setUserTier(uid, newTier);
+                logger.info('bot', `auto-promoted user ${uid} from ${user.tier} to ${newTier} via /balance`);
+            }
+        }
         let msg = '💰 *Balances*\n\n';
         if (demo) msg += `🎮 Practice: ${fmtBalance(demo)}\n`;
         if (real) msg += `💎 Live: ${fmtBalance(real)}\n`;

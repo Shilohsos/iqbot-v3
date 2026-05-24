@@ -4,14 +4,19 @@ import { BalanceType } from './index.js';
 import { IQ_AUTH_URL } from './protocol.js';
 import { executeTrade, executeTradeWithSdk, createSdk } from './trade.js';
 import { sdkPool } from './sdk-pool.js';
-import { getTierConfig, normalizeTier } from './tiers.js';
-import { getRecentTrades, getTradeStats, getTopTradersToday, getUser, saveUser, saveUsername, deleteUser, getAllUsers, getAllUserIds, getActiveTraderIds, getInactiveTraderIds, findUsersByUsername, upsertOnboardingUser, approveUser, setManualApproval, rejectUser, resetUser, getApprovalStats, getRecentApprovals, getPendingManualUsers, setUserTier, saveUserCurrency, pauseUser, resumeUser, generateToken, validateToken, useToken, getTokens, updateLeaderboardAuto, addLeaderboardManual, getLeaderboardDetailed, updateLeaderboardManual, getFunnelStats, getConfig, setConfig, getAuditReport, maskUserId, calculatePairWinRates, selectTopPicks, setSession, getSession, deleteSession, cleanStaleSessions, saveGeneratedGiveawayId, isGeneratedIdUsed, getTradersIqUserIds, getGiveawayTargetIds, countFabricatedTraders, seedFabricatedTraders, getFabricatedTradersDueForUpdate, updateFabricatedPnl, getAllFabricatedTraders, resetFabricatedPnl, getRealTraderLeaderboard, getGiveawayStats, getGiveawayParticipantCount, } from './db.js';
-import { createGiveawayEvent, activateGiveaway, participate as giveawayParticipate, recordTrade as giveawayRecordTrade, selectWinners as giveawaySelectWinners, getGiveawayEvents, getActiveGiveaways, getGiveawayEvent, processUpdateQueue, processNotificationsQueue, } from './giveaway.js';
+import { getTierConfig, normalizeTier, autoPromoteTier } from './tiers.js';
+import { getRecentTrades, getTradeStats, getTopTradersToday, getUser, saveUser, saveUsername, deleteUser, getAllUsers, getAllUserIds, getActiveTraderIds, getInactiveTraderIds, findUsersByUsername, upsertOnboardingUser, approveUser, setManualApproval, rejectUser, resetUser, getApprovalStats, getRecentApprovals, getPendingManualUsers, setUserTier, saveUserCurrency, pauseUser, resumeUser, generateToken, validateToken, useToken, getTokens, updateLeaderboardAuto, addLeaderboardManual, getLeaderboardDetailed, updateLeaderboardManual, getFunnelStats, getConfig, setConfig, getAuditReport, maskUserId, calculatePairWinRates, selectTopPicks, setSession, getSession, deleteSession, cleanStaleSessions, saveGeneratedGiveawayId, isGeneratedIdUsed, getTradersIqUserIds, getGiveawayTargetIds, countFabricatedTraders, seedFabricatedTraders, getFabricatedTradersDueForUpdate, updateFabricatedPnl, getAllFabricatedTraders, resetFabricatedPnl, getRealTraderLeaderboard, getGiveawayStats, getGiveawayParticipantCount, insertMessage, insertBroadcastMessage, getUserMartingaleSettings, setUserMartingaleSettings, getUserSessionStats, addUserSessionStats, getUserBalanceCache, setUserBalanceCache, clearUserBalanceCache, } from './db.js';
+import { friendlyError } from './errors.js';
+import { logger } from './logger.js';
+import { createGiveawayEvent, activateGiveaway, participate as giveawayParticipate, recordTrade as giveawayRecordTrade, selectWinners as giveawaySelectWinners, getActiveGiveaways, getGiveawayEvents, getGiveawayEvent, processUpdateQueue, processNotificationsQueue, } from './giveaway.js';
 import { analyzePairWithSdk } from './analysis.js';
 import { amountKeyboard, timeframeKeyboard, pairKeyboard, tfLabel, OTC_PAIRS, tradeModeKeyboard, demoUpsellKeyboard, } from './menu.js';
 import { startKeyboard, backKeyboard, onboardKeyboard } from './ui/user.js';
-import { getAdminId, adminKeyboard, adminBackKeyboard, broadcastTargetKeyboard, broadcastLinkKeyboard, broadcastActionKeyboard, broadcastTimerKeyboard, broadcastSendOrScheduleKeyboard, broadcastDelayKeyboard, scheduledBroadcastsKeyboard, tokenTierKeyboard, generateTokenKeyboard, topTradersAdminKeyboard, funnelKeyboard, memberManagementKeyboard, activationsKeyboard, giveawayTargetKeyboard, giveawayManagerKeyboard, giveawayTypeKeyboard, giveawayCriteriaKeyboard, giveawayScheduleKeyboard, activeGiveawaysKeyboard, } from './ui/admin.js';
+import { getAdminId, adminKeyboard, adminBackKeyboard, broadcastTargetKeyboard, broadcastLinkKeyboard, broadcastActionKeyboard, broadcastTimerKeyboard, broadcastSendOrScheduleKeyboard, broadcastDelayKeyboard, scheduledBroadcastsKeyboard, tokenTierKeyboard, generateTokenKeyboard, topTradersAdminKeyboard, funnelKeyboard, memberManagementKeyboard, activationsKeyboard, giveawayTargetKeyboard, giveawayManagerKeyboard, giveawayTypeKeyboard, giveawayCriteriaKeyboard, giveawayScheduleKeyboard, activeGiveawaysKeyboard, composeTopicKeyboard, composeResultKeyboard, composeDeliveryKeyboard, } from './ui/admin.js';
 import { checkAffiliate } from './affiliate.js';
+import { setupChannelHandlers, startWelcomeFollowUp } from './channel.js';
+import { startAutoBroadcast } from './auto-broadcast.js';
+import { generatePost } from './llm.js';
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const IQ_SSID = process.env.IQ_SSID;
 const AFFILIATE_LINK = process.env.AFFILIATE_LINK ?? 'https://iqbroker.com/lp/regframe-01-light-nosocials/?aff=749367&aff_model=revenue';
@@ -21,6 +26,8 @@ if (!BOT_TOKEN)
     throw new Error('BOT_TOKEN missing from .env');
 process.on('unhandledRejection', (reason) => { console.error('[unhandledRejection]', reason); });
 const bot = new Telegraf(BOT_TOKEN, { handlerTimeout: Infinity });
+// ─── Channel integration ──────────────────────────────────────────────────────
+setupChannelHandlers(bot);
 // Save Telegram username on every interaction
 bot.use(async (ctx, next) => {
     const id = ctx.from?.id;
@@ -59,12 +66,6 @@ function ASSET(f) {
     return { source: `${ASSETS_DIR}/${f}` };
 }
 // ─── Session / wizard state ───────────────────────────────────────────────────
-const sessionStats = new Map();
-function getSessionStats(uid) {
-    if (!sessionStats.has(uid))
-        sessionStats.set(uid, { trades: 0, pnl: 0 });
-    return sessionStats.get(uid);
-}
 function makeSessionMap(prefix) {
     const cache = new Map();
     return {
@@ -98,8 +99,7 @@ const scheduledBroadcasts = [];
 let nextScheduledId = 1;
 // userId → number of active martingale trades in flight
 const activeTradeSessions = new Map();
-// per-user martingale config (Pro users can adjust)
-const userMartingaleSettings = makeSessionMap('mg');
+const pendingTrades = new Map();
 // Top picks cache — refreshed every 2 hours
 const PICKS_REFRESH_MS = 2 * 60 * 60 * 1000;
 let cachedTopPicks = [];
@@ -115,9 +115,8 @@ function getTopPicks() {
     }
     return cachedTopPicks;
 }
-// Balance cache — avoids a fresh WS connection on every /start
+// Balance cache TTL — stored in users table (balance_cache / balance_cache_ts columns)
 const BALANCE_CACHE_TTL = 5 * 60 * 1000;
-const balanceCache = new Map();
 // Messages queued for users who were trading when a broadcast was sent
 const pendingDeliveries = new Map();
 function parseDuration(input) {
@@ -286,12 +285,12 @@ async function sendStartMenu(ctx) {
         return;
     }
     // Approved — build rich menu
-    const ss = getSessionStats(telegramId);
+    const ss = getUserSessionStats(telegramId);
     const tier = normalizeTier(user.tier);
     const tierEmoji = tier === 'MASTER' ? '👑' : tier === 'PRO' ? '⚡' : '🧪';
     const pnlSign = ss.pnl >= 0 ? '+' : '';
     const ssid = getSsidForUser(telegramId);
-    const cached = ssid ? balanceCache.get(telegramId) : undefined;
+    const cached = ssid ? getUserBalanceCache(telegramId) : undefined;
     const cachedLine = (cached && Date.now() - cached.ts < BALANCE_CACHE_TTL) ? cached.line : '';
     const needsFetch = !!ssid && !cachedLine;
     const buildMenu = (balLine) => [
@@ -333,12 +332,21 @@ async function sendStartMenu(ctx) {
                     saveUserCurrency(telegramId, real.currency);
                 else if (demo?.currency)
                     saveUserCurrency(telegramId, demo.currency);
+                // Auto-promote tier based on live balance
+                if (real && user.tier !== 'MASTER') {
+                    const newTier = autoPromoteTier(telegramId, real.amount, user.tier ?? 'DEMO');
+                    if (newTier && newTier !== user.tier) {
+                        setUserTier(telegramId, newTier);
+                        user.tier = newTier;
+                        logger.info('bot', `auto-promoted user ${telegramId} from ${user.tier} to ${newTier} (balance: $${real.amount.toFixed(2)})`);
+                    }
+                }
                 const newLine = [
                     demo ? `Practice ${fmtBalance(demo)}` : '',
                     real ? `Real ${fmtBalance(real)}` : '',
                 ].filter(Boolean).join(' | ');
                 if (newLine) {
-                    balanceCache.set(telegramId, { line: newLine, ts: Date.now() });
+                    setUserBalanceCache(telegramId, newLine);
                     await ctx.telegram.editMessageText(chatId, msgId, undefined, buildMenu(newLine), { reply_markup: startKeyboard(userTier) });
                 }
             }
@@ -408,7 +416,7 @@ async function requireApproval(ctx) {
 // ─── Martingale loop ──────────────────────────────────────────────────────────
 async function runMartingale(ctx, ssid, pair, direction, amount, timeframeSec = 60, balanceType = 'demo', martingaleRounds, preTradeMessageIds = [], existingSdk) {
     const userId = ctx.from.id;
-    const effectiveRounds = martingaleRounds ?? userMartingaleSettings.get(userId)?.maxRounds ?? MAX_ROUNDS;
+    const effectiveRounds = martingaleRounds ?? getUserMartingaleSettings(userId).maxRounds;
     activeTradeSessions.set(userId, (activeTradeSessions.get(userId) ?? 0) + 1);
     try {
         const runId = crypto.randomUUID();
@@ -500,10 +508,7 @@ async function runMartingale(ctx, ssid, pair, direction, amount, timeframeSec = 
             await syncLog();
             // Update session stats on any settled trade
             if (result.status === 'WIN' || result.status === 'LOSS' || result.status === 'TIE') {
-                const ss = getSessionStats(ctx.from.id);
-                ss.trades++;
-                ss.pnl += roundPnl;
-                // Record for giveaway (round 1 = initial, round > 1 = martingale recovery)
+                addUserSessionStats(ctx.from.id, 1, roundPnl);
                 giveawayRecordTrade(ctx.from.id, round > 1);
             }
             if (result.status === 'WIN') {
@@ -556,8 +561,8 @@ async function runMartingale(ctx, ssid, pair, direction, amount, timeframeSec = 
         const lostReply = await ctx.reply(`Lost this one 💔! Remain confident! New setup loading 👾\n\nTotal: ${sign}$${totalPnl.toFixed(2)}`, { reply_markup: { inline_keyboard: [[{ text: '🔄 New Opportunity', callback_data: 'ui:trade' }]] } });
         sentMessages.push(lostReply.message_id);
         scheduleCleanup();
-        const mgPromoSettings = userMartingaleSettings.get(userId);
-        if (mgPromoSettings && !mgPromoSettings.enabled) {
+        const mgPromoSettings = getUserMartingaleSettings(userId);
+        if (!mgPromoSettings.enabled) {
             const promoImg = await ctx.replyWithPhoto(ASSET('recovery-promo.png')).catch(() => undefined);
             if (promoImg)
                 sentMessages.push(promoImg.message_id);
@@ -808,7 +813,7 @@ bot.action(/^pair:(.+)$/, async (ctx) => {
             }
             catch { }
         }
-        await ctx.telegram.editMessageText(chatId, progressMsg.message_id, undefined, `❌ Could not connect to IQ Option.\n\nTry again in a moment.`).catch(() => ctx.reply('❌ Could not connect to IQ Option. Try again.'));
+        await ctx.telegram.editMessageText(chatId, progressMsg.message_id, undefined, friendlyError(err, '🔌 Lost connection to IQ Option. Your account is safe — try again.')).catch(() => ctx.reply(friendlyError(err, '🔌 Could not connect to IQ Option. Try again.')));
         return;
     }
     try {
@@ -835,6 +840,7 @@ bot.action(/^pair:(.+)$/, async (ctx) => {
             await ctx.telegram.editMessageText(chatId, progressMsg.message_id, undefined, `⚠️ ${pair} is not available on the ${tierCfg.label} tier. Upgrade for access.`).catch(() => { });
             return;
         }
+        ctx.telegram.sendChatAction(chatId, 'typing').catch(() => { });
         let analysis;
         try {
             analysis = await analyzePairWithSdk(sdk, pair, timeframe, analysisTier);
@@ -846,7 +852,9 @@ bot.action(/^pair:(.+)$/, async (ctx) => {
                 }
                 catch { }
             }
-            await ctx.telegram.editMessageText(chatId, progressMsg.message_id, undefined, `❌ Analysis failed: ${err instanceof Error ? err.message : 'Unknown error'}`).catch(() => ctx.reply(`❌ Analysis failed: ${err instanceof Error ? err.message : 'Unknown error'}`));
+            const errMsg = friendlyError(err, '⚠️ Could not analyze market. Please try again.');
+            await ctx.telegram.editMessageText(chatId, progressMsg.message_id, undefined, errMsg)
+                .catch(() => ctx.reply(errMsg));
             return;
         }
         // Replace progress message with completion note, then deliver results
@@ -881,15 +889,29 @@ bot.action(/^pair:(.+)$/, async (ctx) => {
                 : `⚠️ You already have ${currentCount} active trade(s). Max ${maxConcurrent} concurrent trades reached. Wait for one to finish.`);
             return;
         }
-        const mgSettings = userMartingaleSettings.get(ctx.from.id);
-        const martingaleRounds = mgSettings ? (mgSettings.enabled ? mgSettings.maxRounds : 1) : undefined;
-        try {
-            await runMartingale(ctx, ssid, pair, analysis.direction, amount, timeframe, mode === 'live' ? 'live' : 'demo', martingaleRounds, preTradeMessageIds, sdk);
-        }
-        catch (err) {
-            console.error('[pair] runMartingale threw:', err);
-            await ctx.reply('⚠️ Trade session ended unexpectedly. Please try again.').catch(() => { });
-        }
+        // Show trade confirmation dialog
+        const modeLabel = (mode ?? 'demo') === 'live' ? 'Live 💰' : 'Demo 🎮';
+        const confirmCard = await ctx.reply(`📋 *Trade Summary*\n\n` +
+            `Pair: ${pair}\n` +
+            `Direction: ${analysis.direction === 'call' ? '🟢 CALL (BUY)' : '🔴 PUT (SELL)'}\n` +
+            `Amount: $${amount.toFixed(2)}\n` +
+            `Expiry: ${tfLabel(timeframe)}\n` +
+            `Mode: ${modeLabel}`, {
+            parse_mode: 'Markdown',
+            reply_markup: { inline_keyboard: [[
+                        { text: '✅ Confirm Trade', callback_data: 'trade:confirm' },
+                        { text: '❌ Cancel', callback_data: 'trade:cancel' },
+                    ]] },
+        }).catch(() => undefined);
+        if (confirmCard)
+            preTradeMessageIds.push(confirmCard.message_id);
+        pendingTrades.set(ctx.from.id, {
+            pair, direction: analysis.direction,
+            amount, timeframe,
+            mode: (mode ?? 'demo'),
+            ssid, preTradeMessageIds: [...preTradeMessageIds],
+        });
+        logger.trade('confirm_shown', pair, ctx.from.id, `$${amount} ${tfLabel(timeframe)} ${mode}`);
     }
     finally {
         sdkPool.release(ctx.from.id);
@@ -921,6 +943,51 @@ bot.action('upsell:demo', async (ctx) => {
     wizardSessions.set(chatId, state);
     const upsellDemoUser = getUser(ctx.from.id);
     await ctx.reply('💰 Enter amount for Demo trade:', { reply_markup: amountKeyboard(upsellDemoUser?.currency ?? 'USD') });
+});
+// ─── Trade confirmation ───────────────────────────────────────────────────────
+bot.action('trade:confirm', async (ctx) => {
+    await ctx.answerCbQuery();
+    const userId = ctx.from.id;
+    const pt = pendingTrades.get(userId);
+    if (!pt) {
+        await ctx.editMessageText('⏰ This session timed out. Let\'s start fresh 👇', { reply_markup: { inline_keyboard: [[{ text: '🏠 Start Over', callback_data: 'ui:start' }]] } }).catch(() => { });
+        return;
+    }
+    pendingTrades.delete(userId);
+    try {
+        await ctx.deleteMessage();
+    }
+    catch { }
+    const tradeUser = getUser(userId);
+    const tradeTier = normalizeTier(tradeUser?.tier);
+    const tradeCfg = getTierConfig(tradeTier);
+    const currentCount = activeTradeSessions.get(userId) ?? 0;
+    if (currentCount >= tradeCfg.maxConcurrentTrades) {
+        await ctx.reply('⚠️ You already have an active trade. Wait for it to finish before starting another.');
+        return;
+    }
+    const mgSettings = getUserMartingaleSettings(userId);
+    const martingaleRounds = mgSettings.enabled ? mgSettings.maxRounds : 1;
+    logger.trade('executing', pt.pair, userId, `$${pt.amount} ${tfLabel(pt.timeframe)} ${pt.mode}`);
+    try {
+        const sdk = await sdkPool.get(userId, pt.ssid);
+        await runMartingale(ctx, pt.ssid, pt.pair, pt.direction, pt.amount, pt.timeframe, pt.mode, martingaleRounds, pt.preTradeMessageIds, sdk);
+    }
+    catch (err) {
+        logger.error('bot', 'trade:confirm runMartingale threw', err);
+        await ctx.reply(friendlyError(err, '⚠️ Trade session ended unexpectedly. Please try again.')).catch(() => { });
+    }
+    finally {
+        sdkPool.release(userId);
+    }
+});
+bot.action('trade:cancel', async (ctx) => {
+    await ctx.answerCbQuery();
+    pendingTrades.delete(ctx.from.id);
+    try {
+        await ctx.editMessageText('❌ Trade cancelled. Tap Trade Now whenever you\'re ready.');
+    }
+    catch { }
 });
 // ─── User menu actions ────────────────────────────────────────────────────────
 bot.action('ui:start', async (ctx) => { await ctx.answerCbQuery(); await sendStartMenu(ctx); });
@@ -965,7 +1032,7 @@ bot.action('ui:stats', async (ctx) => {
     await ctx.answerCbQuery();
     const uid = ctx.from.id;
     const stats = getTradeStats(uid);
-    const ss = getSessionStats(uid);
+    const ss = getUserSessionStats(uid);
     const pnlSign = stats.totalPnl >= 0 ? '+' : '';
     const ssPnlSign = ss.pnl >= 0 ? '+' : '';
     await ctx.reply(`📈 *Stats*\n\n` +
@@ -991,7 +1058,7 @@ bot.action('ui:upgrade', async (ctx) => {
 bot.action('ui:martingale_settings', async (ctx) => {
     await ctx.answerCbQuery();
     const userId = ctx.from.id;
-    const settings = userMartingaleSettings.get(userId) ?? { enabled: true, maxRounds: 6 };
+    const settings = getUserMartingaleSettings(userId);
     await ctx.reply(`⚙️ *Smart Recovery Settings*\n\n` +
         `Current: ${settings.enabled ? 'ON' : 'OFF'} · ${settings.maxRounds} rounds max\n\n` +
         `Choose your Smart Recovery strategy:`, {
@@ -1011,12 +1078,12 @@ bot.action(/^martingale:(\d+|off)$/, async (ctx) => {
     const userId = ctx.from.id;
     const val = ctx.match[1];
     if (val === 'off') {
-        userMartingaleSettings.set(userId, { enabled: false, maxRounds: 1 });
+        setUserMartingaleSettings(userId, false, 1);
         await ctx.editMessageText('⛔ Smart Recovery disabled. Trades will run a single round with no recovery.').catch(() => { });
     }
     else {
         const rounds = parseInt(val, 10);
-        userMartingaleSettings.set(userId, { enabled: true, maxRounds: rounds });
+        setUserMartingaleSettings(userId, true, rounds);
         await ctx.editMessageText(`✅ Smart Recovery set to ${rounds} rounds.`).catch(() => { });
     }
 });
@@ -1052,6 +1119,33 @@ bot.action('ui:help', async (ctx) => {
 bot.action('ui:support', async (ctx) => {
     await ctx.answerCbQuery();
     await ctx.reply(`🔋 *Support*\n\nContact admin for help:\n${ADMIN_CONTACT_LINK}`, { parse_mode: 'Markdown', reply_markup: backKeyboard() });
+});
+bot.action('ui:giveaways', async (ctx) => {
+    await ctx.answerCbQuery();
+    const telegramId = ctx.from.id;
+    const user = getUser(telegramId);
+    const tier = normalizeTier(user?.tier);
+    const activeGiveaways = getActiveGiveaways();
+    if (activeGiveaways.length === 0) {
+        await ctx.reply('🎁 *Giveaways*\n\nNo active giveaways right now. Check back soon!', { parse_mode: 'Markdown', reply_markup: backKeyboard() });
+        return;
+    }
+    let msg = '🎁 *Active Giveaways*\n\n';
+    for (const g of activeGiveaways) {
+        const prizeText = g.prize_pool != null ? `Prize: *$${g.prize_pool.toFixed(2)}*` : '';
+        const canJoin = tier === 'PRO' || tier === 'MASTER';
+        msg += `${g.title}\n${prizeText}\n`;
+        if (canJoin) {
+            msg += `Tap Participate to join 👇\n\n`;
+        }
+        else {
+            msg += `🔒 Upgrade to PRO to participate\n\n`;
+        }
+    }
+    const markup = activeGiveaways.length === 1 && (tier === 'PRO' || tier === 'MASTER')
+        ? { inline_keyboard: [[{ text: '🎯 Participate', callback_data: `giveaway:participate:${activeGiveaways[0].id}` }], [{ text: '🔙 Back', callback_data: 'ui:start' }]] }
+        : backKeyboard();
+    await ctx.reply(msg, { parse_mode: 'Markdown', reply_markup: markup });
 });
 // ─── Legacy commands (keep for power users) ───────────────────────────────────
 bot.command('trade', async (ctx) => {
@@ -1103,6 +1197,15 @@ bot.command('balance', async (ctx) => {
             saveUserCurrency(uid, real.currency);
         else if (demo?.currency)
             saveUserCurrency(uid, demo.currency);
+        // Auto-promote tier based on live balance
+        const user = getUser(uid);
+        if (real && user && user.tier !== 'MASTER') {
+            const newTier = autoPromoteTier(uid, real.amount, user.tier ?? 'DEMO');
+            if (newTier && newTier !== user.tier) {
+                setUserTier(uid, newTier);
+                logger.info('bot', `auto-promoted user ${uid} from ${user.tier} to ${newTier} via /balance`);
+            }
+        }
         let msg = '💰 *Balances*\n\n';
         if (demo)
             msg += `🎮 Practice: ${fmtBalance(demo)}\n`;
@@ -1119,6 +1222,39 @@ bot.command('balance', async (ctx) => {
     finally {
         sdkPool.release(uid);
     }
+});
+bot.command('status', async (ctx) => {
+    const uid = ctx.from.id;
+    const user = getUser(uid);
+    if (!user || user.approval_status !== 'approved') {
+        await ctx.reply('🟢 *10x Bot Online*\n\nConnect your account to see full status.', { parse_mode: 'Markdown' });
+        return;
+    }
+    const tier = normalizeTier(user.tier);
+    const tierEmoji = tier === 'MASTER' ? '👑' : tier === 'PRO' ? '⚡' : '🧪';
+    const ssid = getSsidForUser(uid);
+    const stats = getTradeStats(uid);
+    const ss = getUserSessionStats(uid);
+    const ssPnlSign = ss.pnl >= 0 ? '+' : '';
+    const cached = getUserBalanceCache(uid);
+    const balLine = (cached && Date.now() - cached.ts < BALANCE_CACHE_TTL)
+        ? cached.line
+        : 'Tap /balance to refresh';
+    await ctx.reply(`🟢 *10x Bot Online*\n\n` +
+        `Tier: ${tierEmoji} ${tier} Trader\n` +
+        `IQ Option: ${ssid ? '✅ Connected' : '❌ Not connected'}\n` +
+        `Balance: ${balLine}\n` +
+        `Total Trades: ${stats.total} (${stats.wins}W / ${stats.losses}L)\n` +
+        `Session PnL: ${ssPnlSign}$${Math.abs(ss.pnl).toFixed(2)}`, { parse_mode: 'Markdown', reply_markup: backKeyboard() });
+});
+bot.command('support', async (ctx) => {
+    await ctx.reply(`🔋 *Support*\n\nNeed help? Contact the admin directly:`, {
+        parse_mode: 'Markdown',
+        reply_markup: { inline_keyboard: [
+                [{ text: '💬 Contact Support', url: ADMIN_CONTACT_LINK }],
+                [{ text: '🔙 Back', callback_data: 'ui:start' }],
+            ] },
+    });
 });
 // ─── Admin ────────────────────────────────────────────────────────────────────
 bot.command('admin', async (ctx) => {
@@ -1727,6 +1863,7 @@ bot.action('giveaway_v2:pick_winners', async (ctx) => {
 bot.action(/^giveaway_winners:(\d+)$/, async (ctx) => {
     await ctx.answerCbQuery('🏆 Selecting winners…');
     const giveawayId = parseInt(ctx.match[1], 10);
+    ctx.telegram.sendChatAction(ctx.chat.id, 'typing').catch(() => { });
     const winners = giveawaySelectWinners(giveawayId);
     if (winners.length === 0) {
         await ctx.reply('❌ No eligible participants found.', { reply_markup: adminBackKeyboard() });
@@ -1818,6 +1955,119 @@ bot.action(/^giveaway:participate:(\d+)$/, async (ctx) => {
         ...(result.replyMarkup ? { reply_markup: result.replyMarkup } : {}),
     });
 });
+// ─── Module 12: Compose Post (LLM-Powered) ───────────────────────────────────
+bot.action('admin:compose', async (ctx) => {
+    await ctx.answerCbQuery();
+    await ctx.reply('✍️ *Compose Motivational Post*\n\nChoose the post topic:', {
+        parse_mode: 'Markdown',
+        reply_markup: composeTopicKeyboard(),
+    });
+});
+bot.action(/^compose_topic:(reviews|motivation|trade_win|life_win)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const topic = ctx.match[1];
+    adminSessions.set(ctx.chat.id, { step: 'compose_description', composeTopic: topic });
+    const hints = {
+        reviews: '"made $263 within 2 weeks of trading"',
+        motivation: '"just hit 10 wins in a row"',
+        trade_win: '"turned $50 into $400 in one session"',
+        life_win: '"just bought his first car from profits"',
+    };
+    await ctx.reply(`✅ Topic: *${topic}*\n\nDescribe in ≤10 words:\ne.g. ${hints[topic] ?? '""'}`, { parse_mode: 'Markdown' });
+});
+bot.action('compose:regenerate', async (ctx) => {
+    await ctx.answerCbQuery('🔄 Regenerating…');
+    const chatId = ctx.chat.id;
+    const as = adminSessions.get(chatId);
+    if (!as?.composeTopic || !as.composeDescription) {
+        await ctx.reply('❌ Session expired. Start over.', { reply_markup: adminBackKeyboard() });
+        return;
+    }
+    try {
+        const loading = await ctx.reply('⏳ Generating with AI…');
+        const result = await generatePost({ topic: as.composeTopic, description: as.composeDescription });
+        await ctx.telegram.deleteMessage(chatId, loading.message_id).catch(() => { });
+        adminSessions.set(chatId, { ...as, composeContent: result.content });
+        await ctx.reply(`✍️ *Generated Post:*\n\n"${result.content}"`, { parse_mode: 'Markdown', reply_markup: composeResultKeyboard() });
+    }
+    catch (err) {
+        await ctx.reply(`❌ AI error: ${err instanceof Error ? err.message : 'unknown'}`, { reply_markup: adminBackKeyboard() });
+    }
+});
+bot.action('compose:edit', async (ctx) => {
+    await ctx.answerCbQuery();
+    const chatId = ctx.chat.id;
+    const as = adminSessions.get(chatId);
+    if (!as?.composeTopic) {
+        await ctx.reply('❌ Session expired.', { reply_markup: adminBackKeyboard() });
+        return;
+    }
+    adminSessions.set(chatId, { ...as, step: 'compose_description' });
+    await ctx.reply('✏️ Enter a new description (≤10 words):');
+});
+bot.action('compose:approve', async (ctx) => {
+    await ctx.answerCbQuery();
+    const chatId = ctx.chat.id;
+    const as = adminSessions.get(chatId);
+    if (!as?.composeContent) {
+        await ctx.reply('❌ Session expired.', { reply_markup: adminBackKeyboard() });
+        return;
+    }
+    adminSessions.set(chatId, { ...as, step: 'compose_image' });
+    await ctx.reply('📎 Send an image to attach, or type *skip* to send text-only:', { parse_mode: 'Markdown' });
+});
+bot.action(/^compose_delivery:(bot|channel|both)$/, async (ctx) => {
+    await ctx.answerCbQuery('📤 Sending…');
+    const chatId = ctx.chat.id;
+    const as = adminSessions.get(chatId);
+    if (!as?.composeContent) {
+        await ctx.reply('❌ Session expired.', { reply_markup: adminBackKeyboard() });
+        return;
+    }
+    adminSessions.delete(chatId);
+    const target = ctx.match[1];
+    const content = as.composeContent;
+    const imageFileId = as.composeImageFileId;
+    const CHANNEL_ID = parseInt(process.env.CHANNEL_ID ?? '-1002766084283', 10);
+    let botSent = 0, botFailed = 0;
+    const replyMarkup = { inline_keyboard: [[{ text: '🚀 Trade Now', callback_data: 'ui:trade' }]] };
+    if (target === 'bot' || target === 'both') {
+        const allIds = getAllUserIds();
+        for (const uid of allIds) {
+            try {
+                if (imageFileId) {
+                    await bot.telegram.sendPhoto(uid, imageFileId, { caption: content, reply_markup: replyMarkup });
+                }
+                else {
+                    await bot.telegram.sendMessage(uid, content, { reply_markup: replyMarkup });
+                }
+                botSent++;
+            }
+            catch {
+                botFailed++;
+            }
+            await new Promise(r => setTimeout(r, 40));
+        }
+    }
+    if (target === 'channel' || target === 'both') {
+        try {
+            if (imageFileId) {
+                await bot.telegram.sendPhoto(CHANNEL_ID, imageFileId, { caption: content });
+            }
+            else {
+                await bot.telegram.sendMessage(CHANNEL_ID, content);
+            }
+        }
+        catch (err) {
+            console.error('[compose] channel send failed:', err instanceof Error ? err.message : err);
+        }
+    }
+    insertBroadcastMessage('approved', content, as.composeTopic, imageFileId);
+    const summary = target === 'channel'
+        ? `✅ Post sent to channel.`
+        : `✅ Sent to *${botSent}* users (${botFailed} failed)${target === 'both' ? ' + channel' : ''}.`;
+    await ctx.reply(summary, { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
+});
 // ─── /connect & /disconnect ───────────────────────────────────────────────────
 bot.command('connect', async (ctx) => {
     connectSessions.set(ctx.chat.id, { step: 'email' });
@@ -1867,13 +2117,13 @@ bot.command('refresh', async (ctx) => {
     const chatId = ctx.chat.id;
     const userId = ctx.from.id;
     resetUser(userId);
-    balanceCache.delete(userId);
+    clearUserBalanceCache(userId);
     onboardSessions.delete(chatId);
     wizardSessions.delete(chatId);
     connectSessions.delete(chatId);
     adminSessions.delete(chatId);
     upgradeSessionsMap.delete(chatId);
-    userMartingaleSettings.delete(userId);
+    pendingTrades.delete(userId);
     await startOnboarding(ctx);
 });
 // ─── Broadcast media handlers ─────────────────────────────────────────────────
@@ -1882,14 +2132,21 @@ bot.on('photo', async (ctx) => {
         return;
     const chatId = ctx.chat.id;
     const as = adminSessions.get(chatId);
-    if (!as || as.step !== 'broadcast_media')
+    if (!as)
+        return;
+    const photo = ctx.message.photo.at(-1);
+    if (as.step === 'compose_image' && as.composeContent) {
+        adminSessions.set(chatId, { ...as, composeImageFileId: photo.file_id });
+        await ctx.reply('📤 *Send to:*', { parse_mode: 'Markdown', reply_markup: composeDeliveryKeyboard() });
+        return;
+    }
+    if (as.step !== 'broadcast_media')
         return;
     const pending = pendingBroadcasts.get(chatId);
     if (!pending) {
         await ctx.reply('❌ Session expired.');
         return;
     }
-    const photo = ctx.message.photo.at(-1);
     pendingBroadcasts.set(chatId, { ...pending, media: { type: 'photo', fileId: photo.file_id } });
     adminSessions.delete(chatId);
     await ctx.reply('📎 Image received! Include a link button?', { reply_markup: broadcastLinkKeyboard() });
@@ -1916,6 +2173,7 @@ bot.on('text', async (ctx) => {
         return;
     const chatId = ctx.chat.id;
     const text = ctx.message.text.trim();
+    insertMessage(ctx.from.id, 'incoming');
     // ── Admin wizard ─────────────────────────────────────────────────────────
     if (ctx.from?.id === getAdminId()) {
         const as = adminSessions.get(chatId);
@@ -2227,6 +2485,38 @@ bot.on('text', async (ctx) => {
                     await ctx.reply(`✅ Prize pool: *${prizeVal ? `$${prizeVal.toFixed(2)}${perWinner}` : 'none'}*\n\nStep 7: When should it start?`, { parse_mode: 'Markdown', reply_markup: giveawayScheduleKeyboard() });
                     return;
                 }
+                // ── Compose post wizard text steps ────────────────────────────────
+                if (as.step === 'compose_description' && as.composeTopic) {
+                    if (!text.trim()) {
+                        await ctx.reply('❌ Please enter a description:');
+                        return;
+                    }
+                    const desc = text.trim();
+                    adminSessions.set(chatId, { ...as, composeDescription: desc });
+                    const loading = await ctx.reply('⏳ Generating with AI…');
+                    try {
+                        const result = await generatePost({ topic: as.composeTopic, description: desc });
+                        await ctx.telegram.deleteMessage(chatId, loading.message_id).catch(() => { });
+                        adminSessions.set(chatId, { ...as, composeDescription: desc, composeContent: result.content });
+                        await ctx.reply(`✍️ *Generated Post:*\n\n"${result.content}"`, { parse_mode: 'Markdown', reply_markup: composeResultKeyboard() });
+                    }
+                    catch (err) {
+                        await ctx.telegram.deleteMessage(chatId, loading.message_id).catch(() => { });
+                        await ctx.reply(`❌ AI error: ${err instanceof Error ? err.message : 'unknown'}`, { reply_markup: adminBackKeyboard() });
+                    }
+                    return;
+                }
+                if (as.step === 'compose_image' && as.composeContent) {
+                    if (text.toLowerCase() === 'skip') {
+                        adminSessions.set(chatId, { ...as, composeImageFileId: undefined });
+                    }
+                    else {
+                        await ctx.reply('❌ Please send a photo or type *skip*:', { parse_mode: 'Markdown' });
+                        return;
+                    }
+                    await ctx.reply(`📤 *Send to:*`, { parse_mode: 'Markdown', reply_markup: composeDeliveryKeyboard() });
+                    return;
+                }
                 return;
             }
             catch (err) {
@@ -2494,7 +2784,9 @@ bot.catch((err, ctx) => {
 });
 cleanStaleSessions();
 bot.launch();
-console.log('[iqbot-v3] running');
+logger.info('bot', 'iqbot-v3 running');
+startWelcomeFollowUp(bot);
+startAutoBroadcast(bot);
 // ─── Fabricated Leaderboard: seed + update checker + midnight reset ───────────
 if (countFabricatedTraders() === 0) {
     seedFabricatedTraders();

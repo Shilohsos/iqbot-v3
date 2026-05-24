@@ -18,6 +18,7 @@ export function startKeyboard(tier?: string): IKMarkup {
                 { text: 'Leaderboard 🏆', callback_data: 'ui:leaderboard' },
             ]
             : [{ text: 'Upgrade 💡', callback_data: 'ui:upgrade' }],
+        [{ text: '🎁 Giveaways', callback_data: 'ui:giveaways' }],
         [{ text: '⚙️ Smart Recovery Settings', callback_data: 'ui:martingale_settings' }],
     ];
     rows.push(

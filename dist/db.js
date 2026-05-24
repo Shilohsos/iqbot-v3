@@ -87,6 +87,19 @@ if (!finalUserCols.includes('simultaneous_trades'))
     db.exec('ALTER TABLE users ADD COLUMN simultaneous_trades INTEGER NOT NULL DEFAULT 1');
 if (!finalUserCols.includes('gale_disabled'))
     db.exec('ALTER TABLE users ADD COLUMN gale_disabled INTEGER NOT NULL DEFAULT 0');
+// V4 Phase 6: session persistence columns
+if (!finalUserCols.includes('mg_enabled'))
+    db.exec('ALTER TABLE users ADD COLUMN mg_enabled INTEGER NOT NULL DEFAULT 1');
+if (!finalUserCols.includes('mg_max_rounds'))
+    db.exec('ALTER TABLE users ADD COLUMN mg_max_rounds INTEGER NOT NULL DEFAULT 6');
+if (!finalUserCols.includes('session_trades'))
+    db.exec('ALTER TABLE users ADD COLUMN session_trades INTEGER NOT NULL DEFAULT 0');
+if (!finalUserCols.includes('session_pnl'))
+    db.exec('ALTER TABLE users ADD COLUMN session_pnl REAL NOT NULL DEFAULT 0');
+if (!finalUserCols.includes('balance_cache'))
+    db.exec('ALTER TABLE users ADD COLUMN balance_cache TEXT');
+if (!finalUserCols.includes('balance_cache_ts'))
+    db.exec('ALTER TABLE users ADD COLUMN balance_cache_ts TEXT');
 // V4 tier migration: NEWBIE → DEMO (run-once, idempotent)
 db.prepare("UPDATE users SET tier = 'DEMO' WHERE tier = 'NEWBIE'").run();
 // ─── Section 10 tables ────────────────────────────────────────────────────────
@@ -164,9 +177,36 @@ db.exec(`
     image_file_id TEXT,
     enabled       INTEGER NOT NULL DEFAULT 1,
     last_sent_at  TEXT,
+    sent_count    INTEGER NOT NULL DEFAULT 0,
     created_at    TEXT    NOT NULL DEFAULT (datetime('now'))
   )
 `);
+{
+    const bmCols = db.prepare('PRAGMA table_info(broadcast_messages)').all().map(c => c.name);
+    if (!bmCols.includes('sent_count'))
+        db.exec('ALTER TABLE broadcast_messages ADD COLUMN sent_count INTEGER NOT NULL DEFAULT 0');
+}
+{
+    const autoCount = db.prepare("SELECT COUNT(*) AS cnt FROM broadcast_messages WHERE type = 'auto'").get().cnt;
+    if (autoCount === 0) {
+        const seed = [
+            ['persuasion', "👀 Want to see the bot actually trade?\n\nDemo mode is risk-free.\nOne tap, one signal, one trade.\n\nWatch it work 👇"],
+            ['social_proof', "💸 Another 10x user just banked +$270 CASH\n\nSame bot. Same signals. Real money.\nYou're still on demo coins.\n\nSwitch up 👇"],
+            ['social_proof', "📊 71% of demo users upgraded to LIVE this week.\n\nThey didn't guess. They watched the bot win on demo first.\nThen they switched.\n\nRun your demo trade 👇"],
+            ['urgency', "⏱ Markets don't wait. Every minute you're not trading is profit someone else is taking.\n\nTap Trade Now 👇"],
+            ['persuasion', "🤑 Real money. Real wins. Real withdrawals.\n\nThe bot's been printing for users all day.\nYour account should be next.\n\nStart a trade 👇"],
+            ['motivation', "🔋 Tired of watching others win while you sit out?\n\nOne trade changes everything.\nOne win builds momentum.\nOne session could pay your bills.\n\nTrade now 👇"],
+            ['social_proof', "🏆 Top trader today banked +$890 in 3 trades.\n\nNo magic. Just the bot doing its job.\nThe same bot you have access to.\n\nUse it 👇"],
+            ['urgency', "📈 The algorithm just fired a 84% confidence signal.\n\nThese don't come often. When they do, smart traders act.\n\nTap to catch this one 👇"],
+            ['persuasion', "💡 Demo mode exists for ONE reason:\n\nSo you can see it work before you go live.\nIf you've seen it work… what are you waiting for?\n\nGo live 👇"],
+            ['motivation', "🎯 Your next trade could be the one that pays for your week.\n\nThe bot is online. Signals are firing. Account is ready.\n\nWhat's stopping you? 👇"],
+        ];
+        const ins = db.prepare("INSERT INTO broadcast_messages (type, category, content) VALUES ('auto', ?, ?)");
+        for (const [cat, content] of seed)
+            ins.run(cat, content);
+        console.log('[db] seeded 10 auto broadcast messages');
+    }
+}
 db.exec(`
   CREATE TABLE IF NOT EXISTS channel_approvals (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -465,6 +505,32 @@ export function getApprovalStats() {
         total: row.total ?? 0,
     };
 }
+export function getUserMartingaleSettings(telegramId) {
+    const row = db.prepare('SELECT mg_enabled, mg_max_rounds FROM users WHERE telegram_id = ?').get(telegramId);
+    return { enabled: row?.mg_enabled !== 0, maxRounds: row?.mg_max_rounds ?? 6 };
+}
+export function setUserMartingaleSettings(telegramId, enabled, maxRounds) {
+    db.prepare('UPDATE users SET mg_enabled = ?, mg_max_rounds = ? WHERE telegram_id = ?').run(enabled ? 1 : 0, maxRounds, telegramId);
+}
+export function getUserSessionStats(telegramId) {
+    const row = db.prepare('SELECT session_trades, session_pnl FROM users WHERE telegram_id = ?').get(telegramId);
+    return { trades: row?.session_trades ?? 0, pnl: row?.session_pnl ?? 0 };
+}
+export function addUserSessionStats(telegramId, tradeDelta, pnlDelta) {
+    db.prepare('UPDATE users SET session_trades = session_trades + ?, session_pnl = session_pnl + ? WHERE telegram_id = ?').run(tradeDelta, pnlDelta, telegramId);
+}
+export function getUserBalanceCache(telegramId) {
+    const row = db.prepare('SELECT balance_cache, balance_cache_ts FROM users WHERE telegram_id = ?').get(telegramId);
+    if (!row?.balance_cache || !row.balance_cache_ts)
+        return undefined;
+    return { line: row.balance_cache, ts: new Date(row.balance_cache_ts).getTime() };
+}
+export function setUserBalanceCache(telegramId, line) {
+    db.prepare("UPDATE users SET balance_cache = ?, balance_cache_ts = datetime('now') WHERE telegram_id = ?").run(line, telegramId);
+}
+export function clearUserBalanceCache(telegramId) {
+    db.prepare('UPDATE users SET balance_cache = NULL, balance_cache_ts = NULL WHERE telegram_id = ?').run(telegramId);
+}
 export function generateToken(tier) {
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
     const rand = (n) => Array.from({ length: n }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
@@ -660,6 +726,35 @@ export function getAuditReport() {
         topPerformerId: topRow?.telegram_id,
         topPerformerProfit: topRow?.total_pnl,
     };
+}
+// ─── Channel message tracking ────────────────────────────────────────────────
+db.exec(`
+  CREATE TABLE IF NOT EXISTS messages (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    telegram_id INTEGER NOT NULL,
+    direction   TEXT    NOT NULL,
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_messages_tid ON messages(telegram_id, created_at);
+`);
+export function insertMessage(telegramId, direction) {
+    db.prepare('INSERT INTO messages (telegram_id, direction) VALUES (?, ?)').run(telegramId, direction);
+}
+export function getRecentlyApprovedUsers(minutes) {
+    return db.prepare(`
+        SELECT * FROM users
+        WHERE approval_status = 'approved'
+          AND approved_at >= datetime('now', ? || ' minutes')
+        ORDER BY approved_at DESC
+    `).all(`-${minutes}`);
+}
+export function userHasActivity(telegramId) {
+    const user = getUser(telegramId);
+    if (!user || !user.last_used)
+        return false;
+    const lastUsed = new Date(user.last_used).getTime();
+    const approvedAt = user.approved_at ? new Date(user.approved_at).getTime() : 0;
+    return lastUsed > approvedAt;
 }
 // ─── Session persistence ──────────────────────────────────────────────────────
 db.exec(`
@@ -926,6 +1021,32 @@ export function markNotificationFailed(id) {
 }
 export function getApprovedUsersWithTier() {
     return db.prepare("SELECT telegram_id, tier FROM users WHERE approval_status = 'approved'").all();
+}
+export function getEnabledAutoMessages() {
+    return db.prepare("SELECT * FROM broadcast_messages WHERE type = 'auto' AND enabled = 1 ORDER BY id").all();
+}
+export function getBroadcastMessages(type) {
+    if (type) {
+        return db.prepare('SELECT * FROM broadcast_messages WHERE type = ? ORDER BY created_at DESC').all(type);
+    }
+    return db.prepare('SELECT * FROM broadcast_messages ORDER BY created_at DESC LIMIT 50').all();
+}
+export function insertBroadcastMessage(type, content, category, imageFileId) {
+    const result = db.prepare(`
+        INSERT INTO broadcast_messages (type, category, content, image_file_id)
+        VALUES (?, ?, ?, ?)
+    `).run(type, category ?? null, content, imageFileId ?? null);
+    return result.lastInsertRowid;
+}
+export function markBroadcastSent(id, count) {
+    db.prepare(`
+        UPDATE broadcast_messages
+        SET last_sent_at = datetime('now'), sent_count = sent_count + ?
+        WHERE id = ?
+    `).run(count, id);
+}
+export function updateBroadcastImageFileId(id, imageFileId) {
+    db.prepare('UPDATE broadcast_messages SET image_file_id = ? WHERE id = ?').run(imageFileId, id);
 }
 export function getGiveawayStats() {
     const row = db.prepare(`
