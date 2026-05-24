@@ -276,18 +276,6 @@ let nextScheduledId = 1;
 // userId → number of active martingale trades in flight
 const activeTradeSessions = new Map<number, number>();
 
-// Pending trade confirmations (ephemeral — user taps Confirm/Cancel)
-interface PendingTrade {
-    pair: string;
-    direction: 'call' | 'put';
-    amount: number;
-    timeframe: number;
-    mode: 'demo' | 'live';
-    ssid: string;
-    preTradeMessageIds: number[];
-}
-const pendingTrades = new Map<number, PendingTrade>();
-
 // Top picks cache — refreshed every 2 hours
 const PICKS_REFRESH_MS = 2 * 60 * 60 * 1000;
 let cachedTopPicks: PairWinRate[] = [];
@@ -1086,32 +1074,11 @@ bot.action(/^pair:(.+)$/, async ctx => {
             return;
         }
 
-        // Show trade confirmation dialog
-        const modeLabel = (mode ?? 'demo') === 'live' ? 'Live 💰' : 'Demo 🎮';
-        const confirmCard = await ctx.reply(
-            `📋 *Trade Summary*\n\n` +
-            `Pair: ${pair}\n` +
-            `Direction: ${analysis.direction === 'call' ? '🟢 CALL (BUY)' : '🔴 PUT (SELL)'}\n` +
-            `Amount: $${amount.toFixed(2)}\n` +
-            `Expiry: ${tfLabel(timeframe)}\n` +
-            `Mode: ${modeLabel}`,
-            {
-                parse_mode: 'Markdown',
-                reply_markup: { inline_keyboard: [[
-                    { text: '✅ Confirm Trade', callback_data: 'trade:confirm' },
-                    { text: '❌ Cancel',         callback_data: 'trade:cancel' },
-                ]]},
-            }
-        ).catch(() => undefined);
-        if (confirmCard) preTradeMessageIds.push(confirmCard.message_id);
-
-        pendingTrades.set(ctx.from!.id, {
-            pair, direction: analysis.direction,
-            amount, timeframe,
-            mode: (mode ?? 'demo') as 'demo' | 'live',
-            ssid, preTradeMessageIds: [...preTradeMessageIds],
-        });
-        logger.trade('confirm_shown', pair, ctx.from!.id, `$${amount} ${tfLabel(timeframe)} ${mode}`);
+        // Execute trade immediately
+        const mgSettings = getUserMartingaleSettings(ctx.from!.id);
+        const martingaleRounds = mgSettings.enabled ? mgSettings.maxRounds : 1;
+        logger.trade('executing', pair, ctx.from!.id, `$${amount} ${tfLabel(timeframe)} ${mode}`);
+        await runMartingale(ctx, ssid, pair, analysis.direction, amount, timeframe, (mode ?? 'demo') as 'demo' | 'live', martingaleRounds, preTradeMessageIds, sdk);
     } finally {
         sdkPool.release(ctx.from!.id);
     }
@@ -1137,52 +1104,6 @@ bot.action('upsell:demo', async ctx => {
     wizardSessions.set(chatId, state);
     const upsellDemoUser = getUser(ctx.from!.id);
     await ctx.reply('💰 Enter amount for Demo trade:', { reply_markup: amountKeyboard(upsellDemoUser?.currency ?? 'USD') });
-});
-
-// ─── Trade confirmation ───────────────────────────────────────────────────────
-
-bot.action('trade:confirm', async ctx => {
-    await ctx.answerCbQuery();
-    const userId = ctx.from!.id;
-    const pt = pendingTrades.get(userId);
-    if (!pt) {
-        await ctx.editMessageText(
-            '⏰ This session timed out. Let\'s start fresh 👇',
-            { reply_markup: { inline_keyboard: [[{ text: '🏠 Start Over', callback_data: 'ui:start' }]] } }
-        ).catch(() => {});
-        return;
-    }
-    pendingTrades.delete(userId);
-    try { await ctx.deleteMessage(); } catch {}
-
-    const tradeUser = getUser(userId);
-    const tradeTier = normalizeTier(tradeUser?.tier);
-    const tradeCfg = getTierConfig(tradeTier);
-    const currentCount = activeTradeSessions.get(userId) ?? 0;
-    if (currentCount >= tradeCfg.maxConcurrentTrades) {
-        await ctx.reply('⚠️ You already have an active trade. Wait for it to finish before starting another.');
-        return;
-    }
-
-    const mgSettings = getUserMartingaleSettings(userId);
-    const martingaleRounds = mgSettings.enabled ? mgSettings.maxRounds : 1;
-    logger.trade('executing', pt.pair, userId, `$${pt.amount} ${tfLabel(pt.timeframe)} ${pt.mode}`);
-
-    try {
-        const sdk = await sdkPool.get(userId, pt.ssid);
-        await runMartingale(ctx, pt.ssid, pt.pair, pt.direction, pt.amount, pt.timeframe, pt.mode, martingaleRounds, pt.preTradeMessageIds, sdk);
-    } catch (err: unknown) {
-        logger.error('bot', 'trade:confirm runMartingale threw', err);
-        await ctx.reply(friendlyError(err, '⚠️ Trade session ended unexpectedly. Please try again.')).catch(() => {});
-    } finally {
-        sdkPool.release(userId);
-    }
-});
-
-bot.action('trade:cancel', async ctx => {
-    await ctx.answerCbQuery();
-    pendingTrades.delete(ctx.from!.id);
-    try { await ctx.editMessageText('❌ Trade cancelled. Tap Trade Now whenever you\'re ready.'); } catch {}
 });
 
 // ─── User menu actions ────────────────────────────────────────────────────────
@@ -2616,7 +2537,6 @@ bot.command('refresh', async ctx => {
     connectSessions.delete(chatId);
     adminSessions.delete(chatId);
     upgradeSessionsMap.delete(chatId);
-    pendingTrades.delete(userId);
     await startOnboarding(ctx);
 });
 
