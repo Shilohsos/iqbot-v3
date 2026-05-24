@@ -1,0 +1,77 @@
+"""Meta Conversions API proxy — receives events from funnel page, forwards to Meta."""
+import os
+import json
+import time
+import hashlib
+import logging
+from pathlib import Path
+from flask import Flask, request, jsonify
+
+# Load .env from project root
+env_path = Path(__file__).resolve().parent / ".env"
+if env_path.exists():
+    with open(env_path) as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                key, _, val = line.partition("=")
+                os.environ.setdefault(key.strip(), val.strip())
+
+logging.basicConfig(level=logging.INFO, format="[meta-track] %(message)s")
+logger = logging.getLogger("meta-track")
+
+app = Flask(__name__)
+
+PIXEL_ID = "2115121012365333"
+TOKEN = os.getenv("META_ACCESS_TOKEN", "")
+API_URL = f"https://graph.facebook.com/v22.0/{PIXEL_ID}/events?access_token={TOKEN}"
+
+@app.route("/track", methods=["POST"])
+@app.route("/", methods=["POST"])
+def track():
+    data = request.get_json(silent=True) or {}
+    event_name = data.get("event_name", "ViewContent")
+    event_source_url = data.get("event_source_url", request.headers.get("Referer", ""))
+    client_ip = request.headers.get("X-Forwarded-For", request.remote_addr) or ""
+    client_ua = request.headers.get("User-Agent", "")
+
+    # Build CAPI payload
+    payload = {
+        "data": [{
+            "event_name": event_name,
+            "event_time": int(time.time()),
+            "action_source": "website",
+            "event_source_url": event_source_url,
+            "user_data": {
+                "client_ip_address": client_ip,
+                "client_user_agent": client_ua,
+                "fbc": data.get("fbc", ""),
+                "fbp": data.get("fbp", ""),
+            },
+            "custom_data": data.get("custom_data", {}),
+        }]
+    }
+
+    try:
+        import urllib.request
+        req = urllib.request.Request(
+            API_URL,
+            data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json"}
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            result = resp.read().decode()
+            logger.info(f"meta: {event_name} → {resp.status}")
+            return jsonify({"status": "ok", "meta_response": json.loads(result)})
+    except Exception as e:
+        logger.error(f"meta fail: {event_name} → {e}")
+        return jsonify({"status": "error", "detail": str(e)}), 502
+
+@app.route("/health")
+def health():
+    return jsonify({"status": "ok", "pixel": PIXEL_ID})
+
+if __name__ == "__main__":
+    port = int(os.getenv("META_TRACK_PORT", "8766"))
+    logger.info(f"meta tracking proxy on :{port}")
+    app.run(host="0.0.0.0", port=port, debug=False)
