@@ -349,7 +349,14 @@ async function dispatchBroadcastPayload(payload: {
     media?: { type: 'photo' | 'video'; fileId: string };
     deleteAfterMs: number;
 }): Promise<{ sent: number; deferred: number }> {
+    const testUserId = getTestUserId();
+    if (testUserId) {
+        console.log(`[test-mode] broadcast gated — sending only to test user ${testUserId}`);
+        payload.targetIds = payload.targetIds.filter(id => id === testUserId);
+    }
+
     const { message, targetIds, media, button, deleteAfterMs } = payload;
+
     const replyMarkup = button ? { inline_keyboard: [[
         button.type === 'url'
             ? { text: button.text, url: button.value }
