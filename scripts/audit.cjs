@@ -87,10 +87,10 @@ async function main() {
     report.push('─── 4. IQ Option SDK Connections (sample) ───');
     try {
         const os = require('os');
-        const tmpFile = path.join(os.tmpdir(), `iq_sdk_test_${Date.now()}.ts`);
+        const tmpFile = path.join(BOT_DIR, `_sdk_test_${Date.now()}.ts`);
         const tsCode = [
-            `import { ClientSdk, SsidAuthMethod } from '${BOT_DIR}/src/index.ts';`,
-            `import { WS_URL, PLATFORM_ID, IQ_HOST } from '${BOT_DIR}/src/protocol.ts';`,
+            `import { ClientSdk, SsidAuthMethod } from './src/index.ts';`,
+            `import { WS_URL, PLATFORM_ID, IQ_HOST } from './src/protocol.ts';`,
             `import Database from 'better-sqlite3';`,
             `import { readFileSync } from 'fs';`,
             ``,
@@ -100,7 +100,7 @@ async function main() {
             `  const out: Record<string, any> = { adminSsid: null as boolean | null, valid: 0, dead: 0, deadUsers: [] as any[], remaining: 0 };`,
             ``,
             `  try {`,
-            `    const env = readFileSync('${BOT_DIR}/.env', 'utf-8');`,
+            `    const env = readFileSync('.env', 'utf-8');`,
             `    const ssid = env.split('\\n').find((l: string) => l.startsWith('IQ_SSID='))?.split('=')[1]?.trim();`,
             `    if (ssid) {`,
             `      try {`,
@@ -111,7 +111,7 @@ async function main() {
             `    }`,
             `  } catch {}`,
             ``,
-            `  const db = new Database('${BOT_DIR}/iqbot-v3.db');`,
+            `  const db = new Database('./iqbot-v3.db');`,
             `  const { c: total } = db.prepare('SELECT COUNT(*) as c FROM users WHERE ssid IS NOT NULL').get() as { c: number };`,
             `  const users = db.prepare('SELECT telegram_id, username, ssid FROM users WHERE ssid IS NOT NULL ORDER BY RANDOM() LIMIT ?').all(MAX) as Array<{ telegram_id: number; username: string | null; ssid: string }>;`,
             `  db.close();`,
