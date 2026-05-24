@@ -60,12 +60,14 @@ def track():
         if val:
             user_data[field] = val
 
+    # Meta requires PII fields (country, st, ct) to be SHA-256 hashed.
+    # Exceptions: client_ip_address, client_user_agent, fbc, fbp — sent raw.
     if geo.get("countryCode"):
-        user_data["country"] = geo["countryCode"]
+        user_data["country"] = hashlib.sha256(geo["countryCode"].encode()).hexdigest()
     if geo.get("regionName"):
-        user_data["st"] = geo["regionName"]
+        user_data["st"] = hashlib.sha256(geo["regionName"].encode()).hexdigest()
     if geo.get("city"):
-        user_data["ct"] = geo["city"]
+        user_data["ct"] = hashlib.sha256(geo["city"].encode()).hexdigest()
 
     # Build CAPI payload
     payload = {
