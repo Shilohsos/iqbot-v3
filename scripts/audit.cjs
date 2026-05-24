@@ -3,7 +3,7 @@
  * IQ Bot V3 — Full Audit Script
  * Runs every 12 hours via cron. Reports only — never fixes.
  */
-const { execSync } = require('child_process');
+const { execSync, spawnSync } = require('child_process');
 const path = require('path');
 
 const BOT_DIR = '/root/iqbot-v3';
@@ -86,39 +86,72 @@ async function main() {
     // ─── 4. SDK Connection Tests (random sample) ──────────────────────
     report.push('─── 4. IQ Option SDK Connections (sample) ───');
     try {
-        const db = require('better-sqlite3')(path.join(BOT_DIR, 'iqbot-v3.db'));
-        const { ClientSdk, SsidAuthMethod } = require(path.join(BOT_DIR, 'dist/index.js'));
-        const { WS_URL, PLATFORM_ID, IQ_HOST } = require(path.join(BOT_DIR, 'dist/protocol.js'));
+        const os = require('os');
+        const tmpFile = path.join(os.tmpdir(), `iq_sdk_test_${Date.now()}.ts`);
+        const tsCode = [
+            `import { ClientSdk, SsidAuthMethod } from '${BOT_DIR}/src/index.ts';`,
+            `import { WS_URL, PLATFORM_ID, IQ_HOST } from '${BOT_DIR}/src/protocol.ts';`,
+            `import Database from 'better-sqlite3';`,
+            `import { readFileSync } from 'fs';`,
+            ``,
+            `const MAX = ${MAX_SSID_TEST};`,
+            `const out: Record<string, any> = { adminSsid: null as boolean | null, valid: 0, dead: 0, deadUsers: [] as any[], remaining: 0 };`,
+            ``,
+            `try {`,
+            `  const env = readFileSync('${BOT_DIR}/.env', 'utf-8');`,
+            `  const ssid = env.split('\\n').find((l: string) => l.startsWith('IQ_SSID='))?.split('=')[1]?.trim();`,
+            `  if (ssid) {`,
+            `    try {`,
+            `      const sdk = await ClientSdk.create(WS_URL, PLATFORM_ID, new SsidAuthMethod(ssid), { host: IQ_HOST });`,
+            `      await sdk.shutdown();`,
+            `      out.adminSsid = true;`,
+            `    } catch { out.adminSsid = false; }`,
+            `  }`,
+            `} catch {}`,
+            ``,
+            `const db = new Database('${BOT_DIR}/iqbot-v3.db');`,
+            `const { c: total } = db.prepare('SELECT COUNT(*) as c FROM users WHERE ssid IS NOT NULL').get() as { c: number };`,
+            `const users = db.prepare('SELECT telegram_id, username, ssid FROM users WHERE ssid IS NOT NULL ORDER BY RANDOM() LIMIT ?').all(MAX) as Array<{ telegram_id: number; username: string | null; ssid: string }>;`,
+            `db.close();`,
+            `out.remaining = total - users.length;`,
+            ``,
+            `for (const u of users) {`,
+            `  try {`,
+            `    const sdk = await ClientSdk.create(WS_URL, PLATFORM_ID, new SsidAuthMethod(u.ssid), { host: IQ_HOST });`,
+            `    await sdk.balances();`,
+            `    await sdk.shutdown();`,
+            `    out.valid++;`,
+            `  } catch {`,
+            `    out.dead++;`,
+            `    out.deadUsers.push({ telegram_id: u.telegram_id, username: u.username });`,
+            `  }`,
+            `}`,
+            ``,
+            `process.stdout.write(JSON.stringify(out) + '\\n');`,
+        ].join('\n');
 
-        // Also test the admin fallback SSID
-        const envSsid = execSync('grep IQ_SSID .env', { cwd: BOT_DIR, timeout: 3000 }).toString().trim().split('=')[1];
-        if (envSsid) {
-            try {
-                const sdk = await ClientSdk.create(WS_URL, PLATFORM_ID, new SsidAuthMethod(envSsid), { host: IQ_HOST });
-                await sdk.shutdown();
-                report.push('  ✅ Admin fallback SSID: VALID');
-            } catch {
-                warnings.push('  ⚠️ Admin fallback SSID: EXPIRED (run /connect to refresh)');
-            }
-        }
+        require('fs').writeFileSync(tmpFile, tsCode);
+        try {
+            const proc = spawnSync('npx', ['tsx', tmpFile], {
+                cwd: BOT_DIR,
+                timeout: 120_000,
+                encoding: 'utf-8',
+                env: { ...process.env },
+            });
+            if (proc.status !== 0) throw new Error(proc.stderr?.slice(0, 300) || 'tsx exited non-zero');
+            const lastLine = (proc.stdout || '').trim().split('\n').at(-1) || '';
+            const data = JSON.parse(lastLine);
 
-        const users = db.prepare('SELECT telegram_id, username, ssid FROM users WHERE ssid IS NOT NULL ORDER BY RANDOM() LIMIT ?').all(MAX_SSID_TEST);
-        let valid = 0, dead = 0;
-        for (const u of users) {
-            try {
-                const sdk = await ClientSdk.create(WS_URL, PLATFORM_ID, new SsidAuthMethod(u.ssid), { host: IQ_HOST });
-                const bals = await sdk.balances();
-                const all = bals.getBalances();
-                await sdk.shutdown();
-                valid++;
-            } catch {
-                dead++;
+            if (data.adminSsid === true)  report.push('  ✅ Admin fallback SSID: VALID');
+            else if (data.adminSsid === false) warnings.push('  ⚠️ Admin fallback SSID: EXPIRED (run /connect to refresh)');
+
+            for (const u of data.deadUsers || []) {
                 errors.push(`  ❌ User ${u.telegram_id} (${u.username || '?'}): SSID DEAD`);
             }
+            report.push(`  ✅ Sample: ${data.valid} valid / ${data.dead} dead (${data.remaining} not tested)`);
+        } finally {
+            try { require('fs').unlinkSync(tmpFile); } catch {}
         }
-        const remaining = ssidCount - MAX_SSID_TEST;
-        report.push(`  ✅ Sample: ${valid} valid / ${dead} dead (${remaining} not tested)`);
-        db.close();
     } catch (e) {
         errors.push(`  ❌ SDK test failed: ${e.message.slice(0, 100)}`);
     }
