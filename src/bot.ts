@@ -2367,11 +2367,18 @@ bot.action(/^marathon:leaderboard:(\d+)$/, async ctx => {
     const medals = ['🥇', '🥈', '🥉'];
     const lines = board.slice(0, 10).map(e => {
         const medal = medals[e.rank - 1] ?? `${e.rank}.`;
+        const trades = `${e.trade_count} trade${e.trade_count !== 1 ? 's' : ''}`;
         if (e.display_name) {
-            return `${medal} ${e.display_name} — ${e.trade_count} trade${e.trade_count !== 1 ? 's' : ''}`;
+            // fabricated entry
+            return `${medal} ${e.display_name} — ${trades}`;
         }
-        const you = e.telegram_id === telegramId ? ' ← you' : '';
-        return `${medal} ${e.trade_count} trade${e.trade_count !== 1 ? 's' : ''}${you}`;
+        if (e.telegram_id === telegramId) {
+            return `${medal} ${trades} ← you`;
+        }
+        // real other user — mask telegram_id
+        const id = String(e.telegram_id);
+        const masked = `User #${id.slice(0, 3)}***`;
+        return `${medal} ${masked} — ${trades}`;
     });
 
     const userRank = board.find(e => e.telegram_id === telegramId);
