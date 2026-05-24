@@ -4,7 +4,7 @@ import { ClientSdk, SsidAuthMethod, BalanceType } from './index.js';
 import { WS_URL, PLATFORM_ID, IQ_HOST, IQ_AUTH_URL } from './protocol.js';
 import { executeTrade, executeTradeWithSdk, createSdk, type TradeRequest, type TradeResult } from './trade.js';
 import { sdkPool } from './sdk-pool.js';
-import { getTierConfig, normalizeTier, autoPromoteTier, TIER_CONFIGS } from './tiers.js';
+import { getTierConfig, normalizeTier, autoPromoteTier, convertToUsd, TIER_CONFIGS } from './tiers.js';
 import {
     getRecentTrades, getTradeStats, getTopTradersToday,
     getUser, saveUser, saveUsername, deleteUser, getAllUsers, getAllUserIds,
@@ -533,14 +533,16 @@ async function sendStartMenu(ctx: Context): Promise<void> {
                 const real = all.find(b => b.type === BalanceType.Real);
                 if (real?.currency) saveUserCurrency(telegramId, real.currency);
                 else if (demo?.currency) saveUserCurrency(telegramId, demo.currency);
-                // Auto-promote tier based on live balance
+                // Auto-promote tier based on live balance (converted to USD)
                 if (real && user.tier !== 'MASTER') {
-                    const newTier = autoPromoteTier(telegramId, real.amount, user.tier ?? 'DEMO');
+                    const currency = real.currency ?? 'USD';
+                    const usdAmount = await convertToUsd(real.amount, currency, sdk);
+                    const newTier = autoPromoteTier(telegramId, usdAmount, user.tier ?? 'DEMO');
                     if (newTier && newTier !== user.tier) {
                         const oldTier = user.tier;
                         setUserTier(telegramId, newTier);
                         user.tier = newTier;
-                        logger.info('bot', `auto-promoted user ${telegramId} from ${oldTier} to ${newTier} (balance: $${real.amount.toFixed(2)})`);
+                        logger.info('bot', `auto-promoted user ${telegramId} from ${oldTier} to ${newTier} (balance: ${currency} ${real.amount.toFixed(2)} ≈ $${usdAmount.toFixed(2)})`);
                     }
                 }
                 const newLine = [
@@ -1437,14 +1439,16 @@ bot.command('balance', async ctx => {
         const real = all.find(b => b.type === BalanceType.Real);
         if (real?.currency) saveUserCurrency(uid, real.currency);
         else if (demo?.currency) saveUserCurrency(uid, demo.currency);
-        // Auto-promote tier based on live balance
+        // Auto-promote tier based on live balance (converted to USD)
         const user = getUser(uid);
         if (real && user && user.tier !== 'MASTER') {
-            const newTier = autoPromoteTier(uid, real.amount, user.tier ?? 'DEMO');
+            const currency = real.currency ?? 'USD';
+            const usdAmount = await convertToUsd(real.amount, currency, sdk);
+            const newTier = autoPromoteTier(uid, usdAmount, user.tier ?? 'DEMO');
             if (newTier && newTier !== user.tier) {
                 const oldTier = user.tier;
                 setUserTier(uid, newTier);
-                logger.info('bot', `auto-promoted user ${uid} from ${oldTier} to ${newTier} via /balance`);
+                logger.info('bot', `auto-promoted user ${uid} from ${oldTier} to ${newTier} via /balance (${currency} ${real.amount.toFixed(2)} ≈ $${usdAmount.toFixed(2)})`);
             }
         }
         let msg = '💰 *Balances*\n\n';

@@ -1,3 +1,6 @@
+import type { ClientSdk } from './index.js';
+import { logger } from './logger.js';
+
 export interface TierConfig {
     label: string;
     pairs: string[];
@@ -64,6 +67,29 @@ export function normalizeTier(tier: string | null | undefined): 'DEMO' | 'PRO' |
     if (key === 'PRO') return 'PRO';
     if (key === 'MASTER') return 'MASTER';
     return 'DEMO';
+}
+
+const rateCache = new Map<string, { rate: number; expires: number }>();
+
+export async function convertToUsd(amount: number, currency: string, sdk: ClientSdk): Promise<number> {
+    if (currency === 'USD') return amount;
+
+    const cached = rateCache.get(currency);
+    if (cached && cached.expires > Date.now()) {
+        return amount * cached.rate;
+    }
+
+    try {
+        const currencies = await sdk.currencies();
+        const c = await currencies.getCurrency(currency);
+        const rate = c.rateUsd;
+        if (!rate || rate <= 0) return amount;
+        rateCache.set(currency, { rate, expires: Date.now() + 3_600_000 });
+        return amount * rate;
+    } catch {
+        logger.warn('tiers', `currency conversion failed for ${currency}, treating as USD`);
+        return amount;
+    }
 }
 
 export function autoPromoteTier(telegramId: number, realBalance: number, currentTier: string): string | null {
