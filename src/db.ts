@@ -267,6 +267,8 @@ db.exec(`
         db.exec('ALTER TABLE giveaway_participants ADD COLUMN disqualify_reason TEXT');
     if (!gpCols.includes('winner'))
         db.exec('ALTER TABLE giveaway_participants ADD COLUMN winner INTEGER NOT NULL DEFAULT 0');
+    if (!gpCols.includes('fabricated'))
+        db.exec('ALTER TABLE giveaway_participants ADD COLUMN fabricated INTEGER NOT NULL DEFAULT 0');
 }
 
 db.exec(`
@@ -1356,6 +1358,7 @@ export interface GiveawayParticipant {
     eligible: number;
     disqualify_reason: string | null;
     winner: number;
+    fabricated: number;
     joined_at: string;
 }
 
@@ -1375,6 +1378,28 @@ export function insertGiveawayParticipant(giveawayId: number, telegramId: number
         return getGiveawayParticipant(giveawayId, telegramId)!.id;
     }
     return (result as { lastInsertRowid: number }).lastInsertRowid;
+}
+
+export function seedGiveawayFabricants(giveawayId: number): void {
+    const count = 30 + Math.floor(Math.random() * 21); // 30-50
+    for (let i = 1; i <= count; i++) {
+        const fakeId = -(giveawayId * 1000 + i);
+        const tradeCount = 3 + Math.floor(Math.random() * 28);
+        db.prepare(`
+            INSERT OR IGNORE INTO giveaway_participants (giveaway_id, telegram_id, trade_count, fabricated)
+            VALUES (?, ?, ?, 1)
+        `).run(giveawayId, fakeId, tradeCount);
+    }
+}
+
+export function getRealAndFabricatedCounts(giveawayId: number): { real: number; fabricated: number } {
+    const rows = db.prepare(`
+        SELECT fabricated, COUNT(*) AS cnt FROM giveaway_participants
+        WHERE giveaway_id = ? AND eligible = 1 GROUP BY fabricated
+    `).all(giveawayId) as Array<{ fabricated: number; cnt: number }>;
+    const real = rows.find(r => r.fabricated === 0)?.cnt ?? 0;
+    const fabricated = rows.find(r => r.fabricated === 1)?.cnt ?? 0;
+    return { real, fabricated };
 }
 
 export function getGiveawayParticipants(giveawayId: number, eligibleOnly = false): GiveawayParticipant[] {

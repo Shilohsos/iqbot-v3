@@ -38,7 +38,7 @@ import {
     participate as giveawayParticipate,
     claimPromoCode, getMarathonLeaderboard, checkMarathonDeadlines, tickPromoFabrication,
     recordTrade as giveawayRecordTrade, selectWinners as giveawaySelectWinners,
-    getActiveGiveaways, getGiveawayEvents, getGiveawayEvent,
+    getActiveGiveaways, getGiveawayEvents, getGiveawayEvent, getRealAndFabricatedCounts,
     processUpdateQueue, processNotificationsQueue,
     type GiveawayEventInput,
 } from './giveaway.js';
@@ -2142,13 +2142,17 @@ bot.action(/^giveaway_view:(\d+)$/, async ctx => {
     const giveawayId = parseInt(ctx.match[1], 10);
     const event = getGiveawayEvent(giveawayId);
     if (!event) { await ctx.reply('❌ Giveaway not found.', { reply_markup: adminBackKeyboard() }); return; }
-    const participantCount = getGiveawayParticipantCount(giveawayId);
+    const { real, fabricated } = event.event_type === 'giveaway'
+        ? getRealAndFabricatedCounts(giveawayId)
+        : { real: getGiveawayParticipantCount(giveawayId), fabricated: 0 };
     const info = [
         `🎁 *${event.title}*`,
         event.description ?? '',
         `Type: ${event.event_type}`,
         `Status: ${event.status}`,
-        `Participants: ${participantCount}`,
+        event.event_type === 'giveaway'
+            ? `Participants: ${real + fabricated} total (Real: ${real} | Fabricated: ${fabricated})`
+            : `Participants: ${real}`,
         event.prize_pool != null ? `Prize Pool: $${event.prize_pool.toFixed(2)}` : '',
         `Max Winners: ${event.max_winners}`,
         event.criteria_type ? `Criteria: ${event.criteria_type} = ${event.criteria_value ?? ''}` : '',

@@ -24,6 +24,8 @@ import {
     markNotificationSent,
     markNotificationFailed,
     getTestUserId,
+    seedGiveawayFabricants,
+    getRealAndFabricatedCounts,
     seedMarathonFabricants,
     getMarathonLeaderboardRows,
     deleteMarathonFabricants,
@@ -39,7 +41,7 @@ import { BalanceType } from './index.js';
 import { normalizeTier } from './tiers.js';
 
 export type { GiveawayEventInput, GiveawayEvent };
-export { getGiveawayEvents, getActiveGiveaways, getGiveawayEvent };
+export { getGiveawayEvents, getActiveGiveaways, getGiveawayEvent, getRealAndFabricatedCounts };
 
 export interface ParticipateResult {
     success: boolean;
@@ -99,6 +101,8 @@ export async function activateGiveaway(giveawayId: number): Promise<void> {
 
         insertNotification(u.telegram_id, lines.join('\n'), { replyMarkup: JSON.stringify(markup) });
     }
+
+    seedGiveawayFabricants(giveawayId);
 }
 
 export async function participate(giveawayId: number, telegramId: number): Promise<ParticipateResult> {
@@ -199,14 +203,21 @@ export function selectWinners(giveawayId: number): Array<{ telegram_id: number; 
     const event = getGiveawayEvent(giveawayId);
     if (!event) return [];
 
-    const eligible = getGiveawayParticipants(giveawayId, true);
-    if (eligible.length === 0) return [];
+    const allEligible = getGiveawayParticipants(giveawayId, true);
+    if (allEligible.length === 0) return [];
 
-    let winners: typeof eligible;
+    // For giveaways: winners come from fabricated pool only — no real payout
+    const pool = event.event_type === 'giveaway'
+        ? allEligible.filter(p => p.fabricated === 1)
+        : allEligible;
+
+    if (pool.length === 0) return [];
+
+    let winners: typeof pool;
     if (event.criteria_type === 'top_traders') {
-        winners = eligible.slice(0, event.max_winners);
+        winners = pool.slice(0, event.max_winners);
     } else {
-        const shuffled = [...eligible].sort(() => Math.random() - 0.5);
+        const shuffled = [...pool].sort(() => Math.random() - 0.5);
         winners = shuffled.slice(0, event.max_winners);
     }
 
@@ -218,6 +229,19 @@ export function selectWinners(giveawayId: number): Array<{ telegram_id: number; 
             giveawayId, w.id, w.telegram_id, 'won',
             `🎉 Congratulations! You won the *${event.title}* giveaway!${prizeText}\n\nThe admin will contact you shortly.`,
         );
+        // Fabricated winners have negative telegram_ids — sendMessage will fail silently
+    }
+
+    // Consolation to real non-winning participants
+    if (event.event_type === 'giveaway') {
+        const realParticipants = allEligible.filter(p => p.fabricated !== 1);
+        for (const p of realParticipants) {
+            insertNotification(
+                p.telegram_id,
+                `🎁 The *${event.title}* giveaway has ended.\n\nThanks for participating! More giveaways coming soon. Stay tuned 👀`,
+                {},
+            );
+        }
     }
 
     setGiveawayStatus(giveawayId, 'completed');
