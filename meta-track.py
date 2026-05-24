@@ -32,8 +32,21 @@ def track():
     data = request.get_json(silent=True) or {}
     event_name = data.get("event_name", "ViewContent")
     event_source_url = data.get("event_source_url", request.headers.get("Referer", ""))
-    client_ip = request.headers.get("X-Forwarded-For", request.remote_addr) or ""
+    # CF-Connecting-IP carries the real visitor IP when behind Cloudflare
+    client_ip = (request.headers.get("CF-Connecting-IP") or
+                 request.headers.get("X-Forwarded-For", request.remote_addr) or "")
     client_ua = request.headers.get("User-Agent", "")
+
+    # Build user_data — omit keys with empty values so Meta ignores missing params
+    # rather than counting them as mismatches
+    user_data: dict = {
+        "client_ip_address": client_ip,
+        "client_user_agent": client_ua,
+    }
+    for field in ("fbc", "fbp", "em", "ph"):
+        val = data.get(field, "")
+        if val:
+            user_data[field] = val
 
     # Build CAPI payload
     payload = {
@@ -42,12 +55,7 @@ def track():
             "event_time": int(time.time()),
             "action_source": "website",
             "event_source_url": event_source_url,
-            "user_data": {
-                "client_ip_address": client_ip,
-                "client_user_agent": client_ua,
-                "fbc": data.get("fbc", ""),
-                "fbp": data.get("fbp", ""),
-            },
+            "user_data": user_data,
             "custom_data": data.get("custom_data", {}),
         }]
     }
