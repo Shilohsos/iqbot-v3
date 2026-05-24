@@ -36,7 +36,7 @@ import { logger } from './logger.js';
 import {
     createGiveawayEvent, activateGiveaway, activatePromoCode, activateMarathon,
     participate as giveawayParticipate,
-    claimPromoCode, getMarathonLeaderboard, checkMarathonDeadlines,
+    claimPromoCode, getMarathonLeaderboard, checkMarathonDeadlines, tickPromoFabrication,
     recordTrade as giveawayRecordTrade, selectWinners as giveawaySelectWinners,
     getActiveGiveaways, getGiveawayEvents, getGiveawayEvent,
     processUpdateQueue, processNotificationsQueue,
@@ -3362,6 +3362,12 @@ setInterval(async () => {
         console.error('[marathon] deadline check error:', err instanceof Error ? err.message : err);
     }
 }, 5 * 60_000);
+
+setInterval(async () => {
+    try { await tickPromoFabrication(); } catch (err) {
+        console.error('[promo] fabrication tick error:', err instanceof Error ? err.message : err);
+    }
+}, 10 * 60_000);
 
 // ─── Keepalive ────────────────────────────────────────────────────────────────
 

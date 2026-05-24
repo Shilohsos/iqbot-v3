@@ -27,6 +27,10 @@ import {
     seedMarathonFabricants,
     getMarathonLeaderboardRows,
     deleteMarathonFabricants,
+    setPromoFabricatedClaims,
+    incrementPromoFabricatedClaims,
+    markPromoUrgencySent,
+    getActivePromosDueForFabTick,
     type GiveawayEventInput,
     type GiveawayEvent,
 } from './db.js';
@@ -288,6 +292,15 @@ export async function activatePromoCode(giveawayId: number): Promise<void> {
 
         insertNotification(u.telegram_id, lines.join('\n'), { replyMarkup: JSON.stringify(markup) });
     }
+
+    // Seed initial fabricated claims (20-30% of max_winners)
+    const max = event.max_winners ?? 0;
+    if (max > 0) {
+        const initial = Math.floor(max * (0.20 + Math.random() * 0.10));
+        const firstTickMs = (10 + Math.floor(Math.random() * 5)) * 60_000;
+        const firstTickAt = new Date(Date.now() + firstTickMs).toISOString().replace('T', ' ').split('.')[0];
+        setPromoFabricatedClaims(giveawayId, initial, firstTickAt);
+    }
 }
 
 export async function activateMarathon(giveawayId: number): Promise<void> {
@@ -412,29 +425,68 @@ export async function processUpdateQueue(telegram: Telegram): Promise<void> {
         }
     }
 
-    // Social proof: send random participant count bursts to a sample of active giveaway participants
-    const testUserId = getTestUserId();
-    const activeGiveaways = getActiveGiveaways();
-    for (const event of activeGiveaways) {
-        const count = getGiveawayParticipantCount(event.id);
-        if (count < 2) continue;
+}
 
-        const participants = getGiveawayParticipants(event.id, true);
-        const batchSize = Math.min(participants.length, 2 + Math.floor(Math.random() * 15));
-        const rawBatch = [...participants].sort(() => Math.random() - 0.5).slice(0, batchSize);
-        const batch = testUserId ? rawBatch.filter(p => p.telegram_id === testUserId) : rawBatch;
-        if (batch.length === 0) continue;
+export async function tickPromoFabrication(): Promise<void> {
+    const promos = getActivePromosDueForFabTick();
+    for (const event of promos) {
+        const max = event.max_winners ?? 0;
+        if (max === 0) continue;
 
-        const fakeCount = count + Math.floor(Math.random() * 12);
-        const msg = Math.random() > 0.5
-            ? `🔥 ${fakeCount} people just joined the giveaway`
-            : `📊 ${count} users now participating`;
+        const targetMax = Math.floor(max * 0.92);
+        if (event.fabricated_claims >= targetMax) continue;
 
-        for (const p of batch) {
-            try {
-                await telegram.sendMessage(p.telegram_id, msg);
-            } catch {
-                // ignore
+        // Pace: spread remaining fabricated claims across remaining time
+        let increment = 1;
+        const remaining_to_add = targetMax - event.fabricated_claims;
+        if (event.ends_at) {
+            const now = Date.now();
+            const remaining_ms = Math.max(0, new Date(event.ends_at).getTime() - now);
+            if (remaining_ms > 0) {
+                const ticks_left = Math.max(1, remaining_ms / (12.5 * 60_000));
+                increment = Math.max(1, Math.min(5, Math.ceil(remaining_to_add / ticks_left)));
+            }
+        }
+
+        const newFab = Math.min(targetMax, event.fabricated_claims + increment);
+        const nextTickMs = (10 + Math.floor(Math.random() * 6)) * 60_000;
+        const nextTickAt = new Date(Date.now() + nextTickMs).toISOString().replace('T', ' ').split('.')[0];
+        incrementPromoFabricatedClaims(event.id, newFab - event.fabricated_claims, nextTickAt);
+
+        // Urgency notifications — each threshold fires only once
+        const realClaims = getGiveawayParticipantCount(event.id);
+        const remaining = max - realClaims - newFab;
+
+        const testUserId = getTestUserId();
+        if (testUserId) console.log(`[test-mode] promo urgency sending only to test user ${testUserId}`);
+        const audience = testUserId
+            ? [{ telegram_id: testUserId }]
+            : getApprovedUsersWithTier();
+
+        const claimBtn = (label: string) => JSON.stringify({
+            inline_keyboard: [[{ text: label, callback_data: `promo:claim:${event.id}` }]],
+        });
+
+        if (remaining <= 1 && !event.urgency_1_sent) {
+            markPromoUrgencySent(event.id, 1);
+            for (const u of audience) {
+                insertNotification(u.telegram_id,
+                    `🏃 *Last promo code — grab it now!*\n\n*${event.title}*\n\nOnly 1 left!`,
+                    { replyMarkup: claimBtn('🏃 Grab It Now') });
+            }
+        } else if (remaining <= 5 && !event.urgency_5_sent) {
+            markPromoUrgencySent(event.id, 5);
+            for (const u of audience) {
+                insertNotification(u.telegram_id,
+                    `🔥 *Only 5 promo codes remaining!*\n\n*${event.title}*\n\nGrab yours before they're gone!`,
+                    { replyMarkup: claimBtn('🔥 Claim Now') });
+            }
+        } else if (remaining <= 10 && !event.urgency_10_sent) {
+            markPromoUrgencySent(event.id, 10);
+            for (const u of audience) {
+                insertNotification(u.telegram_id,
+                    `⚠️ *Only 10 promo codes left!*\n\n*${event.title}*\n\nRunning out fast — claim yours now!`,
+                    { replyMarkup: claimBtn('⚠️ Claim Code') });
             }
         }
     }

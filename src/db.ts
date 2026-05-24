@@ -182,6 +182,16 @@ db.exec(`
   )
 `);
 
+// Promo fabrication columns (added after initial schema)
+{
+    const cols = (db.prepare('PRAGMA table_info(giveaway_events)').all() as { name: string }[]).map(c => c.name);
+    if (!cols.includes('fabricated_claims'))  db.exec('ALTER TABLE giveaway_events ADD COLUMN fabricated_claims  INTEGER NOT NULL DEFAULT 0');
+    if (!cols.includes('urgency_10_sent'))    db.exec('ALTER TABLE giveaway_events ADD COLUMN urgency_10_sent    INTEGER NOT NULL DEFAULT 0');
+    if (!cols.includes('urgency_5_sent'))     db.exec('ALTER TABLE giveaway_events ADD COLUMN urgency_5_sent     INTEGER NOT NULL DEFAULT 0');
+    if (!cols.includes('urgency_1_sent'))     db.exec('ALTER TABLE giveaway_events ADD COLUMN urgency_1_sent     INTEGER NOT NULL DEFAULT 0');
+    if (!cols.includes('fab_next_tick_at'))   db.exec('ALTER TABLE giveaway_events ADD COLUMN fab_next_tick_at   TEXT');
+}
+
 db.exec(`
   CREATE TABLE IF NOT EXISTS giveaway_participants (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1253,6 +1263,11 @@ export interface GiveawayEvent {
     ends_at: string | null;
     winner_count: number;
     created_at: string;
+    fabricated_claims: number;
+    urgency_10_sent: number;
+    urgency_5_sent: number;
+    urgency_1_sent: number;
+    fab_next_tick_at: string | null;
 }
 
 export interface GiveawayEventInput {
@@ -1311,6 +1326,26 @@ export function setGiveawayStatus(id: number, status: string): void {
 
 export function incrementGiveawayWinnerCount(id: number): void {
     db.prepare('UPDATE giveaway_events SET winner_count = winner_count + 1 WHERE id = ?').run(id);
+}
+
+export function setPromoFabricatedClaims(id: number, claims: number, nextTickAt: string): void {
+    db.prepare('UPDATE giveaway_events SET fabricated_claims = ?, fab_next_tick_at = ? WHERE id = ?').run(claims, nextTickAt, id);
+}
+
+export function incrementPromoFabricatedClaims(id: number, increment: number, nextTickAt: string): void {
+    db.prepare('UPDATE giveaway_events SET fabricated_claims = fabricated_claims + ?, fab_next_tick_at = ? WHERE id = ?').run(increment, nextTickAt, id);
+}
+
+export function markPromoUrgencySent(id: number, threshold: 10 | 5 | 1): void {
+    db.prepare(`UPDATE giveaway_events SET urgency_${threshold}_sent = 1 WHERE id = ?`).run(id);
+}
+
+export function getActivePromosDueForFabTick(): GiveawayEvent[] {
+    return db.prepare(`
+        SELECT * FROM giveaway_events
+        WHERE status = 'active' AND event_type = 'promo_code'
+        AND fab_next_tick_at IS NOT NULL AND fab_next_tick_at <= datetime('now')
+    `).all() as GiveawayEvent[];
 }
 
 export interface GiveawayParticipant {
