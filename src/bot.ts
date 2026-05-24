@@ -30,6 +30,7 @@ import {
     getUserMartingaleSettings, setUserMartingaleSettings,
     getUserSessionStats, addUserSessionStats,
     getUserBalanceCache, setUserBalanceCache, clearUserBalanceCache,
+    getComposeTone, setComposeTone,
 } from './db.js';
 import { friendlyError } from './errors.js';
 import { logger } from './logger.js';
@@ -58,7 +59,7 @@ import {
     giveawayManagerKeyboard, giveawayTypeKeyboard, giveawayCriteriaKeyboard,
     giveawayScheduleKeyboard, activeGiveawaysKeyboard,
     promoScheduleKeyboard, marathonDurationKeyboard, marathonScheduleKeyboard,
-    composeTopicKeyboard, composeResultKeyboard, composeDeliveryKeyboard,
+    composeTopicKeyboard, composeResultKeyboard, composeDeliveryKeyboard, composeToneKeyboard,
 } from './ui/admin.js';
 import { checkAffiliate } from './affiliate.js';
 import { setupChannelHandlers, startWelcomeFollowUp } from './channel.js';
@@ -198,7 +199,11 @@ type AdminStep =
     | 'marathon_v2_winners'
     | 'marathon_v2_prize'
     | 'compose_description'
-    | 'compose_image';
+    | 'compose_image'
+    | 'compose_tone_guide'
+    | 'compose_tone_sample1'
+    | 'compose_tone_sample2'
+    | 'compose_tone_sample3';
 
 interface AdminSessionState {
     step: AdminStep;
@@ -1713,14 +1718,21 @@ const ACTION_MAP: Record<string, { text: string; value: string }> = {
     menu:        { text: '📋 Menu',        value: 'ui:start' },
 };
 
-bot.action(/^broadcast_action:(trade|stats|history|leaderboard|menu)$/, async ctx => {
+bot.action(/^broadcast_action:(trade|stats|history|leaderboard|menu|start)$/, async ctx => {
     await ctx.answerCbQuery();
     const key = ctx.match[1];
-    const action = ACTION_MAP[key];
     const pending = pendingBroadcasts.get(ctx.chat!.id);
-    if (!pending || !action) { await ctx.reply('❌ Session expired.', { reply_markup: adminBackKeyboard() }); return; }
-    pendingBroadcasts.set(ctx.chat!.id, { ...pending, button: { text: action.text, type: 'callback', value: action.value } });
-    await ctx.reply(`✅ Button set: *${action.text}*\n\n⏱ Auto-delete after?`, { parse_mode: 'Markdown', reply_markup: broadcastTimerKeyboard() });
+    if (!pending) { await ctx.reply('❌ Session expired.', { reply_markup: adminBackKeyboard() }); return; }
+    if (key === 'start') {
+        const botUsername = process.env.BOT_USERNAME ?? 'Shiloh10xbot';
+        pendingBroadcasts.set(ctx.chat!.id, { ...pending, button: { text: '🚀 Start Bot', type: 'url', value: `https://t.me/${botUsername}?start=` } });
+        await ctx.reply(`✅ Button set: *🚀 Start Bot*\n\n⏱ Auto-delete after?`, { parse_mode: 'Markdown', reply_markup: broadcastTimerKeyboard() });
+    } else {
+        const action = ACTION_MAP[key];
+        if (!action) { await ctx.reply('❌ Session expired.', { reply_markup: adminBackKeyboard() }); return; }
+        pendingBroadcasts.set(ctx.chat!.id, { ...pending, button: { text: action.text, type: 'callback', value: action.value } });
+        await ctx.reply(`✅ Button set: *${action.text}*\n\n⏱ Auto-delete after?`, { parse_mode: 'Markdown', reply_markup: broadcastTimerKeyboard() });
+    }
 });
 
 // Custom timer
@@ -2528,6 +2540,52 @@ bot.action(/^compose_delivery:(bot|channel|both)$/, async ctx => {
     await ctx.reply(summary, { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
 });
 
+// ─── Module 13: Compose Tone Settings ────────────────────────────────────────
+
+bot.action('admin:compose_tone', async ctx => {
+    await ctx.answerCbQuery();
+    await ctx.reply('🎭 *Tone Settings*\n\nTrain the AI to match your voice.', {
+        parse_mode: 'Markdown',
+        reply_markup: composeToneKeyboard(),
+    });
+});
+
+bot.action('compose_tone:guide', async ctx => {
+    await ctx.answerCbQuery();
+    adminSessions.set(ctx.chat!.id, { step: 'compose_tone_guide' });
+    await ctx.reply('📝 Enter your style guide (e.g. "Streetwise, aggressive, use slang, short punchy sentences"):');
+});
+
+bot.action('compose_tone:sample1', async ctx => {
+    await ctx.answerCbQuery();
+    adminSessions.set(ctx.chat!.id, { step: 'compose_tone_sample1' });
+    await ctx.reply('📄 Paste *Sample Post 1* — an example in the exact voice you want:', { parse_mode: 'Markdown' });
+});
+
+bot.action('compose_tone:sample2', async ctx => {
+    await ctx.answerCbQuery();
+    adminSessions.set(ctx.chat!.id, { step: 'compose_tone_sample2' });
+    await ctx.reply('📄 Paste *Sample Post 2* — another example in your voice:', { parse_mode: 'Markdown' });
+});
+
+bot.action('compose_tone:sample3', async ctx => {
+    await ctx.answerCbQuery();
+    adminSessions.set(ctx.chat!.id, { step: 'compose_tone_sample3' });
+    await ctx.reply('📄 Paste *Sample Post 3* — one more example:', { parse_mode: 'Markdown' });
+});
+
+bot.action('compose_tone:view', async ctx => {
+    await ctx.answerCbQuery();
+    const tone = getComposeTone();
+    const truncate = (s: string, n = 200) => s.length > n ? s.slice(0, n) + '…' : s;
+    let msg = '🎭 *Current Tone Profile*\n\n';
+    msg += tone.styleGuide ? `*Style Guide:*\n${truncate(tone.styleGuide)}\n\n` : '*Style Guide:* _(not set)_\n\n';
+    msg += tone.sample1   ? `*Sample 1:*\n${truncate(tone.sample1)}\n\n` : '*Sample 1:* _(not set)_\n\n';
+    msg += tone.sample2   ? `*Sample 2:*\n${truncate(tone.sample2)}\n\n` : '*Sample 2:* _(not set)_\n\n';
+    msg += tone.sample3   ? `*Sample 3:*\n${truncate(tone.sample3)}` : '*Sample 3:* _(not set)_';
+    await ctx.reply(msg, { parse_mode: 'Markdown', reply_markup: composeToneKeyboard() });
+});
+
 // ─── /connect & /disconnect ───────────────────────────────────────────────────
 
 bot.command('connect', async ctx => {
@@ -3035,6 +3093,39 @@ bot.on('text', async ctx => {
                     `📤 *Send to:*`,
                     { parse_mode: 'Markdown', reply_markup: composeDeliveryKeyboard() }
                 );
+                return;
+            }
+
+            // ── Compose tone wizard text steps ────────────────────────────────
+            if (as.step === 'compose_tone_guide') {
+                if (!text.trim()) { await ctx.reply('❌ Please enter a style guide:'); return; }
+                setComposeTone({ styleGuide: text.trim() });
+                adminSessions.delete(chatId);
+                await ctx.reply('✅ Style guide saved!', { reply_markup: composeToneKeyboard() });
+                return;
+            }
+
+            if (as.step === 'compose_tone_sample1') {
+                if (!text.trim()) { await ctx.reply('❌ Please paste a sample post:'); return; }
+                setComposeTone({ sample1: text.trim() });
+                adminSessions.delete(chatId);
+                await ctx.reply('✅ Sample 1 saved!', { reply_markup: composeToneKeyboard() });
+                return;
+            }
+
+            if (as.step === 'compose_tone_sample2') {
+                if (!text.trim()) { await ctx.reply('❌ Please paste a sample post:'); return; }
+                setComposeTone({ sample2: text.trim() });
+                adminSessions.delete(chatId);
+                await ctx.reply('✅ Sample 2 saved!', { reply_markup: composeToneKeyboard() });
+                return;
+            }
+
+            if (as.step === 'compose_tone_sample3') {
+                if (!text.trim()) { await ctx.reply('❌ Please paste a sample post:'); return; }
+                setComposeTone({ sample3: text.trim() });
+                adminSessions.delete(chatId);
+                await ctx.reply('✅ Sample 3 saved!', { reply_markup: composeToneKeyboard() });
                 return;
             }
 

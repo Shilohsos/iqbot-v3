@@ -110,6 +110,7 @@ export function broadcastActionKeyboard(): IKMarkup {
             [{ text: '📆 History',      callback_data: 'broadcast_action:history' }],
             [{ text: '🏆 Leaderboard',  callback_data: 'broadcast_action:leaderboard' }],
             [{ text: '📋 Menu',         callback_data: 'broadcast_action:menu' }],
+            [{ text: '🚀 Start Bot',    callback_data: 'broadcast_action:start' }],
         ],
     };
 }
@@ -304,11 +305,25 @@ export function memberManagementKeyboard(): IKMarkup {
 export function composeTopicKeyboard(): IKMarkup {
     return {
         inline_keyboard: [
-            [{ text: '⭐ Reviews',    callback_data: 'compose_topic:reviews' }],
-            [{ text: '💪 Motivation', callback_data: 'compose_topic:motivation' }],
-            [{ text: '💰 Trade Wins', callback_data: 'compose_topic:trade_win' }],
-            [{ text: '🏖️ Life Wins', callback_data: 'compose_topic:life_win' }],
-            [{ text: '🔙 Admin Menu', callback_data: 'admin:back' }],
+            [{ text: '⭐ Reviews',        callback_data: 'compose_topic:reviews' }],
+            [{ text: '💪 Motivation',     callback_data: 'compose_topic:motivation' }],
+            [{ text: '💰 Trade Wins',     callback_data: 'compose_topic:trade_win' }],
+            [{ text: '🏖️ Life Wins',     callback_data: 'compose_topic:life_win' }],
+            [{ text: '🎭 Tone Settings',  callback_data: 'admin:compose_tone' }],
+            [{ text: '🔙 Admin Menu',     callback_data: 'admin:back' }],
+        ],
+    };
+}
+
+export function composeToneKeyboard(): IKMarkup {
+    return {
+        inline_keyboard: [
+            [{ text: '📝 Edit Style Guide', callback_data: 'compose_tone:guide' }],
+            [{ text: '📄 Sample Post 1',    callback_data: 'compose_tone:sample1' }],
+            [{ text: '📄 Sample Post 2',    callback_data: 'compose_tone:sample2' }],
+            [{ text: '📄 Sample Post 3',    callback_data: 'compose_tone:sample3' }],
+            [{ text: '👁️ View Current Tone', callback_data: 'compose_tone:view' }],
+            [{ text: '🔙 Compose Post',     callback_data: 'admin:compose' }],
         ],
     };
 }

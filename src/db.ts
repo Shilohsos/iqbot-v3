@@ -162,6 +162,18 @@ db.exec(`
   )
 `);
 
+db.exec(`
+  CREATE TABLE IF NOT EXISTS compose_tone (
+    id          INTEGER PRIMARY KEY CHECK (id = 1),
+    style_guide TEXT NOT NULL DEFAULT '',
+    sample_1    TEXT NOT NULL DEFAULT '',
+    sample_2    TEXT NOT NULL DEFAULT '',
+    sample_3    TEXT NOT NULL DEFAULT '',
+    updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+  )
+`);
+db.prepare('INSERT OR IGNORE INTO compose_tone (id) VALUES (1)').run();
+
 // ─── V4 tables ───────────────────────────────────────────────────────────────
 
 db.exec(`
@@ -1616,6 +1628,38 @@ export function markBroadcastSent(id: number, count: number): void {
 
 export function updateBroadcastImageFileId(id: number, imageFileId: string): void {
     db.prepare('UPDATE broadcast_messages SET image_file_id = ? WHERE id = ?').run(imageFileId, id);
+}
+
+export interface ComposeTone {
+    styleGuide: string;
+    sample1: string;
+    sample2: string;
+    sample3: string;
+}
+
+export function getComposeTone(): ComposeTone {
+    const row = db.prepare('SELECT style_guide, sample_1, sample_2, sample_3 FROM compose_tone WHERE id = 1').get() as {
+        style_guide: string; sample_1: string; sample_2: string; sample_3: string;
+    } | undefined;
+    return {
+        styleGuide: row?.style_guide ?? '',
+        sample1:    row?.sample_1   ?? '',
+        sample2:    row?.sample_2   ?? '',
+        sample3:    row?.sample_3   ?? '',
+    };
+}
+
+export function setComposeTone(fields: Partial<{ styleGuide: string; sample1: string; sample2: string; sample3: string }>): void {
+    const current = getComposeTone();
+    db.prepare(`
+        INSERT OR REPLACE INTO compose_tone (id, style_guide, sample_1, sample_2, sample_3, updated_at)
+        VALUES (1, ?, ?, ?, ?, datetime('now'))
+    `).run(
+        fields.styleGuide ?? current.styleGuide,
+        fields.sample1    ?? current.sample1,
+        fields.sample2    ?? current.sample2,
+        fields.sample3    ?? current.sample3,
+    );
 }
 
 export function getGiveawayStats(): { active: number; scheduled: number; completed: number } {
