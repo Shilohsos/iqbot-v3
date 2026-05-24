@@ -1,8 +1,9 @@
 import { Telegraf } from 'telegraf';
 import { insertFunnelEvent, getRecentlyApprovedUsers, userHasActivity } from './db.js';
+import { onboardKeyboard } from './ui/user.js';
 
 const CHANNEL_ID = parseInt(process.env.CHANNEL_ID ?? '-1002766084283', 10);
-const ADMIN_CONTACT_LINK = process.env.ADMIN_CONTACT_LINK ?? 'https://t.me/shiloh_is_10xing';
+const ASSETS_DIR = process.env.ASSETS_DIR ?? '/root/iqbot-v3/assets';
 
 export function setupChannelHandlers(bot: Telegraf): void {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -22,34 +23,42 @@ export function setupChannelHandlers(bot: Telegraf): void {
             await ctx.telegram.approveChatJoinRequest(chatId, userId);
             console.log(`[channel] auto-approved user ${userId}`);
             insertFunnelEvent('channel_join_approved', JSON.stringify({ telegram_id: userId }));
-            await sendWelcomeMessage(ctx.telegram, userId);
+            await sendOnboarding(ctx.telegram, userId);
         } catch (err) {
             console.error(`[channel] failed to approve user ${userId}:`, err instanceof Error ? err.message : err);
         }
     });
 }
 
-async function sendWelcomeMessage(telegram: Telegraf['telegram'], userId: number): Promise<void> {
-    const welcomeText =
-        `🎉 *Welcome to 10x Signals!*\n\n` +
-        `You're now in the #1 IQ Option trading community.\n\n` +
-        `The 10x bot places high-probability trades using real market analysis:\n` +
-        `• RSI + EMA + MACD + Bollinger Bands\n` +
-        `• Smart Recovery (martingale)\n` +
-        `• Live & Demo trading\n\n` +
-        `*Start trading in 60 seconds 👇*`;
-
+/**
+ * Send the same onboarding flow that /start triggers for new/unconnected users.
+ * This is the full funnel experience — brand intro → account connection choice.
+ */
+async function sendOnboarding(telegram: Telegraf['telegram'], userId: number): Promise<void> {
     try {
-        await telegram.sendMessage(userId, welcomeText, {
-            parse_mode: 'Markdown',
-            reply_markup: {
-                inline_keyboard: [[{ text: '🚀 Start Trading Now', callback_data: 'ui:trade' }]],
-            },
-        });
-        console.log(`[channel] welcome message sent to ${userId}`);
+        // L1 — Welcome brand intro
+        try { await telegram.sendPhoto(userId, { source: `${ASSETS_DIR}/L1.png` }); } catch {}
+        await telegram.sendMessage(userId,
+            `I'm 10x Special Bot.\n\n` +
+            `The smartest semi auto-trading bot for IQ Option OTC pairs.\n\n` +
+            `I scan markets. I read signals. I place trades.\n` +
+            `You sit back and watch the wins land.`
+        );
+
+        // L3 — Link Your Account
+        try { await telegram.sendPhoto(userId, { source: `${ASSETS_DIR}/L3.png` }); } catch {}
+        await telegram.sendMessage(userId,
+            `Connect your IQ Option account.\n\n` +
+            `Free signup · 60 seconds · Linked instantly.\n` +
+            `Bot trades on your account. Money stays yours.\n\n` +
+            `Pick what fits 👇`,
+            { reply_markup: onboardKeyboard() }
+        );
+
+        console.log(`[channel] onboarding sent to ${userId}`);
         insertFunnelEvent('channel_welcome_sent', JSON.stringify({ telegram_id: userId }));
     } catch (err) {
-        console.error(`[channel] failed to send welcome to ${userId}:`, err instanceof Error ? err.message : err);
+        console.error(`[channel] failed to send onboarding to ${userId}:`, err instanceof Error ? err.message : err);
     }
 }
 
@@ -76,7 +85,7 @@ export function startWelcomeFollowUp(bot: Telegraf): void {
                             reply_markup: {
                                 inline_keyboard: [[
                                     { text: '🔗 Connect IQ Option', callback_data: 'ui:trade' },
-                                    { text: '👤 Contact Admin', url: ADMIN_CONTACT_LINK },
+                                    { text: '👤 Contact Admin', url: process.env.ADMIN_CONTACT_LINK ?? 'https://t.me/shiloh_is_10xing' },
                                 ]],
                             },
                         }

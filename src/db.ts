@@ -556,6 +556,20 @@ export function getAllUserIds(): number[] {
     return (db.prepare('SELECT telegram_id FROM users').all() as { telegram_id: number }[]).map(r => r.telegram_id);
 }
 
+/** Users who have connected an IQ Option account (ssid set) */
+export function getActivatedUserIds(): number[] {
+    return (db.prepare(
+        "SELECT telegram_id FROM users WHERE ssid IS NOT NULL AND ssid != ''"
+    ).all() as { telegram_id: number }[]).map(r => r.telegram_id);
+}
+
+/** Users who have NOT connected an IQ Option account OR were rejected */
+export function getNonActivatedUserIds(): number[] {
+    return (db.prepare(
+        "SELECT telegram_id FROM users WHERE ssid IS NULL OR ssid = '' OR approval_status = 'rejected'"
+    ).all() as { telegram_id: number }[]).map(r => r.telegram_id);
+}
+
 export function getActiveTraderIds(hours = 5): number[] {
     return (db.prepare(`
         SELECT DISTINCT telegram_id FROM trades

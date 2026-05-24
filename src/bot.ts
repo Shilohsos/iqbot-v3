@@ -9,6 +9,7 @@ import {
     getRecentTrades, getTradeStats, getTopTradersToday,
     getUser, saveUser, saveUsername, deleteUser, getAllUsers, getAllUserIds,
     getActiveTraderIds, getInactiveTraderIds, findUsersByUsername,
+    getActivatedUserIds, getNonActivatedUserIds,
     upsertOnboardingUser, approveUser, setManualApproval, rejectUser, resetUser, getApprovalStats,
     getRecentApprovals, getPendingManualUsers,
     setUserTier, saveUserCurrency, pauseUser, resumeUser,
@@ -200,7 +201,7 @@ type AdminStep =
 
 interface AdminSessionState {
     step: AdminStep;
-    broadcastTarget?: 'active' | 'inactive' | 'all';
+    broadcastTarget?: 'active' | 'inactive' | 'activated' | 'nonactivated' | 'all';
     broadcastLinkUrl?: string;
     manualAddUserId?: number;
     editTraderTelegramId?: number;
@@ -1645,9 +1646,9 @@ bot.action('admin:broadcast', async ctx => {
     await ctx.reply('📢 *Broadcast* — Select target group:', { parse_mode: 'Markdown', reply_markup: broadcastTargetKeyboard() });
 });
 
-bot.action(/^broadcast:(active|inactive|all)$/, async ctx => {
+bot.action(/^broadcast:(active|inactive|activated|nonactivated|all)$/, async ctx => {
     await ctx.answerCbQuery();
-    const target = ctx.match[1] as 'active' | 'inactive' | 'all';
+    const target = ctx.match[1] as 'active' | 'inactive' | 'activated' | 'nonactivated' | 'all';
     adminSessions.set(ctx.chat!.id, { step: 'broadcast_message', broadcastTarget: target });
     await ctx.reply(`📝 Send your broadcast message for *${target}* users:`, { parse_mode: 'Markdown' });
 });
@@ -2543,6 +2544,8 @@ bot.command('refresh', async ctx => {
 // ─── Broadcast media handlers ─────────────────────────────────────────────────
 
 bot.on('photo', async ctx => {
+    const topPhoto = ctx.message.photo.at(-1)!;
+    console.log(`[photo] file_id=${topPhoto.file_id} from=${ctx.from?.id}`);
     if (ctx.from?.id !== getAdminId()) return;
     const chatId = ctx.chat.id;
     const as = adminSessions.get(chatId);
@@ -2624,6 +2627,8 @@ bot.on('text', async ctx => {
                     let targetIds: number[];
                     if (target === 'active') targetIds = getActiveTraderIds(5);
                     else if (target === 'inactive') targetIds = getInactiveTraderIds(5);
+                    else if (target === 'activated') targetIds = getActivatedUserIds();
+                    else if (target === 'nonactivated') targetIds = getNonActivatedUserIds();
                     else targetIds = getAllUserIds();
 
                     pendingBroadcasts.set(chatId, { message: text, targetIds });
