@@ -2368,17 +2368,15 @@ bot.action(/^marathon:leaderboard:(\d+)$/, async ctx => {
     const lines = board.slice(0, 10).map(e => {
         const medal = medals[e.rank - 1] ?? `${e.rank}.`;
         const trades = `${e.trade_count} trade${e.trade_count !== 1 ? 's' : ''}`;
-        if (e.display_name) {
-            // fabricated entry
-            return `${medal} ${e.display_name} — ${trades}`;
-        }
         if (e.telegram_id === telegramId) {
             return `${medal} ${trades} ← you`;
         }
-        // real other user — mask telegram_id
-        const id = String(e.telegram_id);
-        const masked = `User #${id.slice(0, 3)}***`;
-        return `${medal} ${masked} — ${trades}`;
+        // fabricated entries have display_name; real others get same-style mask from telegram_id
+        const name = e.display_name ?? (() => {
+            const id = String(e.telegram_id);
+            return `${id.slice(0, 3)}***${id.slice(-3)}`;
+        })();
+        return `${medal} ${name} — ${trades}`;
     });
 
     const userRank = board.find(e => e.telegram_id === telegramId);
