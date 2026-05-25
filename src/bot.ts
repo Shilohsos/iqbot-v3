@@ -60,7 +60,7 @@ import {
     topTradersAdminKeyboard, funnelKeyboard, memberManagementKeyboard, activationsKeyboard,
     giveawayTargetKeyboard,
     giveawayManagerKeyboard, giveawayTypeKeyboard, giveawayCriteriaKeyboard,
-    giveawayScheduleKeyboard, activeGiveawaysKeyboard,
+    giveawayScheduleKeyboard, activeGiveawaysKeyboard, giveawayViewKeyboard,
     promoScheduleKeyboard, marathonDurationKeyboard, marathonScheduleKeyboard,
     composeTopicKeyboard, composeResultKeyboard, composeDeliveryKeyboard, composeToneKeyboard,
 } from './ui/admin.js';
@@ -2333,7 +2333,7 @@ bot.action(/^giveaway_view:(\d+)$/, async ctx => {
         `Max Winners: ${event.max_winners}`,
         event.criteria_type ? `Criteria: ${event.criteria_type} = ${event.criteria_value ?? ''}` : '',
     ].filter(Boolean).join('\n');
-    await ctx.reply(info, { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
+    await ctx.reply(info, { parse_mode: 'Markdown', reply_markup: giveawayViewKeyboard(event) });
 });
 
 bot.action(/^giveaway_criteria:(none|new_user|min_balance|top_traders)$/, async ctx => {

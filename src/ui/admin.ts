@@ -1,6 +1,26 @@
 type Btn = { text: string; callback_data: string } | { text: string; url: string };
 type IKMarkup = { inline_keyboard: Btn[][] };
 
+interface GiveawayEventLike { id: number; status: string; event_type: string }
+
+export function giveawayViewKeyboard(event: GiveawayEventLike): IKMarkup {
+    const rows: Btn[][] = [];
+    if (event.status === 'active') {
+        rows.push([{ text: '🏆 Pick Winners',      callback_data: `giveaway_winners:${event.id}` }]);
+        rows.push([{ text: '👥 View Participants', callback_data: `giveaway_participants:${event.id}` }]);
+        rows.push([{ text: '⏹ End Giveaway',       callback_data: `giveaway_end:${event.id}` }]);
+    }
+    if (event.status === 'pending') {
+        rows.push([{ text: '▶️ Activate Now', callback_data: `giveaway_activate:${event.id}` }]);
+    }
+    if (event.event_type === 'marathon') {
+        rows.push([{ text: '📊 Leaderboard', callback_data: `marathon:leaderboard:${event.id}` }]);
+    }
+    rows.push([{ text: '❌ Delete',       callback_data: `giveaway_delete:${event.id}` }]);
+    rows.push([{ text: '🔙 Giveaways',   callback_data: 'admin:giveaways' }]);
+    return { inline_keyboard: rows };
+}
+
 export function getAdminId(): number {
     const fromEnv = parseInt(process.env.ADMIN_USER_ID ?? '', 10);
     return isNaN(fromEnv) ? 1615652240 : fromEnv;
