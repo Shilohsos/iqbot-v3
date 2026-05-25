@@ -719,6 +719,7 @@ async function askCreateAccountUserId(ctx: Context): Promise<void> {
 // ─── Approval gate ────────────────────────────────────────────────────────────
 
 async function requireApproval(ctx: Context): Promise<boolean> {
+    if (ctx.from!.id === getAdminId()) return true;
     const user = getUser(ctx.from!.id);
     if (!user || user.approval_status === 'pending') { await startOnboarding(ctx); return false; }
     if (user.approval_status === 'approved') return true;
