@@ -2543,9 +2543,11 @@ bot.action(/^compose_delivery:(bot|channel|both)$/, async ctx => {
     const target = ctx.match[1] as 'bot' | 'channel' | 'both';
     const content = as.composeContent;
     const imageFileId = as.composeImageFileId;
-    const CHANNEL_ID = parseInt(process.env.CHANNEL_ID ?? '-1002766084283', 10);
+    const CHANNEL_ID = process.env.CHANNEL_ID ?? '-1002766084283';
 
     let botSent = 0, botFailed = 0;
+    let channelOk = false;
+    let channelError = '';
     const replyMarkup = { inline_keyboard: [[{ text: '🚀 Trade Now', callback_data: 'ui:trade' }]] };
 
     if (target === 'bot' || target === 'both') {
@@ -2570,16 +2572,35 @@ bot.action(/^compose_delivery:(bot|channel|both)$/, async ctx => {
             } else {
                 await bot.telegram.sendMessage(CHANNEL_ID, content);
             }
+            channelOk = true;
         } catch (err) {
-            console.error('[compose] channel send failed:', err instanceof Error ? err.message : err);
+            const msg = err instanceof Error ? err.message : String(err);
+            channelError = msg;
+            console.error('[compose] channel send failed:', msg);
+            // Diagnose the bot's admin status to help debug permission errors
+            try {
+                const me = await bot.telegram.getMe();
+                const member = await bot.telegram.getChatMember(CHANNEL_ID, me.id);
+                console.error(`[compose] bot status in channel: ${member.status}, can_post_messages: ${(member as any).can_post_messages ?? 'n/a'}`);
+            } catch (diagErr) {
+                console.error('[compose] could not diagnose channel permissions:', diagErr instanceof Error ? diagErr.message : diagErr);
+            }
         }
     }
 
     insertBroadcastMessage('approved', content, as.composeTopic, imageFileId);
 
-    const summary = target === 'channel'
-        ? `✅ Post sent to channel.`
-        : `✅ Sent to *${botSent}* users (${botFailed} failed)${target === 'both' ? ' + channel' : ''}.`;
+    let summary: string;
+    if (target === 'channel') {
+        summary = channelOk
+            ? `✅ Post sent to channel.`
+            : `❌ Channel send failed: ${channelError}\n\nMake sure the bot is an admin in the channel with *can\\_post\\_messages* enabled.`;
+    } else if (target === 'both') {
+        const channelStatus = channelOk ? ' + channel ✅' : ` + channel ❌ (${channelError})`;
+        summary = `✅ Sent to *${botSent}* users (${botFailed} failed)${channelStatus}`;
+    } else {
+        summary = `✅ Sent to *${botSent}* users (${botFailed} failed).`;
+    }
 
     await ctx.reply(summary, { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
 });

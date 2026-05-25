@@ -34,7 +34,7 @@ const ALERT_COOLDOWN_MS = 5 * 60 * 1000;
 
 function checkPM2Status(): string | null {
     try {
-        const output    = execSync('pm2 jlist', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
+        const output    = execSync('pm2 jlist', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, PATH: `/opt/node22/bin:${process.env.PATH ?? '/usr/bin:/bin'}` } });
         const processes = JSON.parse(output) as Array<{
             name: string;
             pm2_env: { status: string; restart_time: number; pm_uptime: number };
