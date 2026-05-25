@@ -2322,16 +2322,16 @@ bot.action(/^giveaway_view:(\d+)$/, async ctx => {
         ? getRealAndFabricatedCounts(giveawayId)
         : { real: getGiveawayParticipantCount(giveawayId), fabricated: 0 };
     const info = [
-        `🎁 *${event.title}*`,
-        event.description ?? '',
-        `Type: ${event.event_type}`,
-        `Status: ${event.status}`,
+        `🎁 *${escapeMd(event.title)}*`,
+        event.description ? escapeMd(event.description) : '',
+        `Type: ${escapeMd(event.event_type)}`,
+        `Status: ${escapeMd(event.status)}`,
         event.event_type === 'giveaway'
             ? `Participants: ${real + fabricated} total (Real: ${real} | Fabricated: ${fabricated})`
             : `Participants: ${real}`,
         event.prize_pool != null ? `Prize Pool: $${event.prize_pool.toFixed(2)}` : '',
         `Max Winners: ${event.max_winners}`,
-        event.criteria_type ? `Criteria: ${event.criteria_type} = ${event.criteria_value ?? ''}` : '',
+        event.criteria_type ? `Criteria: ${escapeMd(event.criteria_type)} = ${escapeMd(event.criteria_value ?? '')}` : '',
     ].filter(Boolean).join('\n');
     await ctx.reply(info, { parse_mode: 'Markdown', reply_markup: giveawayViewKeyboard(event) });
 });
