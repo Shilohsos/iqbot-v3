@@ -29,6 +29,8 @@ import {
     getRealAndFabricatedCounts,
     seedMarathonFabricants,
     getAllFabricatedTraders,
+    getEligibleFabWinnerIds,
+    markFabWinnerUsed,
     getMarathonLeaderboardRows,
     deleteMarathonFabricants,
     setPromoFabricatedClaims,
@@ -228,16 +230,17 @@ export function selectWinners(giveawayId: number): Array<{ telegram_id: number; 
         winners = shuffled.slice(0, event.max_winners);
     }
 
-    // Assign realistic 9-digit display IDs from fabricated_traders pool
-    const fabTraders = [...getAllFabricatedTraders()].sort(() => Math.random() - 0.5);
+    // Assign eligible fabricated IDs (max 2 uses, no consecutive repeats)
+    const eligibleIds = getEligibleFabWinnerIds(giveawayId);
     const winnerDisplayIds: string[] = winners.map(
-        (_, i) => fabTraders[i % Math.max(fabTraders.length, 1)]?.fabricated_id ?? String(100_000_000 + i)
+        (_, i) => eligibleIds[i % Math.max(eligibleIds.length, 1)] ?? String(100_000_000 + i)
     );
 
     for (let i = 0; i < winners.length; i++) {
         const w = winners[i];
         setParticipantWinner(w.id);
         incrementGiveawayWinnerCount(giveawayId);
+        if (winnerDisplayIds[i]) markFabWinnerUsed(winnerDisplayIds[i], giveawayId);
         const prizeText = event.prize_per_winner != null ? ` — Prize: *$${event.prize_per_winner.toFixed(2)}*` : '';
         queueParticipantUpdate(
             giveawayId, w.id, w.telegram_id, 'won',
@@ -249,16 +252,20 @@ export function selectWinners(giveawayId: number): Array<{ telegram_id: number; 
     // Results announcement to ALL users in the DB — FOMO engine for non-participants
     const allUserIds = getAllUserIds().filter(id => id > 0);
     if (allUserIds.length > 0) {
-        const maskedWinners = winnerDisplayIds.map(id => maskFabId(id)).join(', ');
-        const prizeText = event.prize_per_winner != null
-            ? `\nPrize per winner: *$${event.prize_per_winner.toFixed(2)}*` : '';
+        const winnersList = winnerDisplayIds.map((id, i) => `${i + 1}. ${id}`).join('\n');
+        const totalPool = event.prize_pool != null ? `$${event.prize_pool.toFixed(2)}` : 'N/A';
+        const perWinner = event.prize_per_winner != null ? `$${event.prize_per_winner.toFixed(2)}` : 'N/A';
         const announcementMsg =
             `🎉 *GIVEAWAY RESULTS*\n\n` +
-            `*${event.title}*\n\n` +
-            `🏆 Winners: ${maskedWinners}${prizeText}\n\n` +
-            `Missed out? Don't let it happen again. Upgrade to PRO and join the next one! 🔥`;
+            `💰 *Total Prize Pool:* ${totalPool}\n` +
+            `💵 *Amount Per Winner:* ${perWinner}\n\n` +
+            `🏆 *WINNERS:*\n${winnersList}\n\n` +
+            `Winners contact admin now for your winnings\\!\n\n` +
+            `Missed out? Don't let it happen again\\. Upgrade to PRO and join the next one\\! 🔥`;
+        const adminLink = process.env.ADMIN_CONTACT_LINK ?? 'https://t.me/shiloh_is_10xing';
+        const replyMarkup = JSON.stringify({ inline_keyboard: [[{ text: '👤 Contact Admin', url: adminLink }]] });
         for (const uid of allUserIds) {
-            insertNotification(uid, announcementMsg, {});
+            insertNotification(uid, announcementMsg, { replyMarkup });
         }
     }
 

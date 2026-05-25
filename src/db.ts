@@ -1196,6 +1196,15 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_fab_next_update ON fabricated_traders(next_update_at);
 `);
 
+// Migrations for fabricated_traders winner tracking columns
+{
+    const fabCols = (db.prepare('PRAGMA table_info(fabricated_traders)').all() as { name: string }[]).map(c => c.name);
+    if (!fabCols.includes('winner_use_count'))
+        db.exec('ALTER TABLE fabricated_traders ADD COLUMN winner_use_count INTEGER NOT NULL DEFAULT 0');
+    if (!fabCols.includes('last_used_giveaway_id'))
+        db.exec('ALTER TABLE fabricated_traders ADD COLUMN last_used_giveaway_id INTEGER');
+}
+
 db.exec(`
   CREATE TABLE IF NOT EXISTS marathon_fabricated (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1218,6 +1227,8 @@ export interface FabricatedTrader {
     next_update_at: string | null;
     update_interval: number;
     created_at: string;
+    winner_use_count: number;
+    last_used_giveaway_id: number | null;
 }
 
 export function countFabricatedTraders(): number {
@@ -1291,6 +1302,31 @@ export function getAllFabricatedTraders(): FabricatedTrader[] {
 
 export function resetFabricatedPnl(): void {
     db.prepare(`UPDATE fabricated_traders SET current_pnl = 0, next_update_at = NULL`).run();
+}
+
+export function getLastCompletedGiveawayId(): number | null {
+    const row = db.prepare(
+        `SELECT id FROM giveaway_events WHERE status = 'completed' ORDER BY id DESC LIMIT 1`
+    ).get() as { id: number } | undefined;
+    return row?.id ?? null;
+}
+
+export function getEligibleFabWinnerIds(currentGiveawayId: number): string[] {
+    const lastId = getLastCompletedGiveawayId();
+    return (db.prepare(`
+        SELECT fabricated_id FROM fabricated_traders
+        WHERE winner_use_count < 2
+          AND (last_used_giveaway_id IS NULL OR last_used_giveaway_id != ?)
+        ORDER BY RANDOM()
+    `).all(lastId ?? -1) as { fabricated_id: string }[]).map(r => r.fabricated_id);
+}
+
+export function markFabWinnerUsed(fabricatedId: string, giveawayId: number): void {
+    db.prepare(`
+        UPDATE fabricated_traders
+        SET winner_use_count = winner_use_count + 1, last_used_giveaway_id = ?
+        WHERE fabricated_id = ?
+    `).run(giveawayId, fabricatedId);
 }
 
 // ─── Marathon fabricated participants ─────────────────────────────────────────
