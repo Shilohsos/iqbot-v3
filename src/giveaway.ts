@@ -245,9 +245,9 @@ export function selectWinners(giveawayId: number): Array<{ telegram_id: number; 
         // Fabricated winners have negative telegram_ids — sendMessage will fail silently
     }
 
-    // Results announcement to ALL real participants with masked realistic winner IDs
-    const realParticipants = allEligible.filter(p => p.fabricated !== 1);
-    if (realParticipants.length > 0) {
+    // Results announcement to ALL approved users — fires even if zero real participants
+    const approvedUsers = getApprovedUsersWithTier();
+    if (approvedUsers.length > 0) {
         const maskedWinners = winnerDisplayIds.map(id => maskFabId(id)).join(', ');
         const prizeText = event.prize_per_winner != null
             ? `\nPrize per winner: *$${event.prize_per_winner.toFixed(2)}*` : '';
@@ -256,8 +256,8 @@ export function selectWinners(giveawayId: number): Array<{ telegram_id: number; 
             `*${event.title}*\n\n` +
             `🏆 Winners: ${maskedWinners}${prizeText}\n\n` +
             `Prize will be delivered shortly. Thanks to everyone who participated!`;
-        for (const p of realParticipants) {
-            insertNotification(p.telegram_id, announcementMsg, {});
+        for (const u of approvedUsers) {
+            insertNotification(u.telegram_id, announcementMsg, {});
         }
     }
 
