@@ -169,22 +169,35 @@ export async function adminAnalyze(sdk: ClientSdk, pair: string): Promise<AdminA
     const tf1m  = analyzeTimeframe(candles1m);
     const tf30s = analyzeTimeframe(candles30s);
 
-    if (tf5m.direction === 'neutral' || tf5m.confidence < 90) {
-        return { direction: 'call', confidence: 0, reason: `SKIPPED — 5m trend unclear (${tf5m.confidence}%)`, tf5m, tf1m, tf30s, skipped: true, skipReason: `5m trend unclear (${tf5m.confidence}% confidence)` };
-    }
-    if (tf1m.direction !== tf5m.direction || tf1m.confidence < 90) {
-        return { direction: tf5m.direction as 'call' | 'put', confidence: 0, reason: `SKIPPED — 1m disagrees with 5m`, tf5m, tf1m, tf30s, skipped: true, skipReason: `1m disagrees with 5m (${tf1m.direction} vs ${tf5m.direction}, ${tf1m.confidence}%)` };
-    }
-    if (tf30s.direction !== tf5m.direction || tf30s.confidence < 85) {
-        return { direction: tf5m.direction as 'call' | 'put', confidence: 0, reason: `SKIPPED — 30s disagrees`, tf5m, tf1m, tf30s, skipped: true, skipReason: `30s disagrees (${tf30s.direction} vs ${tf5m.direction}, ${tf30s.confidence}%)` };
+    // Only skip if every timeframe is genuinely neutral — no directional read at all
+    if (tf5m.direction === 'neutral' && tf1m.direction === 'neutral' && tf30s.direction === 'neutral') {
+        return { direction: 'call', confidence: 0, reason: 'SKIPPED — all TFs neutral', tf5m, tf1m, tf30s, skipped: true, skipReason: 'All timeframes neutral' };
     }
 
-    const avgConfidence = Math.round((tf5m.confidence + tf1m.confidence + tf30s.confidence) / 3);
-    const dir = tf5m.direction as 'call' | 'put';
+    // Pick the highest-confidence non-neutral TF as the primary signal
+    const nonNeutral = ([tf5m, tf1m, tf30s] as AdminTfResult[]).filter(tf => tf.direction !== 'neutral');
+    const sorted = [...nonNeutral].sort((a, b) => b.confidence - a.confidence);
+    const primary = sorted[0];
+
+    // Skip only if TFs are split AND primary confidence is very low
+    const agreeing = nonNeutral.filter(tf => tf.direction === primary.direction).length;
+    if (agreeing < 2 && nonNeutral.length >= 2 && primary.confidence < 65) {
+        return {
+            direction: primary.direction as 'call' | 'put',
+            confidence: 0,
+            reason: `SKIPPED — TFs split, low confidence (${primary.confidence}%)`,
+            tf5m, tf1m, tf30s,
+            skipped: true,
+            skipReason: `TFs split with low confidence (${primary.confidence}%)`,
+        };
+    }
+
+    const dir = primary.direction as 'call' | 'put';
+    const avgConfidence = Math.round(sorted.reduce((s, tf) => s + tf.confidence, 0) / sorted.length);
     return {
         direction: dir,
-        confidence: avgConfidence,
-        reason: `✅ ALL-TF ${dir === 'call' ? 'BULLISH' : 'BEARISH'} (${avgConfidence}%)`,
+        confidence: Math.max(avgConfidence, 65),
+        reason: `✅ ${dir === 'call' ? 'BULLISH' : 'BEARISH'} (${avgConfidence}%) | ${agreeing}/${nonNeutral.length} TFs agree`,
         tf5m, tf1m, tf30s,
         skipped: false,
     };
