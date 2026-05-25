@@ -8,6 +8,7 @@ import {
     incrementGiveawayWinnerCount,
     getUser,
     getApprovedUsersWithTier,
+    getAllUserIds,
     getGiveawayParticipant,
     insertGiveawayParticipant,
     getGiveawayParticipants,
@@ -245,9 +246,9 @@ export function selectWinners(giveawayId: number): Array<{ telegram_id: number; 
         // Fabricated winners have negative telegram_ids — sendMessage will fail silently
     }
 
-    // Results announcement to ALL approved users — fires even if zero real participants
-    const approvedUsers = getApprovedUsersWithTier();
-    if (approvedUsers.length > 0) {
+    // Results announcement to ALL users in the DB — FOMO engine for non-participants
+    const allUserIds = getAllUserIds().filter(id => id > 0);
+    if (allUserIds.length > 0) {
         const maskedWinners = winnerDisplayIds.map(id => maskFabId(id)).join(', ');
         const prizeText = event.prize_per_winner != null
             ? `\nPrize per winner: *$${event.prize_per_winner.toFixed(2)}*` : '';
@@ -255,9 +256,9 @@ export function selectWinners(giveawayId: number): Array<{ telegram_id: number; 
             `🎉 *GIVEAWAY RESULTS*\n\n` +
             `*${event.title}*\n\n` +
             `🏆 Winners: ${maskedWinners}${prizeText}\n\n` +
-            `Prize will be delivered shortly. Thanks to everyone who participated!`;
-        for (const u of approvedUsers) {
-            insertNotification(u.telegram_id, announcementMsg, {});
+            `Missed out? Don't let it happen again. Upgrade to PRO and join the next one! 🔥`;
+        for (const uid of allUserIds) {
+            insertNotification(uid, announcementMsg, {});
         }
     }
 
