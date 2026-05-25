@@ -62,7 +62,7 @@ import {
     giveawayManagerKeyboard, giveawayTypeKeyboard, giveawayCriteriaKeyboard,
     giveawayScheduleKeyboard, activeGiveawaysKeyboard, giveawayViewKeyboard,
     promoScheduleKeyboard, marathonDurationKeyboard, marathonScheduleKeyboard,
-    composeTopicKeyboard, composeResultKeyboard, composeDeliveryKeyboard, composeToneKeyboard,
+    composeTopicKeyboard, composeResultKeyboard, composeDeliveryKeyboard, composeToneKeyboard, composeButtonKeyboard,
 } from './ui/admin.js';
 import { checkAffiliate } from './affiliate.js';
 import { setupChannelHandlers, startWelcomeFollowUp } from './channel.js';
@@ -217,6 +217,7 @@ type AdminStep =
     | 'marathon_v2_prize'
     | 'compose_description'
     | 'compose_image'
+    | 'compose_cta'
     | 'compose_tone_guide'
     | 'compose_tone_sample1'
     | 'compose_tone_sample2'
@@ -255,6 +256,7 @@ interface AdminSessionState {
     composeDescription?: string;
     composeContent?: string;
     composeImageFileId?: string;
+    composeCta?: 'start' | 'trade' | 'fund' | 'none';
 }
 const adminSessions = makeSessionMap<AdminSessionState>('admin');
 
@@ -1080,6 +1082,52 @@ bot.action(/^page:(\d+)$/, async ctx => {
     const pageUser = getUser(chatId);
     const pageTier = normalizeTier(pageUser?.tier);
     try { await ctx.editMessageReplyMarkup(pairKeyboard(parseInt(ctx.match[1], 10), pageTier)); } catch {}
+});
+
+// ─── Locked feature upgrade prompts ──────────────────────────────────────────
+
+bot.action(/^upgrade:tf:(\d+)$/, async ctx => {
+    await ctx.answerCbQuery();
+    const tier = normalizeTier(getUser(ctx.from!.id)?.tier);
+    const nextTier = tier === 'DEMO' ? 'PRO' : 'MASTER';
+    const cost = nextTier === 'PRO' ? '$10' : '$50';
+    const fundUrl = process.env.FUNDING_URL ?? 'https://iqoption.com/pwa/payments/deposit';
+    await ctx.reply(
+        `🔒 *${ctx.match[1]}s Timeframe — ${nextTier} Tier Required*\n\n` +
+        `Fund your account with at least ${cost} to automatically unlock this tier and faster trades.`,
+        {
+            parse_mode: 'Markdown',
+            reply_markup: {
+                inline_keyboard: [
+                    [{ text: `💰 Fund Account`, url: fundUrl }],
+                    [{ text: `🔓 Upgrade with Token`, callback_data: 'ui:upgrade' }],
+                    [{ text: '🔙 Back', callback_data: 'wizard:cancel' }],
+                ],
+            },
+        }
+    );
+});
+
+bot.action(/^upgrade:pair:(.+)$/, async ctx => {
+    await ctx.answerCbQuery();
+    const tier = normalizeTier(getUser(ctx.from!.id)?.tier);
+    const nextTier = tier === 'DEMO' ? 'PRO' : 'MASTER';
+    const cost = nextTier === 'PRO' ? '$10' : '$50';
+    const fundUrl = process.env.FUNDING_URL ?? 'https://iqoption.com/pwa/payments/deposit';
+    await ctx.reply(
+        `🔒 *${ctx.match[1]} — ${nextTier} Tier Required*\n\n` +
+        `Fund your account with at least ${cost} to automatically unlock more pairs.`,
+        {
+            parse_mode: 'Markdown',
+            reply_markup: {
+                inline_keyboard: [
+                    [{ text: `💰 Fund Account`, url: fundUrl }],
+                    [{ text: `🔓 Upgrade with Token`, callback_data: 'ui:upgrade' }],
+                    [{ text: '🔙 Back', callback_data: 'wizard:cancel' }],
+                ],
+            },
+        }
+    );
 });
 
 // ─── Trade wizard — pair selected → analyze → execute ────────────────────────
@@ -2681,6 +2729,15 @@ bot.action('compose:approve', async ctx => {
     await ctx.reply('📎 Send an image to attach, or type *skip* to send text-only:', { parse_mode: 'Markdown' });
 });
 
+bot.action(/^compose_btn:(start|trade|fund|none)$/, async ctx => {
+    await ctx.answerCbQuery();
+    const chatId = ctx.chat!.id;
+    const as = adminSessions.get(chatId);
+    if (!as?.composeContent) { await ctx.reply('❌ Session expired.', { reply_markup: adminBackKeyboard() }); return; }
+    adminSessions.set(chatId, { ...as, composeCta: ctx.match[1] as AdminSessionState['composeCta'] });
+    await ctx.reply('📤 *Send to:*', { parse_mode: 'Markdown', reply_markup: composeDeliveryKeyboard() });
+});
+
 bot.action(/^compose_delivery:(bot|channel|both)$/, async ctx => {
     await ctx.answerCbQuery('📤 Sending…');
     const chatId = ctx.chat!.id;
@@ -2699,7 +2756,16 @@ bot.action(/^compose_delivery:(bot|channel|both)$/, async ctx => {
     let botSent = 0, botFailed = 0;
     let channelOk = false;
     let channelError = '';
-    const replyMarkup = { inline_keyboard: [[{ text: '🚀 Trade Now', callback_data: 'ui:trade' }]] };
+    const fundUrl = process.env.FUNDING_URL ?? 'https://iqoption.com/pwa/payments/deposit';
+    const botUsername = process.env.BOT_USERNAME ?? '';
+    const ctaBtnMap: Record<string, { text: string; callback_data?: string; url?: string }> = {
+        start: { text: '🚀 Start Bot', url: `https://t.me/${botUsername}?start=` },
+        trade: { text: '🎯 Trade Now', callback_data: 'ui:trade' },
+        fund:  { text: '💰 Fund Account', url: fundUrl },
+    };
+    const cta = as.composeCta;
+    const ctaBtn = cta && cta !== 'none' ? ctaBtnMap[cta] : { text: '🚀 Trade Now', callback_data: 'ui:trade' };
+    const replyMarkup = { inline_keyboard: [[ctaBtn as { text: string; callback_data: string }]] };
 
     if (target === 'bot' || target === 'both') {
         const allIds = getAllUserIds();
@@ -2886,8 +2952,8 @@ bot.on('photo', async ctx => {
     const photo = ctx.message.photo.at(-1)!;
 
     if (as.step === 'compose_image' && as.composeContent) {
-        adminSessions.set(chatId, { ...as, composeImageFileId: photo.file_id });
-        await ctx.reply('📤 *Send to:*', { parse_mode: 'Markdown', reply_markup: composeDeliveryKeyboard() });
+        adminSessions.set(chatId, { ...as, composeImageFileId: photo.file_id, step: 'compose_cta' });
+        await ctx.reply('✅ Image attached\\. Add a CTA button?', { parse_mode: 'Markdown', reply_markup: composeButtonKeyboard() });
         return;
     }
 
@@ -3311,15 +3377,11 @@ bot.on('text', async ctx => {
 
             if (as.step === 'compose_image' && as.composeContent) {
                 if (text.toLowerCase() === 'skip') {
-                    adminSessions.set(chatId, { ...as, composeImageFileId: undefined });
+                    adminSessions.set(chatId, { ...as, composeImageFileId: undefined, step: 'compose_cta' });
+                    await ctx.reply('Add a CTA button?', { reply_markup: composeButtonKeyboard() });
                 } else {
                     await ctx.reply('❌ Please send a photo or type *skip*:', { parse_mode: 'Markdown' });
-                    return;
                 }
-                await ctx.reply(
-                    `📤 *Send to:*`,
-                    { parse_mode: 'Markdown', reply_markup: composeDeliveryKeyboard() }
-                );
                 return;
             }
 

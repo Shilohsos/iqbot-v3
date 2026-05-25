@@ -335,9 +335,16 @@ export async function activatePromoCode(giveawayId: number): Promise<void> {
             canClaim ? `Tap below to claim your code 👇` : `🔒 Upgrade to PRO to claim`,
         ].filter(Boolean);
 
+        const fundUrl = process.env.FUNDING_URL ?? 'https://iqoption.com/pwa/payments/deposit';
         const markup = canClaim
-            ? { inline_keyboard: [[{ text: '🎁 Claim Code', callback_data: `promo:claim:${giveawayId}` }]] }
-            : { inline_keyboard: [[{ text: '⚡ Upgrade to PRO', callback_data: 'ui:upgrade' }]] };
+            ? { inline_keyboard: [
+                [{ text: '🎁 Claim Code', callback_data: `promo:claim:${giveawayId}` }],
+                [{ text: '💰 Fund Account', url: fundUrl }],
+              ]}
+            : { inline_keyboard: [
+                [{ text: '⚡ Upgrade to PRO', callback_data: 'ui:upgrade' }],
+                [{ text: '💰 Fund Account', url: fundUrl }],
+              ]};
 
         insertNotification(u.telegram_id, lines.join('\n'), { replyMarkup: JSON.stringify(markup) });
     }

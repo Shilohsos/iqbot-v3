@@ -361,6 +361,17 @@ export function composeResultKeyboard(): IKMarkup {
     };
 }
 
+export function composeButtonKeyboard(): IKMarkup {
+    return {
+        inline_keyboard: [
+            [{ text: '🚀 Start Bot',      callback_data: 'compose_btn:start' }],
+            [{ text: '🎯 Trade Now',       callback_data: 'compose_btn:trade' }],
+            [{ text: '💰 Fund Account',    callback_data: 'compose_btn:fund' }],
+            [{ text: '❌ No Button',       callback_data: 'compose_btn:none' }],
+        ],
+    };
+}
+
 export function composeDeliveryKeyboard(): IKMarkup {
     return {
         inline_keyboard: [

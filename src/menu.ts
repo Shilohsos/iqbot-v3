@@ -30,10 +30,21 @@ export function amountKeyboard(currency = 'USD'): IKMarkup {
     };
 }
 
+const ALL_TIMEFRAMES = [30, 60, 300];
+const ALL_PAIRS = [
+    'EURUSD-OTC', 'GBPUSD-OTC', 'EURJPY-OTC', 'GBPJPY-OTC',
+    'AUDUSD-OTC', 'USDCAD-OTC', 'EURGBP-OTC', 'USDCHF-OTC',
+];
+
 export function timeframeKeyboard(tier?: string): IKMarkup {
     const allowed = getTierConfig(tier).allowedTimeframes;
     const labels: Record<number, string> = { 30: '30s', 60: '1m', 300: '5m' };
-    const row: Btn[] = allowed.map(s => ({ text: labels[s] ?? `${s}s`, callback_data: `tf:${s}` }));
+    const row: Btn[] = ALL_TIMEFRAMES.map(s => {
+        const label = labels[s] ?? `${s}s`;
+        return allowed.includes(s)
+            ? { text: label, callback_data: `tf:${s}` }
+            : { text: `🔒 ${label}`, callback_data: `upgrade:tf:${s}` };
+    });
     return {
         inline_keyboard: [
             row,
@@ -43,21 +54,31 @@ export function timeframeKeyboard(tier?: string): IKMarkup {
 }
 
 export function pairKeyboard(page = 0, tier?: string): IKMarkup {
-    const available = getTierConfig(tier).pairs;
+    const allowed = new Set(getTierConfig(tier).pairs);
     const PAGE_SIZE = 6;
     const start = page * PAGE_SIZE;
-    const pagePairs = available.slice(start, start + PAGE_SIZE);
+    const pagePairs = ALL_PAIRS.slice(start, start + PAGE_SIZE);
     const rows: Btn[][] = [];
 
     for (let i = 0; i < pagePairs.length; i += 2) {
-        const row: Btn[] = [{ text: pagePairs[i], callback_data: `pair:${pagePairs[i]}` }];
-        if (pagePairs[i + 1]) row.push({ text: pagePairs[i + 1], callback_data: `pair:${pagePairs[i + 1]}` });
+        const row: Btn[] = [
+            allowed.has(pagePairs[i])
+                ? { text: pagePairs[i], callback_data: `pair:${pagePairs[i]}` }
+                : { text: `🔒 ${pagePairs[i]}`, callback_data: `upgrade:pair:${pagePairs[i]}` },
+        ];
+        if (pagePairs[i + 1]) {
+            row.push(
+                allowed.has(pagePairs[i + 1])
+                    ? { text: pagePairs[i + 1], callback_data: `pair:${pagePairs[i + 1]}` }
+                    : { text: `🔒 ${pagePairs[i + 1]}`, callback_data: `upgrade:pair:${pagePairs[i + 1]}` }
+            );
+        }
         rows.push(row);
     }
 
     const navRow: Btn[] = [];
     if (start > 0) navRow.push({ text: '⬅️ Back', callback_data: `page:${page - 1}` });
-    if (start + PAGE_SIZE < available.length) navRow.push({ text: 'More ➡️', callback_data: `page:${page + 1}` });
+    if (start + PAGE_SIZE < ALL_PAIRS.length) navRow.push({ text: 'More ➡️', callback_data: `page:${page + 1}` });
     if (navRow.length) rows.push(navRow);
 
     rows.push([{ text: '❌ Cancel', callback_data: 'wizard:cancel' }]);

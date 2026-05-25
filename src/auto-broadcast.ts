@@ -1,11 +1,11 @@
 import { Telegraf } from 'telegraf';
 import {
-    getEnabledAutoMessages, getInactiveTraderIds, markBroadcastSent,
+    getEnabledAutoMessages, getAllUserIds, markBroadcastSent,
     getTestUserId, getNextBroadcastAt, saveNextBroadcastAt,
+    getMessageIndex, saveMessageIndex,
 } from './db.js';
 
-const INACTIVE_HOURS = 2;
-const RATE_LIMIT_MS  = 50;
+const RATE_LIMIT_MS = 50;
 
 function getRandomIntervalMs(): number {
     const minHours = 2;
@@ -14,7 +14,6 @@ function getRandomIntervalMs(): number {
 }
 
 const lastBroadcastMsgIds = new Map<number, number>();
-let messageIndex = 0;
 
 async function fireBroadcast(bot: Telegraf): Promise<void> {
     const messages = getEnabledAutoMessages().filter(m => m.image_file_id != null);
@@ -23,8 +22,9 @@ async function fireBroadcast(bot: Telegraf): Promise<void> {
         return;
     }
 
-    const msg = messages[messageIndex % messages.length];
-    messageIndex++;
+    const idx = getMessageIndex();
+    const msg = messages[idx % messages.length];
+    saveMessageIndex(idx + 1);
 
     const testUserId = getTestUserId();
     let targets: number[];
@@ -32,12 +32,11 @@ async function fireBroadcast(bot: Telegraf): Promise<void> {
         console.log(`[test-mode] sending only to test user ${testUserId}`);
         targets = [testUserId];
     } else {
-        const inactive = getInactiveTraderIds(INACTIVE_HOURS);
-        if (inactive.length === 0) {
-            console.log('[auto-broadcast] skipped — no inactive targets');
+        targets = getAllUserIds().filter(id => id > 0);
+        if (targets.length === 0) {
+            console.log('[auto-broadcast] skipped — no users in DB');
             return;
         }
-        targets = inactive;
     }
 
     let sent = 0;

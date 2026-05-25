@@ -163,6 +163,13 @@ db.exec(`
 `);
 
 db.exec(`
+  CREATE TABLE IF NOT EXISTS broadcast_state (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  )
+`);
+
+db.exec(`
   CREATE TABLE IF NOT EXISTS scheduled_broadcasts (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     message         TEXT    NOT NULL,
@@ -882,6 +889,15 @@ export function getNextBroadcastAt(): string | null {
 
 export function saveNextBroadcastAt(isoStr: string): void {
     db.prepare('INSERT OR REPLACE INTO broadcast_schedule (id, next_send_at) VALUES (1, ?)').run(isoStr);
+}
+
+export function getMessageIndex(): number {
+    const row = db.prepare("SELECT value FROM broadcast_state WHERE key = 'message_index'").get() as { value: string } | undefined;
+    return row ? parseInt(row.value, 10) : 0;
+}
+
+export function saveMessageIndex(idx: number): void {
+    db.prepare("INSERT OR REPLACE INTO broadcast_state (key, value) VALUES ('message_index', ?)").run(String(idx));
 }
 
 export interface PersistedScheduledBroadcast {
