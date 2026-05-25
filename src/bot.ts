@@ -61,6 +61,7 @@ import {
     giveawayScheduleKeyboard, activeGiveawaysKeyboard,
     promoScheduleKeyboard, marathonDurationKeyboard, marathonScheduleKeyboard,
     composeTopicKeyboard, composeResultKeyboard, composeDeliveryKeyboard, composeToneKeyboard,
+    adminAmountKeyboard, adminTimeframeKeyboard, adminPairKeyboard,
 } from './ui/admin.js';
 import { checkAffiliate } from './affiliate.js';
 import { setupChannelHandlers, startWelcomeFollowUp } from './channel.js';
@@ -167,7 +168,12 @@ type ConnectStep = 'email' | 'password' | 'admin_email' | 'admin_password';
 interface ConnectState { step: ConnectStep; email?: string; }
 const connectSessions = makeSessionMap<ConnectState>('connect');
 
-// Admin trades use the same wizardSessions as users
+interface AdminTradeState {
+    step: 'amount' | 'timeframe' | 'pair' | 'custom_amount';
+    amount?: number;
+    timeframe?: number;
+}
+const adminTradeSessions = makeSessionMap<AdminTradeState>('admin_trade');
 
 type AdminStep =
     | 'find_users'
@@ -458,6 +464,146 @@ async function loginAndCaptureSsid(email: string, password: string): Promise<{ s
     const ssid = data.ssid;
     const sdk = await createSdk(ssid);
     return { ssid, sdk };
+}
+
+// ─── Admin trade execution ────────────────────────────────────────────────────
+
+function buildAdminCard(pair: string, amount: number, timeframeSec: number, analysis: AdminAnalysisResult, statusLine: string): string {
+    const tfStr = timeframeSec === 30 ? '30s' : timeframeSec === 60 ? '1m' : '5m';
+    if (analysis.skipped) {
+        return [
+            `👑 *ADMIN TRADE — SKIPPED*`,
+            ``,
+            `📈 ${pair} | ⏱ ${tfStr}`,
+            ``,
+            `📊 *Pre-Analysis:*`,
+            `• 5m: ${analysis.tf5m.signals} — ${analysis.tf5m.confidence}%`,
+            `• 1m: ${analysis.tf1m.signals} — ${analysis.tf1m.confidence}%`,
+            `• 30s: ${analysis.tf30s.signals} — ${analysis.tf30s.confidence}%`,
+            ``,
+            `⚠️ ${analysis.skipReason ?? 'Conditions not met'}`,
+        ].join('\n');
+    }
+    const dirLabel = analysis.direction === 'call' ? 'CALL 🟢' : 'PUT 🔴';
+    return [
+        `👑 *ADMIN TRADE*`,
+        ``,
+        `📈 *${pair} × $${amount}*`,
+        `⏱ ${tfStr} — ${dirLabel}`,
+        ``,
+        `📊 *Analysis:*`,
+        `• 5m: ${analysis.tf5m.signals}`,
+        `• 1m: ${analysis.tf1m.signals}`,
+        `• 30s: ${analysis.tf30s.signals}`,
+        ``,
+        `✅ ALL TIMEFRAMES CONFIRM — ${analysis.confidence}% confidence`,
+        ``,
+        statusLine,
+    ].join('\n');
+}
+
+async function runAdminTrade(
+    ctx: Context,
+    adminSsid: string,
+    pair: string,
+    amount: number,
+    timeframeSec: number,
+): Promise<void> {
+    const chatId = ctx.chat!.id;
+    const adminId = getAdminId();
+    const retryKb = { inline_keyboard: [[{ text: '🔄 New Trade', callback_data: 'admin:trade_new' }]] };
+    const sentIds: number[] = [];
+    const scheduleCleanup = () => setTimeout(() => { for (const id of sentIds) ctx.telegram.deleteMessage(chatId, id).catch(() => {}); }, 3_600_000);
+
+    const statusMsg = await ctx.reply('👑 *Admin Trade Portal*\n\n🔌 Connecting & running multi-TF analysis...', { parse_mode: 'Markdown' });
+    sentIds.push(statusMsg.message_id);
+
+    const updateCard = async (text: string, keyboard?: typeof retryKb) => {
+        const opts: Parameters<typeof ctx.telegram.editMessageText>[4] = { parse_mode: 'Markdown' };
+        if (keyboard) opts.reply_markup = keyboard;
+        await ctx.telegram.editMessageText(chatId, sentIds[0], undefined, text, opts).catch(async () => {
+            const m = await ctx.reply(text, { parse_mode: 'Markdown', ...(keyboard ? { reply_markup: keyboard } : {}) });
+            sentIds.push(m.message_id);
+        });
+    };
+
+    let sdk: ClientSdk;
+    try {
+        sdk = await createSdk(adminSsid);
+    } catch (err) {
+        await updateCard(`❌ Connection failed: ${err instanceof Error ? err.message : 'Unknown'}`, retryKb);
+        scheduleCleanup();
+        return;
+    }
+
+    try {
+        let analysis = await adminAnalyze(sdk, pair);
+
+        if (analysis.skipped) {
+            await updateCard(buildAdminCard(pair, amount, timeframeSec, analysis, ''), retryKb);
+            scheduleCleanup();
+            return;
+        }
+
+        await updateCard(buildAdminCard(pair, amount, timeframeSec, analysis, '⏳ Executing trade...'));
+
+        let currentAmount = amount;
+        let totalPnl = 0;
+        const runId = crypto.randomUUID();
+
+        for (let round = 1; round <= 3; round++) {
+            if (round > 1) {
+                const reAnalysis = await adminAnalyze(sdk, pair).catch(() => null);
+                if (!reAnalysis || reAnalysis.skipped || reAnalysis.confidence < 90) {
+                    await updateCard(buildAdminCard(pair, amount, timeframeSec, analysis,
+                        `🔴 Round ${round - 1}: loss\n⚠️ Recovery skipped — confidence < 90%\n💸 Net: -$${Math.abs(totalPnl).toFixed(2)}`
+                    ), retryKb);
+                    break;
+                }
+                analysis = reAnalysis;
+                currentAmount = Math.round(currentAmount * 2.2 * 100) / 100;
+                await updateCard(buildAdminCard(pair, amount, timeframeSec, analysis, `🔄 Recovery round ${round} — $${currentAmount.toFixed(2)}...`));
+            }
+
+            const tradeReq: TradeRequest = {
+                pair, direction: analysis.direction, amount: currentAmount,
+                timeframeSec, balanceType: 'live', telegramId: adminId, martingaleRunId: runId,
+            };
+
+            let result: TradeResult;
+            try {
+                result = await withTimeout(executeTradeWithSdk(sdk, tradeReq), (timeframeSec + 90) * 1000 + 180_000, 'admin_trade');
+            } catch (err) {
+                await updateCard(buildAdminCard(pair, amount, timeframeSec, analysis,
+                    `⚠️ Error: ${err instanceof Error ? err.message : 'trade failed'}`
+                ), retryKb);
+                break;
+            }
+
+            const roundPnl = result.status === 'WIN' ? result.pnl : result.status === 'TIE' ? 0 : -currentAmount;
+            totalPnl += roundPnl;
+            giveawayRecordTrade(adminId, false);
+            addUserSessionStats(adminId, 1, roundPnl);
+
+            if (result.status === 'WIN') {
+                const roundLabel = round > 1 ? ` (recovery round ${round})` : '';
+                await updateCard(buildAdminCard(pair, amount, timeframeSec, analysis,
+                    `💰 *Result: +$${result.pnl.toFixed(2)}*${roundLabel}`
+                ), retryKb);
+                break;
+            } else if (result.status === 'TIE') {
+                await updateCard(buildAdminCard(pair, amount, timeframeSec, analysis, `💰 Result: $0.00 (tie)`), retryKb);
+                break;
+            } else if (round === 3) {
+                await updateCard(buildAdminCard(pair, amount, timeframeSec, analysis,
+                    `🔴 3 rounds exhausted. Net: -$${Math.abs(totalPnl).toFixed(2)}`
+                ), retryKb);
+            }
+        }
+    } finally {
+        sdk.shutdown().catch(() => {});
+        scheduleCleanup();
+    }
 }
 
 // ─── Start menu ───────────────────────────────────────────────────────────────
@@ -991,16 +1137,8 @@ bot.action(/^pair:(.+)$/, async ctx => {
 
     if (!amount || !timeframe) { await ctx.reply('❌ Session error — start over.'); return; }
 
-    const isAdmin = ctx.from!.id === getAdminId();
-    const ssid = isAdmin ? getAdminSsid() : getSsidForUser(ctx.from!.id);
-    if (!ssid) {
-        if (isAdmin) {
-            await ctx.reply('⚠️ No admin account connected. Use /connect first.', { reply_markup: { inline_keyboard: [[{ text: '🔗 Connect Account', callback_data: 'admin:trade_connect' }]] } });
-        } else {
-            await ctx.reply('❌ Not connected. Use /connect to link your IQ Option account.');
-        }
-        return;
-    }
+    const ssid = getSsidForUser(ctx.from!.id);
+    if (!ssid) { await ctx.reply('❌ Not connected. Use /connect to link your IQ Option account.'); return; }
 
     // Clean up: delete the pair keyboard message and L6 image
     try { await ctx.deleteMessage(); } catch {}
@@ -1019,11 +1157,7 @@ bot.action(/^pair:(.+)$/, async ctx => {
 
     let sdk: ClientSdk;
     try {
-        if (isAdmin) {
-            sdk = await createSdk(ssid);
-        } else {
-            sdk = await sdkPool.get(ctx.from!.id, ssid);
-        }
+        sdk = await sdkPool.get(ctx.from!.id, ssid);
         await ctx.telegram.editMessageText(
             chatId, progressMsg.message_id, undefined,
             `✅ Connected! Analyzing market data for ${pair}...`
@@ -1039,52 +1173,31 @@ bot.action(/^pair:(.+)$/, async ctx => {
 
     let tradeStarted = false;
     try {
-        // Admin skips tier validation — has full access
-        if (!isAdmin) {
-            const analysisUser = getUser(ctx.from!.id);
-            const analysisTier = normalizeTier(analysisUser?.tier);
-            const tierCfg = getTierConfig(analysisTier);
-            if (!tierCfg.allowedTimeframes.includes(timeframe)) {
-                if (l7MsgId) { try { await ctx.telegram.deleteMessage(chatId, l7MsgId); } catch {} }
-                await ctx.telegram.editMessageText(
-                    chatId, progressMsg.message_id, undefined,
-                    `⚠️ ${tfLabel(timeframe)} is not available on the ${tierCfg.label} tier. Upgrade for access.`
-                ).catch(() => {});
-                return;
-            }
-            if (!tierCfg.pairs.includes(pair)) {
-                if (l7MsgId) { try { await ctx.telegram.deleteMessage(chatId, l7MsgId); } catch {} }
-                await ctx.telegram.editMessageText(
-                    chatId, progressMsg.message_id, undefined,
-                    `⚠️ ${pair} is not available on the ${tierCfg.label} tier. Upgrade for access.`
-                ).catch(() => {});
-                return;
-            }
+        const analysisUser = getUser(ctx.from!.id);
+        const analysisTier = normalizeTier(analysisUser?.tier);
+        const tierCfg = getTierConfig(analysisTier);
+        if (!tierCfg.allowedTimeframes.includes(timeframe)) {
+            if (l7MsgId) { try { await ctx.telegram.deleteMessage(chatId, l7MsgId); } catch {} }
+            await ctx.telegram.editMessageText(
+                chatId, progressMsg.message_id, undefined,
+                `⚠️ ${tfLabel(timeframe)} is not available on the ${tierCfg.label} tier. Upgrade for access.`
+            ).catch(() => {});
+            return;
+        }
+        if (!tierCfg.pairs.includes(pair)) {
+            if (l7MsgId) { try { await ctx.telegram.deleteMessage(chatId, l7MsgId); } catch {} }
+            await ctx.telegram.editMessageText(
+                chatId, progressMsg.message_id, undefined,
+                `⚠️ ${pair} is not available on the ${tierCfg.label} tier. Upgrade for access.`
+            ).catch(() => {});
+            return;
         }
 
         ctx.telegram.sendChatAction(chatId, 'typing').catch(() => {});
 
         let analysis: AnalysisResult;
         try {
-            if (isAdmin) {
-                // Admin: super-strict multi-TF analysis — silent skip if conditions not met
-                const adminResult = await adminAnalyze(sdk, pair);
-                if (adminResult.skipped) {
-                    if (l7MsgId) { try { await ctx.telegram.deleteMessage(chatId, l7MsgId); } catch {} }
-                    await ctx.telegram.editMessageText(chatId, progressMsg.message_id, undefined,
-                        '⚠️ No clear signal right now. Try a different pair or timeframe.',
-                        { reply_markup: { inline_keyboard: [[{ text: '🔄 New Trade', callback_data: 'admin:trade_new' }]] } }
-                    ).catch(() => {});
-                    return;
-                }
-                analysis = {
-                    direction: adminResult.direction,
-                    confidence: adminResult.confidence,
-                    reason: adminResult.reason,
-                };
-            } else {
-                analysis = await analyzePairWithSdk(sdk, pair, timeframe, normalizeTier(getUser(ctx.from!.id)?.tier));
-            }
+            analysis = await analyzePairWithSdk(sdk, pair, timeframe, analysisTier);
         } catch (err: unknown) {
             if (l7MsgId) { try { await ctx.telegram.deleteMessage(chatId, l7MsgId); } catch {} }
             const errMsg = friendlyError(err, '⚠️ Could not analyze market. Please try again.');
@@ -1113,13 +1226,15 @@ bot.action(/^pair:(.+)$/, async ctx => {
         ).catch(() => undefined);
         if (opportunityMsg) preTradeMessageIds.push(opportunityMsg.message_id);
 
-        const maxConcurrent = isAdmin ? 999 : getTierConfig(normalizeTier(getUser(ctx.from!.id)?.tier)).maxConcurrentTrades;
+        const tradeUser = getUser(ctx.from!.id);
+        const tradeTier = normalizeTier(tradeUser?.tier);
+        const tradeCfg = getTierConfig(tradeTier);
+        const maxConcurrent = tradeCfg.maxConcurrentTrades;
         const currentCount = activeTradeSessions.get(ctx.from!.id) ?? 0;
         if (currentCount >= maxConcurrent) {
-            const label = isAdmin ? 'Admin' : getTierConfig(normalizeTier(getUser(ctx.from!.id)?.tier)).label;
             await ctx.reply(
                 maxConcurrent === 1
-                    ? `⚠️ You already have an active trade. ${label} allows 1 trade at a time. Upgrade for more concurrent trades.`
+                    ? `⚠️ You already have an active trade. ${tradeCfg.label} allows 1 trade at a time. Upgrade for more concurrent trades.`
                     : `⚠️ You already have ${currentCount} active trade(s). Max ${maxConcurrent} concurrent trades reached. Wait for one to finish.`
             );
             return;
@@ -1131,20 +1246,11 @@ bot.action(/^pair:(.+)$/, async ctx => {
         logger.trade('executing', pair, ctx.from!.id, `$${amount} ${tfLabel(timeframe)} ${mode}`);
         const tradePromise = runMartingale(ctx, ssid, pair, analysis.direction, amount, timeframe, (mode ?? 'demo') as 'demo' | 'live', martingaleRounds, preTradeMessageIds, sdk);
         tradeStarted = true;
-        if (isAdmin) {
-            tradePromise.finally(() => sdk.shutdown().catch(() => {}));
-        } else {
-            tradePromise.finally(() => sdkPool.release(ctx.from!.id));
-        }
+        tradePromise.finally(() => sdkPool.release(ctx.from!.id));
     } finally {
-        // Release SDK on any early return, or shutdown admin SDK
-        if (!tradeStarted) {
-            if (isAdmin) {
-                sdk.shutdown().catch(() => {});
-            } else {
-                sdkPool.release(ctx.from!.id);
-            }
-        }
+        // Release SDK on any early return (tier/pair check, analysis error, concurrent limit).
+        // If the trade was launched, tradePromise.finally() handles release instead.
+        if (!tradeStarted) sdkPool.release(ctx.from!.id);
     }
 });
 
@@ -1387,7 +1493,7 @@ bot.action('ui:giveaways', async ctx => {
 // ─── Legacy commands (keep for power users) ───────────────────────────────────
 
 bot.command('trade', async ctx => {
-    // Admin uses the SAME wizard as users — identical UI, smarter engine behind the scenes
+    // Admin → admin trading portal
     if (ctx.from!.id === getAdminId()) {
         const ssid = getAdminSsid();
         if (!ssid) {
@@ -1397,14 +1503,14 @@ bot.command('trade', async ctx => {
             );
             return;
         }
-        // Skip mode selection — admin always trades live. Same wizard as users.
-        const state: WizardState = { step: 'amount', mode: 'live' };
-        wizardSessions.set(ctx.chat.id, state);
-        const currency = 'USD';
-        await ctx.reply(`Enter trade amount (${currency}):`, { reply_markup: amountKeyboard(currency) });
+        adminTradeSessions.set(ctx.chat.id, { step: 'amount' });
+        await ctx.reply('👑 *Admin Trade Portal*\n\nEnter trade amount (USD):', {
+            parse_mode: 'Markdown',
+            reply_markup: adminAmountKeyboard(),
+        });
         return;
     }
-    // User flow unchanged
+    // User flow
     if (!await requireApproval(ctx)) return;
     const state: WizardState = { step: 'mode' };
     try { const m = await ctx.replyWithPhoto(ASSET('L4.png')); state.lastImageMsgId = m.message_id; } catch {}
@@ -2689,13 +2795,58 @@ bot.action('admin:trade_connect', async ctx => {
 bot.action('admin:trade_new', async ctx => {
     await ctx.answerCbQuery();
     if (ctx.from!.id !== getAdminId()) return;
-    // Re-launch through the same /trade flow
     const ssid = getAdminSsid();
     if (!ssid) { await ctx.reply('⚠️ No admin account connected. Use /connect.'); return; }
-    const state: WizardState = { step: 'amount', mode: 'live' };
-    wizardSessions.set(ctx.chat!.id, state);
-    await ctx.reply('Enter trade amount (USD):', { reply_markup: amountKeyboard('USD') });
+    adminTradeSessions.set(ctx.chat!.id, { step: 'amount' });
+    await ctx.reply('👑 *Admin Trade Portal*\n\nEnter trade amount (USD):', {
+        parse_mode: 'Markdown',
+        reply_markup: adminAmountKeyboard(),
+    });
 });
+
+bot.action(/^admin_amt:(.+)$/, async ctx => {
+    await ctx.answerCbQuery();
+    if (ctx.from!.id !== getAdminId()) return;
+    const chatId = ctx.chat!.id;
+    const state = adminTradeSessions.get(chatId);
+    if (!state || state.step !== 'amount') { await ctx.reply('Session expired. Use /trade.'); return; }
+    const val = ctx.match[1];
+    if (val === 'custom') {
+        adminTradeSessions.set(chatId, { ...state, step: 'custom_amount' });
+        await ctx.reply('✏️ Enter custom amount in USD (e.g. 75):');
+        return;
+    }
+    const amt = parseFloat(val);
+    adminTradeSessions.set(chatId, { ...state, step: 'timeframe', amount: amt });
+    try { await ctx.editMessageText(`👑 Amount: *$${amt}*\n\nSelect timeframe:`, { parse_mode: 'Markdown', reply_markup: adminTimeframeKeyboard() }); } catch {}
+});
+
+bot.action(/^admin_tf:(\d+)$/, async ctx => {
+    await ctx.answerCbQuery();
+    if (ctx.from!.id !== getAdminId()) return;
+    const chatId = ctx.chat!.id;
+    const state = adminTradeSessions.get(chatId);
+    if (!state || state.step !== 'timeframe' || !state.amount) { await ctx.reply('Session expired. Use /trade.'); return; }
+    const tf = parseInt(ctx.match[1], 10);
+    adminTradeSessions.set(chatId, { ...state, step: 'pair', timeframe: tf });
+    const tfStr = tf === 30 ? '30s' : tf === 60 ? '1m' : '5m';
+    try { await ctx.editMessageText(`👑 Amount: *$${state.amount}* | TF: *${tfStr}*\n\nSelect pair:`, { parse_mode: 'Markdown', reply_markup: adminPairKeyboard() }); } catch {}
+});
+
+bot.action(/^admin_pair:(.+)$/, async ctx => {
+    await ctx.answerCbQuery();
+    if (ctx.from!.id !== getAdminId()) return;
+    const chatId = ctx.chat!.id;
+    const state = adminTradeSessions.get(chatId);
+    if (!state || state.step !== 'pair' || !state.amount || !state.timeframe) { await ctx.reply('Session expired. Use /trade.'); return; }
+    const pair = ctx.match[1];
+    adminTradeSessions.delete(chatId);
+    try { await ctx.deleteMessage(); } catch {}
+    const ssid = getAdminSsid();
+    if (!ssid) { await ctx.reply('⚠️ Admin SSID expired. Use /connect.'); return; }
+    await runAdminTrade(ctx, ssid, pair, state.amount, state.timeframe);
+});
+
 bot.command('pairs', async ctx => {
     const uid = ctx.from!.id;
     const ssid = getSsidForUser(uid);
@@ -3224,6 +3375,15 @@ bot.on('text', async ctx => {
                 return;
             }
 
+            if (as.step === 'admin_amount_custom') {
+                const amt = parseFloat(text.trim());
+                if (isNaN(amt) || amt <= 0) { await ctx.reply('❌ Enter a valid amount (e.g. 75):'); return; }
+                adminSessions.delete(chatId);
+                adminTradeSessions.set(chatId, { step: 'timeframe', amount: amt });
+                await ctx.reply(`👑 Amount: *$${amt}*\n\nSelect timeframe:`, { parse_mode: 'Markdown', reply_markup: adminTimeframeKeyboard() });
+                return;
+            }
+
             return;
             } catch (err) {
                 console.error('[admin-wizard] unhandled error in step', as.step, ':', err);
@@ -3463,6 +3623,16 @@ bot.on('text', async ctx => {
                 );
             }
         }
+        return;
+    }
+
+    // ── Admin trade wizard — custom amount ───────────────────────────────────
+    const adminTradeState = adminTradeSessions.get(chatId);
+    if (adminTradeState?.step === 'custom_amount') {
+        const amt = parseFloat(text.trim());
+        if (isNaN(amt) || amt <= 0) { await ctx.reply('❌ Enter a valid amount (e.g. 75):'); return; }
+        adminTradeSessions.set(chatId, { ...adminTradeState, step: 'timeframe', amount: amt });
+        await ctx.reply(`👑 Amount: *$${amt}*\n\nSelect timeframe:`, { parse_mode: 'Markdown', reply_markup: adminTimeframeKeyboard() });
         return;
     }
 

@@ -341,6 +341,48 @@ export function composeResultKeyboard(): IKMarkup {
     };
 }
 
+export function adminAmountKeyboard(): IKMarkup {
+    return {
+        inline_keyboard: [
+            [
+                { text: '$10',   callback_data: 'admin_amt:10' },
+                { text: '$25',   callback_data: 'admin_amt:25' },
+                { text: '$50',   callback_data: 'admin_amt:50' },
+                { text: '$100',  callback_data: 'admin_amt:100' },
+            ],
+            [
+                { text: '✏️ Custom', callback_data: 'admin_amt:custom' },
+                { text: '❌ Cancel', callback_data: 'admin:back' },
+            ],
+        ],
+    };
+}
+
+export function adminTimeframeKeyboard(): IKMarkup {
+    return {
+        inline_keyboard: [
+            [
+                { text: '30s', callback_data: 'admin_tf:30' },
+                { text: '1m',  callback_data: 'admin_tf:60' },
+                { text: '5m',  callback_data: 'admin_tf:300' },
+            ],
+            [{ text: '❌ Cancel', callback_data: 'admin:back' }],
+        ],
+    };
+}
+
+export function adminPairKeyboard(): IKMarkup {
+    const pairs = ['EURUSD-OTC', 'GBPUSD-OTC', 'EURJPY-OTC', 'GBPJPY-OTC', 'AUDUSD-OTC', 'USDCAD-OTC', 'EURGBP-OTC', 'USDCHF-OTC'];
+    const rows: Btn[][] = [];
+    for (let i = 0; i < pairs.length; i += 2) {
+        const row: Btn[] = [{ text: pairs[i], callback_data: `admin_pair:${pairs[i]}` }];
+        if (pairs[i + 1]) row.push({ text: pairs[i + 1], callback_data: `admin_pair:${pairs[i + 1]}` });
+        rows.push(row);
+    }
+    rows.push([{ text: '❌ Cancel', callback_data: 'admin:back' }]);
+    return { inline_keyboard: rows };
+}
+
 export function composeDeliveryKeyboard(): IKMarkup {
     return {
         inline_keyboard: [
