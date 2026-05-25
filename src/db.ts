@@ -1230,16 +1230,30 @@ export function seedFabricatedTraders(): void {
         ? seedIds.map(id => String(id).slice(0, 3).padStart(3, '0'))
         : ['182', '511', '447', '329', '613'];
 
+    const tryCandidate = (candidate: string): boolean => {
+        const inUsers    = db.prepare(`SELECT 1 FROM users WHERE CAST(iq_user_id AS TEXT) = ?`).get(candidate);
+        const inGiveaway = db.prepare(`SELECT 1 FROM giveaway_log WHERE generated_id = ?`).get(candidate);
+        const inFab      = db.prepare(`SELECT 1 FROM fabricated_traders WHERE fabricated_id = ?`).get(candidate);
+        return !inUsers && !inGiveaway && !inFab;
+    };
+
     for (let i = 0; i < 10; i++) {
         let fabricatedId: string | null = null;
         for (let attempt = 0; attempt < 30 && !fabricatedId; attempt++) {
             const prefix = prefixes[Math.floor(Math.random() * prefixes.length)];
             const suffix = String(Math.floor(Math.random() * 1_000_000)).padStart(6, '0');
             const candidate = prefix + suffix;
-            const inUsers    = db.prepare(`SELECT 1 FROM users WHERE CAST(iq_user_id AS TEXT) = ?`).get(candidate);
-            const inGiveaway = db.prepare(`SELECT 1 FROM giveaway_log WHERE generated_id = ?`).get(candidate);
-            const inFab      = db.prepare(`SELECT 1 FROM fabricated_traders WHERE fabricated_id = ?`).get(candidate);
-            if (!inUsers && !inGiveaway && !inFab) fabricatedId = candidate;
+            if (tryCandidate(candidate)) fabricatedId = candidate;
+        }
+        // Random sampling can collide repeatedly once the namespace fills.
+        // Fall back to a deterministic sequential scan so seeding never
+        // silently drops entries — the leaderboard always has 10 fakes.
+        if (!fabricatedId) {
+            const prefix = prefixes[i % prefixes.length];
+            for (let seq = 0; seq < 1_000_000 && !fabricatedId; seq++) {
+                const candidate = prefix + String(seq).padStart(6, '0');
+                if (tryCandidate(candidate)) fabricatedId = candidate;
+            }
         }
         if (!fabricatedId) continue;
 

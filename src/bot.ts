@@ -69,12 +69,22 @@ import { setupChannelHandlers, startWelcomeFollowUp } from './channel.js';
 import { startAutoBroadcast } from './auto-broadcast.js';
 import { generatePost, type LlmRequest } from './llm.js';
 import { adminAnalyze, type AdminAnalysisResult } from './admin-analysis.js';
+import { existsSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const IQ_SSID   = process.env.IQ_SSID;
 const AFFILIATE_LINK   = process.env.AFFILIATE_LINK   ?? 'https://iqbroker.com/lp/regframe-01-light-nosocials/?aff=749367&aff_model=revenue';
 const ADMIN_CONTACT_LINK = process.env.ADMIN_CONTACT_LINK ?? 'https://t.me/shiloh_is_10xing';
-const ASSETS_DIR = process.env.ASSETS_DIR ?? '/root/iqbot-v3/assets';
+// Resolve assets dir from env, else from the source layout (src/.. -> assets).
+// Warn loudly at startup if the directory doesn't exist so image sends don't
+// fail silently every time a wizard step needs to upload a photo.
+const __dirname_es = dirname(fileURLToPath(import.meta.url));
+const ASSETS_DIR = process.env.ASSETS_DIR ?? resolve(__dirname_es, '..', 'assets');
+if (!existsSync(ASSETS_DIR)) {
+    console.error(`[bot] WARNING: assets directory not found at ${ASSETS_DIR} — all photo sends will fail. Set ASSETS_DIR in env.`);
+}
 
 if (!BOT_TOKEN) throw new Error('BOT_TOKEN missing from .env');
 
@@ -131,6 +141,9 @@ function ASSET(f: string): { source: string } {
 // ─── Session / wizard state ───────────────────────────────────────────────────
 
 function makeSessionMap<T>(prefix: string) {
+    if (!/^[a-z_]+$/.test(prefix)) {
+        throw new Error(`makeSessionMap: invalid prefix "${prefix}" — must match /^[a-z_]+$/`);
+    }
     const cache = new Map<number, T>();
     return {
         get: (k: number): T | undefined => {
@@ -352,6 +365,16 @@ async function flushPendingDeliveries(userId: number): Promise<void> {
     }
 }
 
+// Telegram allows ~30 bot messages/sec; deletes count toward the same budget.
+// Stagger deletes at ~20/sec to leave headroom for other bot traffic.
+async function runStaggeredDeletes(ids: Array<{ telegramId: number; msgId: number }>): Promise<void> {
+    const DELETE_INTERVAL_MS = 50;
+    for (const { telegramId, msgId } of ids) {
+        try { await bot.telegram.deleteMessage(telegramId, msgId); } catch {}
+        await new Promise(r => setTimeout(r, DELETE_INTERVAL_MS));
+    }
+}
+
 async function dispatchBroadcastPayload(payload: {
     message: string;
     targetIds: number[];
@@ -399,11 +422,7 @@ async function dispatchBroadcastPayload(payload: {
     }
 
     if (deleteAfterMs > 0) {
-        setTimeout(() => {
-            for (const { telegramId, msgId } of sentMsgIds) {
-                bot.telegram.deleteMessage(telegramId, msgId).catch(() => {});
-            }
-        }, deleteAfterMs);
+        setTimeout(() => { void runStaggeredDeletes(sentMsgIds); }, deleteAfterMs);
     }
 
     return { sent: sentMsgIds.length, deferred: deferredCount };

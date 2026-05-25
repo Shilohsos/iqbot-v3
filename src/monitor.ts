@@ -4,6 +4,29 @@ import Database from 'better-sqlite3';
 import fs from 'node:fs';
 import path from 'node:path';
 
+// Resolve pm2 binary once at startup so we don't depend on PATH being set
+// the same way under PM2 vs. shell. If pm2 isn't installed we log loudly
+// rather than producing misleading "bot not found" false positives.
+function resolvePm2Bin(): string {
+    const candidates = [
+        process.env.PM2_BIN,
+        '/opt/node22/bin/pm2',
+        '/usr/local/bin/pm2',
+        '/usr/bin/pm2',
+    ].filter(Boolean) as string[];
+    for (const c of candidates) {
+        try { if (fs.existsSync(c)) return c; } catch {}
+    }
+    try {
+        const which = execSync('command -v pm2 || which pm2', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+        if (which) return which;
+    } catch {}
+    console.error('[monitor] pm2 binary not found; PM2 health checks will fail');
+    return 'pm2';
+}
+const PM2_BIN = resolvePm2Bin();
+console.log(`[monitor] using pm2 at: ${PM2_BIN}`);
+
 // ─── Config ───────────────────────────────────────────────────────────────────
 
 const BOT_TOKEN   = process.env.BOT_TOKEN;
@@ -34,7 +57,7 @@ const ALERT_COOLDOWN_MS = 5 * 60 * 1000;
 
 function checkPM2Status(): string | null {
     try {
-        const output    = execSync('pm2 jlist', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, PATH: `/opt/node22/bin:${process.env.PATH ?? '/usr/bin:/bin'}` } });
+        const output    = execSync(`${PM2_BIN} jlist`, { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
         const processes = JSON.parse(output) as Array<{
             name: string;
             pm2_env: { status: string; restart_time: number; pm_uptime: number };
