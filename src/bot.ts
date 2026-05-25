@@ -3579,10 +3579,12 @@ bot.on('text', async ctx => {
         try { await ctx.telegram.deleteMessage(chatId, wiz.lastImageMsgId); } catch {}
     }
     try { const m = await ctx.replyWithPhoto(ASSET('L5.png')); wiz.lastImageMsgId = m.message_id; } catch {}
-    const tfWizUser = getUser(ctx.from!.id);
+    const isWizAdmin = ctx.from!.id === getAdminId();
+    const tfWizUser = isWizAdmin ? null : getUser(ctx.from!.id);
+    const tfWizTier = isWizAdmin ? 'MASTER' : (tfWizUser?.tier ?? undefined);
     await ctx.reply(
         '⏱ Pick your expiry timeframe 👇\n⏱ Faster timeframes settle quicker.\n🐢 Longer timeframes ride bigger moves.',
-        { reply_markup: timeframeKeyboard(tfWizUser?.tier ?? undefined) }
+        { reply_markup: timeframeKeyboard(tfWizTier) }
     );
 });
 
