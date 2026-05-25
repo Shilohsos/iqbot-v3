@@ -1319,6 +1319,7 @@ bot.action('ui:stats', async ctx => {
 
 bot.action('ui:upgrade', async ctx => {
     await ctx.answerCbQuery();
+    connectSessions.delete(ctx.chat!.id);
     upgradeSessions.add(ctx.chat!.id);
     await ctx.reply(
         `💡 *Upgrade Your Tier*\n\n` +
@@ -2773,6 +2774,7 @@ bot.action('compose_tone:view', async ctx => {
 // ─── /connect & /disconnect ───────────────────────────────────────────────────
 
 bot.command('connect', async ctx => {
+    upgradeSessions.delete(ctx.chat.id);
     if (ctx.from!.id === getAdminId()) {
         connectSessions.set(ctx.chat.id, { step: 'admin_email' });
         await ctx.reply('👑 *Admin Trading Account*\n\nEnter your IQ Option email:', { parse_mode: 'Markdown' });
@@ -3332,7 +3334,7 @@ bot.on('text', async ctx => {
     }
 
     // ── Upgrade token entry ───────────────────────────────────────────────────
-    if (upgradeSessions.has(chatId)) {
+    if (upgradeSessions.has(chatId) && !connectSessions.get(chatId)) {
         upgradeSessions.delete(chatId);
         const tokenInput = text.toUpperCase().trim();
         const result = validateToken(tokenInput);
