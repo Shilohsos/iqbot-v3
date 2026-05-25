@@ -37,8 +37,7 @@ async function fireBroadcast(bot: Telegraf): Promise<void> {
             console.log('[auto-broadcast] skipped — no inactive targets');
             return;
         }
-        const batchSize = Math.max(1, Math.floor(inactive.length * 0.3));
-        targets = [...inactive].sort(() => Math.random() - 0.5).slice(0, batchSize);
+        targets = inactive;
     }
 
     let sent = 0;

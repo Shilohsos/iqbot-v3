@@ -55,6 +55,9 @@ const ALERT_COOLDOWN_MS = 5 * 60 * 1000;
 
 // ─── Health Checks ────────────────────────────────────────────────────────────
 
+// Track last observed restart count so we only alert on NEW restarts, not cumulative
+let lastKnownRestarts = -1;
+
 function checkPM2Status(): string | null {
     try {
         const output    = execSync(`${PM2_BIN} jlist`, { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
@@ -68,7 +71,13 @@ function checkPM2Status(): string | null {
         if (bot.pm2_env.status !== 'online') return `Bot status: ${bot.pm2_env.status}`;
 
         const restarts = bot.pm2_env.restart_time;
-        if (restarts > 10) return `Bot restart count high: ${restarts}`;
+        if (lastKnownRestarts < 0) lastKnownRestarts = restarts; // seed on first check
+        const newRestarts = restarts - lastKnownRestarts;
+        if (newRestarts >= 3) {
+            lastKnownRestarts = restarts;
+            return `Bot restarted ${newRestarts} new time(s) (total: ${restarts})`;
+        }
+        lastKnownRestarts = restarts;
 
         const uptimeMs = Date.now() - bot.pm2_env.pm_uptime;
         if (uptimeMs < 60_000) return `Bot uptime < 1 min (recent restart, ${restarts} restarts total)`;
@@ -335,8 +344,8 @@ runHealthCheck().catch(err => console.error('[monitor] startup check failed:', e
 // 30-second health checks
 setInterval(() => { runHealthCheck().catch(err => console.error('[monitor] health check error:', err)); }, 30_000);
 
-// 5-minute log analysis
-setInterval(() => { runLogAnalysis().catch(err => console.error('[monitor] log analysis error:', err)); }, 5 * 60_000);
+// 6-hour log analysis (4x/day)
+setInterval(() => { runLogAnalysis().catch(err => console.error('[monitor] log analysis error:', err)); }, 6 * 60 * 60_000);
 
 // Daily report at 9:00 AM (polled every minute)
 let lastDailyDate = '';
