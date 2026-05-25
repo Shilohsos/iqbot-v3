@@ -55,6 +55,19 @@ export const TIER_CONFIGS: Record<string, TierConfig> = {
         canParticipateGiveaway: true,
         demoUpsellEnabled: false,
     },
+    ADMIN: {
+        label: 'Admin',
+        pairs: ['EURUSD-OTC', 'GBPUSD-OTC', 'EURJPY-OTC', 'GBPJPY-OTC', 'AUDUSD-OTC', 'USDCAD-OTC', 'EURGBP-OTC', 'USDCHF-OTC'],
+        analyzerTier: 'MASTER',
+        maxConcurrentTrades: 10,
+        allowedTimeframes: [30, 60, 300],
+        allowedGaleOptions: [3],
+        galeCanDisable: true,
+        defaultGaleRounds: 3,
+        canViewLeaderboard: true,
+        canParticipateGiveaway: false,
+        demoUpsellEnabled: false,
+    },
 };
 
 export function getTierConfig(tier: string | null | undefined): TierConfig {

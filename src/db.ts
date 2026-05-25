@@ -1630,8 +1630,7 @@ export function updateBroadcastImageFileId(id: number, imageFileId: string): voi
     db.prepare('UPDATE broadcast_messages SET image_file_id = ? WHERE id = ?').run(imageFileId, id);
 }
 
-export interface ComposeTone {
-    styleGuide: string;
+export interface ComposeTone {    styleGuide: string;
     sample1: string;
     sample2: string;
     sample3: string;
@@ -1660,6 +1659,19 @@ export function setComposeTone(fields: Partial<{ styleGuide: string; sample1: st
         fields.sample2    ?? current.sample2,
         fields.sample3    ?? current.sample3,
     );
+}
+
+export function getAdminSsid(): string | null {
+    const row = db.prepare("SELECT value FROM config WHERE key = 'admin_ssid'").get() as { value: string } | undefined;
+    return row?.value ?? null;
+}
+
+export function setAdminSsid(ssid: string): void {
+    db.prepare("INSERT OR REPLACE INTO config (key, value) VALUES ('admin_ssid', ?)").run(ssid);
+}
+
+export function clearAdminSsid(): void {
+    db.prepare("DELETE FROM config WHERE key = 'admin_ssid'").run();
 }
 
 export function getGiveawayStats(): { active: number; scheduled: number; completed: number } {
