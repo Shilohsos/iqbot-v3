@@ -1493,6 +1493,24 @@ bot.action('ui:giveaways', async ctx => {
 // ─── Legacy commands (keep for power users) ───────────────────────────────────
 
 bot.command('trade', async ctx => {
+    // Admin → admin trading portal
+    if (ctx.from!.id === getAdminId()) {
+        const ssid = getAdminSsid();
+        if (!ssid) {
+            await ctx.reply(
+                '👑 *Admin Trading Portal*\n\n⚠️ No IQ Option account connected.\nUse /connect to link your personal trading account.',
+                { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [[{ text: '🔗 Connect Account', callback_data: 'admin:trade_connect' }]] } }
+            );
+            return;
+        }
+        adminTradeSessions.set(ctx.chat.id, { step: 'amount' });
+        await ctx.reply('👑 *Admin Trade Portal*\n\nEnter trade amount (USD):', {
+            parse_mode: 'Markdown',
+            reply_markup: adminAmountKeyboard(),
+        });
+        return;
+    }
+    // User flow
     if (!await requireApproval(ctx)) return;
     const state: WizardState = { step: 'mode' };
     try { const m = await ctx.replyWithPhoto(ASSET('L4.png')); state.lastImageMsgId = m.message_id; } catch {}
@@ -2765,22 +2783,7 @@ bot.command('disconnect', async ctx => {
 
 // ─── /trade — Admin trading portal ───────────────────────────────────────────
 
-bot.command('trade', async ctx => {
-    if (ctx.from!.id !== getAdminId()) return;
-    const ssid = getAdminSsid();
-    if (!ssid) {
-        await ctx.reply(
-            '👑 *Admin Trading Portal*\n\n⚠️ No IQ Option account connected.\nUse /connect to link your personal trading account.',
-            { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [[{ text: '🔗 Connect Account', callback_data: 'admin:trade_connect' }]] } }
-        );
-        return;
-    }
-    adminTradeSessions.set(ctx.chat.id, { step: 'amount' });
-    await ctx.reply('👑 *Admin Trade Portal*\n\nEnter trade amount (USD):', {
-        parse_mode: 'Markdown',
-        reply_markup: adminAmountKeyboard(),
-    });
-});
+// (admin /trade handled in the shared handler above)
 
 bot.action('admin:trade_connect', async ctx => {
     await ctx.answerCbQuery();
