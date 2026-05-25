@@ -27,6 +27,7 @@ import {
     seedGiveawayFabricants,
     getRealAndFabricatedCounts,
     seedMarathonFabricants,
+    getAllFabricatedTraders,
     getMarathonLeaderboardRows,
     deleteMarathonFabricants,
     setPromoFabricatedClaims,
@@ -56,6 +57,11 @@ function formatCriteriaDescription(criteriaType: string | null, criteriaValue: s
     if (criteriaType === 'min_balance') return `📋 Minimum balance: $${criteriaValue ?? '0'}`;
     if (criteriaType === 'top_traders') return `📋 Top ${criteriaValue ?? '10'} traders by trade count win`;
     return '';
+}
+
+function maskFabId(id: string): string {
+    if (id.length <= 6) return id;
+    return id.slice(0, 3) + '***' + id.slice(-3);
 }
 
 function futureTimestamp(minMs: number, maxMs: number): string {
@@ -221,7 +227,14 @@ export function selectWinners(giveawayId: number): Array<{ telegram_id: number; 
         winners = shuffled.slice(0, event.max_winners);
     }
 
-    for (const w of winners) {
+    // Assign realistic 9-digit display IDs from fabricated_traders pool
+    const fabTraders = [...getAllFabricatedTraders()].sort(() => Math.random() - 0.5);
+    const winnerDisplayIds: string[] = winners.map(
+        (_, i) => fabTraders[i % Math.max(fabTraders.length, 1)]?.fabricated_id ?? String(100_000_000 + i)
+    );
+
+    for (let i = 0; i < winners.length; i++) {
+        const w = winners[i];
         setParticipantWinner(w.id);
         incrementGiveawayWinnerCount(giveawayId);
         const prizeText = event.prize_per_winner != null ? ` — Prize: *$${event.prize_per_winner.toFixed(2)}*` : '';
@@ -232,15 +245,19 @@ export function selectWinners(giveawayId: number): Array<{ telegram_id: number; 
         // Fabricated winners have negative telegram_ids — sendMessage will fail silently
     }
 
-    // Consolation to real non-winning participants
-    if (event.event_type === 'giveaway') {
-        const realParticipants = allEligible.filter(p => p.fabricated !== 1);
+    // Results announcement to ALL real participants with masked realistic winner IDs
+    const realParticipants = allEligible.filter(p => p.fabricated !== 1);
+    if (realParticipants.length > 0) {
+        const maskedWinners = winnerDisplayIds.map(id => maskFabId(id)).join(', ');
+        const prizeText = event.prize_per_winner != null
+            ? `\nPrize per winner: *$${event.prize_per_winner.toFixed(2)}*` : '';
+        const announcementMsg =
+            `🎉 *GIVEAWAY RESULTS*\n\n` +
+            `*${event.title}*\n\n` +
+            `🏆 Winners: ${maskedWinners}${prizeText}\n\n` +
+            `Prize will be delivered shortly. Thanks to everyone who participated!`;
         for (const p of realParticipants) {
-            insertNotification(
-                p.telegram_id,
-                `🎁 The *${event.title}* giveaway has ended.\n\nThanks for participating! More giveaways coming soon. Stay tuned 👀`,
-                {},
-            );
+            insertNotification(p.telegram_id, announcementMsg, {});
         }
     }
 
