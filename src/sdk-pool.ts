@@ -21,24 +21,24 @@ class UserSdkPool {
     }
 
     async get(userId: number, ssid: string): Promise<ClientSdk> {
-        const existing = this.entries.get(userId);
+        // Fast-path: in-flight create for this user — reuse the promise so
+        // concurrent callers cannot spawn duplicate SDKs.
+        const inFlight = this.pending.get(userId);
+        if (inFlight) return inFlight;
 
+        const existing = this.entries.get(userId);
         if (existing) {
-            if (existing.ssid !== ssid) {
-                await this.shutdown(userId);
-            } else if (Date.now() - existing.createdAt > this.MAX_AGE_MS) {
-                await this.shutdown(userId);
-            } else {
+            const stale = existing.ssid !== ssid || Date.now() - existing.createdAt > this.MAX_AGE_MS;
+            if (!stale) {
                 existing.inUse = true;
                 existing.lastUsed = Date.now();
                 return existing.sdk;
             }
+            await this.shutdown(userId);
         }
 
-        if (this.pending.has(userId)) {
-            return this.pending.get(userId)!;
-        }
-
+        // Set the pending entry synchronously BEFORE awaiting anything so a
+        // second concurrent caller in the same tick sees it.
         const promise = (async () => {
             try {
                 const sdk = await Promise.race([
@@ -55,13 +55,10 @@ class UserSdkPool {
                     createdAt: Date.now(),
                 });
                 return sdk;
-            } catch (err) {
-                throw err;
             } finally {
                 this.pending.delete(userId);
             }
         })();
-
         this.pending.set(userId, promise);
         return promise;
     }

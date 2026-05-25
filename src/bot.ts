@@ -32,6 +32,8 @@ import {
     getUserBalanceCache, setUserBalanceCache, clearUserBalanceCache,
     getComposeTone, setComposeTone,
     getAdminSsid, setAdminSsid, clearAdminSsid,
+    insertScheduledBroadcast, markScheduledBroadcastSent, deleteScheduledBroadcast, getPendingScheduledBroadcasts,
+    clearUserSsid,
 } from './db.js';
 import { friendlyError } from './errors.js';
 import { logger } from './logger.js';
@@ -373,11 +375,13 @@ async function dispatchBroadcastPayload(payload: {
     const sentMsgIds: Array<{ telegramId: number; msgId: number }> = [];
     let deferredCount = 0;
 
+    const MAX_PENDING_PER_USER = 5;
     for (const uid of targetIds) {
         try {
             if ((activeTradeSessions.get(uid) ?? 0) > 0) {
                 const q = pendingDeliveries.get(uid) ?? [];
                 q.push({ message, button, media, deleteAfterMs });
+                while (q.length > MAX_PENDING_PER_USER) q.shift();
                 pendingDeliveries.set(uid, q);
                 deferredCount++;
                 continue;
@@ -407,6 +411,7 @@ async function dispatchBroadcastPayload(payload: {
 
 async function executeScheduledBroadcast(scheduled: ScheduledBroadcast): Promise<void> {
     scheduled.sent = true;
+    try { markScheduledBroadcastSent(scheduled.id); } catch (err) { console.error('[schedule] mark sent failed:', err); }
     const { sent, deferred } = await dispatchBroadcastPayload(scheduled);
     const timerLabel = scheduled.deleteAfterMs === 0 ? 'never' :
         scheduled.deleteAfterMs < 60_000 ? `${scheduled.deleteAfterMs / 1_000}s` :
@@ -414,6 +419,67 @@ async function executeScheduledBroadcast(scheduled: ScheduledBroadcast): Promise
     let msg = `📅 Scheduled broadcast #${scheduled.id} sent to *${sent}/${scheduled.targetIds.length}* users. Auto-delete: ${timerLabel}`;
     if (deferred > 0) msg += `\n⏳ *${deferred}* deferred (active traders — will deliver after trade ends)`;
     try { await bot.telegram.sendMessage(getAdminId(), msg, { parse_mode: 'Markdown' }); } catch {}
+}
+
+function scheduleBroadcastInMemory(scheduled: ScheduledBroadcast, delayMs: number): void {
+    scheduled.timerId = setTimeout(() => { void executeScheduledBroadcast(scheduled); }, delayMs);
+    scheduledBroadcasts.push(scheduled);
+}
+
+function persistAndSchedule(input: Omit<ScheduledBroadcast, 'id' | 'sent' | 'createdAt' | 'timerId'> & { createdAt?: Date }): ScheduledBroadcast {
+    const createdAt = input.createdAt ?? new Date();
+    const id = insertScheduledBroadcast({
+        message: input.message,
+        targetIds: input.targetIds,
+        button: input.button,
+        media: input.media,
+        deleteAfterMs: input.deleteAfterMs,
+        scheduledAt: input.scheduledAt.toISOString(),
+        createdAt: createdAt.toISOString(),
+    });
+    if (id >= nextScheduledId) nextScheduledId = id + 1;
+    const scheduled: ScheduledBroadcast = {
+        id,
+        message: input.message,
+        targetIds: input.targetIds,
+        button: input.button,
+        media: input.media,
+        deleteAfterMs: input.deleteAfterMs,
+        scheduledAt: input.scheduledAt,
+        sent: false,
+        createdAt,
+    };
+    const delayMs = Math.max(0, input.scheduledAt.getTime() - Date.now());
+    scheduleBroadcastInMemory(scheduled, delayMs);
+    return scheduled;
+}
+
+function rehydrateScheduledBroadcasts(): void {
+    let restored = 0, firedImmediately = 0;
+    try {
+        for (const row of getPendingScheduledBroadcasts()) {
+            const scheduledAt = new Date(row.scheduledAt);
+            const scheduled: ScheduledBroadcast = {
+                id: row.id,
+                message: row.message,
+                targetIds: row.targetIds,
+                button: row.button as BroadcastButton | undefined,
+                media: row.media as { type: 'photo' | 'video'; fileId: string } | undefined,
+                deleteAfterMs: row.deleteAfterMs,
+                scheduledAt,
+                sent: false,
+                createdAt: new Date(row.createdAt),
+            };
+            if (row.id >= nextScheduledId) nextScheduledId = row.id + 1;
+            const delayMs = Math.max(0, scheduledAt.getTime() - Date.now());
+            if (delayMs === 0) firedImmediately++;
+            scheduleBroadcastInMemory(scheduled, delayMs);
+            restored++;
+        }
+        if (restored > 0) console.log(`[schedule] rehydrated ${restored} scheduled broadcast(s)${firedImmediately ? ` (${firedImmediately} overdue, firing now)` : ''}`);
+    } catch (err) {
+        console.error('[schedule] rehydrate failed:', err);
+    }
 }
 
 async function executeBroadcast(chatId: number, deleteAfterMs: number, ctx: Context): Promise<void> {
@@ -437,6 +503,27 @@ function getSsidForUser(telegramId: number): string | null {
     const user = getUser(telegramId);
     if (user?.ssid) return user.ssid;
     return IQ_SSID ?? null;
+}
+
+function isAuthExpiredError(err: unknown): boolean {
+    const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
+    return msg.includes('authenticate') || msg.includes('authoriz') || msg.includes('unauthor')
+        || msg.includes('ssid') || msg.includes('session expired') || msg.includes('not authenticated')
+        || msg.includes('invalid token') || msg.includes('login') || msg.includes('401');
+}
+
+async function handlePossibleAuthExpiry(err: unknown, ctx: Context, isAdmin: boolean): Promise<boolean> {
+    if (!isAuthExpiredError(err)) return false;
+    if (isAdmin) {
+        try { clearAdminSsid(); } catch {}
+    } else if (ctx.from?.id) {
+        try { clearUserSsid(ctx.from.id); } catch {}
+    }
+    await ctx.reply(
+        '🔐 Your IQ Option session expired.\nReconnect to keep trading.',
+        { reply_markup: { inline_keyboard: [[{ text: '🔗 Reconnect', callback_data: isAdmin ? 'admin:trade_connect' : 'ui:connect' }]] } }
+    ).catch(() => {});
+    return true;
 }
 
 async function loginAndCaptureSsid(email: string, password: string): Promise<{ ssid: string; sdk: ClientSdk }> {
@@ -812,7 +899,7 @@ async function runMartingale(
     }
     if (balanceType === 'demo') await showDemoUpsell(ctx, sentMessages);
     } finally {
-        const prev = activeTradeSessions.get(userId) ?? 1;
+        const prev = activeTradeSessions.get(userId) ?? 0;
         if (prev <= 1) activeTradeSessions.delete(userId);
         else activeTradeSessions.set(userId, prev - 1);
         await flushPendingDeliveries(userId);
@@ -1023,10 +1110,9 @@ bot.action(/^pair:(.+)$/, async ctx => {
         ).catch(() => {});
     } catch (err: unknown) {
         if (l7MsgId) { try { await ctx.telegram.deleteMessage(chatId, l7MsgId); } catch {} }
-        await ctx.telegram.editMessageText(
-            chatId, progressMsg.message_id, undefined,
-            friendlyError(err, '🔌 Lost connection to IQ Option. Your account is safe — try again.')
-        ).catch(() => ctx.reply(friendlyError(err, '🔌 Could not connect to IQ Option. Try again.')));
+        await ctx.telegram.deleteMessage(chatId, progressMsg.message_id).catch(() => {});
+        if (await handlePossibleAuthExpiry(err, ctx, isAdmin)) return;
+        await ctx.reply(friendlyError(err, '🔌 Could not connect to IQ Option. Try again.')).catch(() => {});
         return;
     }
 
@@ -1159,6 +1245,12 @@ bot.action('upsell:demo', async ctx => {
 // ─── User menu actions ────────────────────────────────────────────────────────
 
 bot.action('ui:start', async ctx => { await ctx.answerCbQuery(); await sendStartMenu(ctx); });
+
+bot.action('ui:connect', async ctx => {
+    await ctx.answerCbQuery();
+    connectSessions.set(ctx.chat!.id, { step: 'email' });
+    await ctx.reply('📧 Enter your IQ Option email:');
+});
 
 bot.action('ui:trade', async ctx => {
     await ctx.answerCbQuery();
@@ -1391,6 +1483,13 @@ bot.command('trade', async ctx => {
     try { const m = await ctx.replyWithPhoto(ASSET('L4.png')); state.lastImageMsgId = m.message_id; } catch {}
     wizardSessions.set(ctx.chat.id, state);
     await ctx.reply('Trade live | Trade Demo', { reply_markup: tradeModeKeyboard() });
+});
+
+bot.action('admin:trade_connect', async ctx => {
+    await ctx.answerCbQuery();
+    if (ctx.from!.id !== getAdminId()) return;
+    connectSessions.set(ctx.chat!.id, { step: 'admin_email' });
+    await ctx.reply('👑 *Admin Trading Account*\n\nEnter your IQ Option email:', { parse_mode: 'Markdown' });
 });
 
 bot.command('history', async ctx => {
@@ -1822,15 +1921,14 @@ bot.action(/^bcast_delay:(\d+)$/, async ctx => {
     if (activeCount >= 5) { await ctx.reply('❌ Max 5 scheduled broadcasts. Cancel one first.', { reply_markup: adminBackKeyboard() }); return; }
     pendingBroadcasts.delete(chatId);
     const scheduledAt = new Date(Date.now() + delayMs);
-    const id = nextScheduledId++;
-    const scheduled: ScheduledBroadcast = {
-        id, message: pending.message, targetIds: pending.targetIds,
-        button: pending.button, media: pending.media,
+    persistAndSchedule({
+        message: pending.message,
+        targetIds: pending.targetIds,
+        button: pending.button,
+        media: pending.media,
         deleteAfterMs: pending.deleteAfterMs ?? 0,
-        scheduledAt, sent: false, createdAt: new Date(),
-    };
-    scheduled.timerId = setTimeout(() => { void executeScheduledBroadcast(scheduled); }, delayMs);
-    scheduledBroadcasts.push(scheduled);
+        scheduledAt,
+    });
     const delayLabel = delayMs < 3_600_000 ? `${delayMs / 60_000}m` : `${delayMs / 3_600_000}h`;
     await ctx.reply(
         `✅ Broadcast scheduled in *${delayLabel}* (${scheduledAt.toLocaleTimeString()}) → ${pending.targetIds.length} users.`,
@@ -1873,6 +1971,7 @@ bot.action(/^bcast_cancel:(\d+)$/, async ctx => {
     const s = scheduledBroadcasts[idx];
     if (s.timerId) clearTimeout(s.timerId);
     scheduledBroadcasts.splice(idx, 1);
+    try { deleteScheduledBroadcast(id); } catch (err) { console.error('[schedule] delete failed:', err); }
     await ctx.reply(`✅ Scheduled broadcast #${id} cancelled.`, { reply_markup: adminBackKeyboard() });
 });
 
@@ -2881,15 +2980,14 @@ bot.on('text', async ctx => {
                 if (activeCount >= 5) { await ctx.reply('❌ Max 5 scheduled broadcasts. Cancel one first.', { reply_markup: adminBackKeyboard() }); return; }
                 pendingBroadcasts.delete(chatId);
                 const scheduledAt = new Date(Date.now() + delayMs);
-                const id = nextScheduledId++;
-                const scheduled: ScheduledBroadcast = {
-                    id, message: pending.message, targetIds: pending.targetIds,
-                    button: pending.button, media: pending.media,
+                persistAndSchedule({
+                    message: pending.message,
+                    targetIds: pending.targetIds,
+                    button: pending.button,
+                    media: pending.media,
                     deleteAfterMs: pending.deleteAfterMs ?? 0,
-                    scheduledAt, sent: false, createdAt: new Date(),
-                };
-                scheduled.timerId = setTimeout(() => { void executeScheduledBroadcast(scheduled); }, delayMs);
-                scheduledBroadcasts.push(scheduled);
+                    scheduledAt,
+                });
                 const delayLabel = delayMs < 3_600_000 ? `${delayMs / 60_000}m` : `${delayMs / 3_600_000}h`;
                 await ctx.reply(
                     `✅ Broadcast scheduled in *${delayLabel}* (${scheduledAt.toLocaleTimeString()}) → ${pending.targetIds.length} users.`,
@@ -3488,7 +3586,7 @@ bot.catch((err: unknown, ctx) => {
             ).catch(() => {});
             if (ctx.from?.id) {
                 wizardSessions.delete(ctx.chat!.id);
-                const prev = activeTradeSessions.get(ctx.from.id) ?? 1;
+                const prev = activeTradeSessions.get(ctx.from.id) ?? 0;
                 if (prev <= 1) activeTradeSessions.delete(ctx.from.id);
                 else activeTradeSessions.set(ctx.from.id, prev - 1);
             }
@@ -3499,6 +3597,7 @@ bot.catch((err: unknown, ctx) => {
 });
 
 cleanStaleSessions();
+rehydrateScheduledBroadcasts();
 bot.launch();
 logger.info('bot', 'iqbot-v3 running');
 startWelcomeFollowUp(bot);
@@ -3511,7 +3610,9 @@ if (countFabricatedTraders() === 0) {
     console.log('[leaderboard] seeded 10 fabricated traders');
 }
 
-setInterval(() => {
+const backgroundIntervals: ReturnType<typeof setInterval>[] = [];
+
+backgroundIntervals.push(setInterval(() => {
     const due = getFabricatedTradersDueForUpdate();
     for (const t of due) {
         const increase    = Math.random() < 0.8;
@@ -3521,9 +3622,9 @@ setInterval(() => {
         const nextUpdateAt = new Date(Date.now() + intervalSec * 1000).toISOString().replace('T', ' ').split('.')[0];
         updateFabricatedPnl(t.id, newPnl, nextUpdateAt);
     }
-}, 60_000);
+}, 60_000));
 
-setInterval(() => {
+backgroundIntervals.push(setInterval(() => {
     const due = getMarathonFabricantsDueForUpdate();
     for (const f of due) {
         if (Math.random() < 0.2) continue; // 20% chance: no change this tick
@@ -3533,7 +3634,7 @@ setInterval(() => {
         const nextUpdateAt = new Date(Date.now() + intervalSec * 1000).toISOString().replace('T', ' ').split('.')[0];
         updateMarathonFabricantTrades(f.id, newCount, nextUpdateAt);
     }
-}, 60_000);
+}, 60_000));
 
 function scheduleMidnightReset(): void {
     const now      = new Date();
@@ -3550,39 +3651,46 @@ scheduleMidnightReset();
 
 // ─── Giveaway V2: update queue + notifications queue ─────────────────────────
 
-setInterval(async () => {
+backgroundIntervals.push(setInterval(async () => {
     try { await processUpdateQueue(bot.telegram); } catch (err) {
         console.error('[giveaway] processUpdateQueue error:', err instanceof Error ? err.message : err);
     }
-}, 30_000);
+}, 30_000));
 
-setInterval(async () => {
+backgroundIntervals.push(setInterval(async () => {
     try { await processNotificationsQueue(bot.telegram); } catch (err) {
         console.error('[giveaway] processNotificationsQueue error:', err instanceof Error ? err.message : err);
     }
-}, 30_000);
+}, 30_000));
 
-setInterval(async () => {
+backgroundIntervals.push(setInterval(async () => {
     try { await checkMarathonDeadlines(bot.telegram); } catch (err) {
         console.error('[marathon] deadline check error:', err instanceof Error ? err.message : err);
     }
-}, 5 * 60_000);
+}, 5 * 60_000));
 
-setInterval(async () => {
+backgroundIntervals.push(setInterval(async () => {
     try { await tickPromoFabrication(); } catch (err) {
         console.error('[promo] fabrication tick error:', err instanceof Error ? err.message : err);
     }
-}, 10 * 60_000);
+}, 10 * 60_000));
 
 // ─── Keepalive ────────────────────────────────────────────────────────────────
 
-setInterval(async () => {
+backgroundIntervals.push(setInterval(async () => {
     try {
         await bot.telegram.getMe();
     } catch (err) {
         console.error('[keepalive] getMe failed:', err instanceof Error ? err.message : err);
     }
-}, 600_000);
+}, 600_000));
 
-process.once('SIGINT',  () => bot.stop('SIGINT'));
-process.once('SIGTERM', () => bot.stop('SIGTERM'));
+function shutdown(signal: string): void {
+    for (const t of backgroundIntervals) clearInterval(t);
+    for (const s of scheduledBroadcasts) if (s.timerId) clearTimeout(s.timerId);
+    try { sdkPool.destroy(); } catch {}
+    bot.stop(signal);
+}
+
+process.once('SIGINT',  () => shutdown('SIGINT'));
+process.once('SIGTERM', () => shutdown('SIGTERM'));

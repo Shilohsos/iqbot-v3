@@ -78,11 +78,21 @@ function computeBollingerFull(closes: number[], period: number, stdDevMult: numb
 }
 
 function computeStochastic(highs: number[], lows: number[], closes: number[], kPeriod: number): { k: number; d: number } {
-    const lowest = lows.slice(-kPeriod).reduce((a, b) => Math.min(a, b), Infinity);
-    const highest = highs.slice(-kPeriod).reduce((a, b) => Math.max(a, b), -Infinity);
-    const range = highest - lowest;
-    const k = range === 0 ? 50 : ((closes[closes.length - 1] - lowest) / range) * 100;
-    return { k, d: k };
+    const kValues: number[] = [];
+    for (let offset = 2; offset >= 0; offset--) {
+        const end = closes.length - offset;
+        if (end < kPeriod) continue;
+        const lowSlice = lows.slice(end - kPeriod, end);
+        const highSlice = highs.slice(end - kPeriod, end);
+        const lowest = lowSlice.reduce((a, b) => Math.min(a, b), Infinity);
+        const highest = highSlice.reduce((a, b) => Math.max(a, b), -Infinity);
+        const range = highest - lowest;
+        const c = closes[end - 1];
+        kValues.push(range === 0 ? 50 : ((c - lowest) / range) * 100);
+    }
+    const k = kValues[kValues.length - 1] ?? 50;
+    const d = kValues.length > 0 ? kValues.reduce((s, v) => s + v, 0) / kValues.length : k;
+    return { k, d };
 }
 
 function computeATR(highs: number[], lows: number[], closes: number[], period: number): number {
@@ -193,10 +203,11 @@ export async function adminAnalyze(sdk: ClientSdk, pair: string): Promise<AdminA
     }
 
     const dir = primary.direction as 'call' | 'put';
-    const avgConfidence = Math.round(sorted.reduce((s, tf) => s + tf.confidence, 0) / sorted.length);
+    const agreeingTfs = nonNeutral.filter(tf => tf.direction === dir);
+    const avgConfidence = Math.round(agreeingTfs.reduce((s, tf) => s + tf.confidence, 0) / agreeingTfs.length);
     return {
         direction: dir,
-        confidence: Math.max(avgConfidence, 65),
+        confidence: avgConfidence,
         reason: `✅ ${dir === 'call' ? 'BULLISH' : 'BEARISH'} (${avgConfidence}%) | ${agreeing}/${nonNeutral.length} TFs agree`,
         tf5m, tf1m, tf30s,
         skipped: false,

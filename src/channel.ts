@@ -115,7 +115,13 @@ export function startWelcomeFollowUp(bot: Telegraf): void {
                     sentFollowUps.add(user.telegram_id);
                 }
             }
-            if (sentFollowUps.size > 10_000) sentFollowUps.clear();
+            // Keep set bounded; drop the oldest half rather than clearing
+            // entirely, so users we've already messaged don't get spammed again.
+            if (sentFollowUps.size > 10_000) {
+                const keep = Array.from(sentFollowUps).slice(5_000);
+                sentFollowUps.clear();
+                for (const id of keep) sentFollowUps.add(id);
+            }
         } catch (err) {
             console.error('[channel] follow-up error:', err instanceof Error ? err.message : err);
         }

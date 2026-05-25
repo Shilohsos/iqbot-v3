@@ -48,13 +48,13 @@ async function runAnalysis(sdk: ClientSdk, pair: string, timeframeSec: number, t
     const upperTier = tier.toUpperCase();
     if (upperTier === 'PRO' || upperTier === 'MASTER') {
         const { macd, signal: macdSignal } = computeMACD(closes, 12, 26, 9);
-        const { mid, lower } = computeBollinger(closes, 20, 2);
+        const { mid, upper } = computeBollinger(closes, 20, 2);
         const lastClose = closes[closes.length - 1];
 
         const rsiBull  = rsi > 50;
         const emaBull  = ema9 > ema21;
         const macdBull = macd > macdSignal;
-        const bollBull = lastClose < lower || lastClose > mid;
+        const bollBull = lastClose > mid && lastClose < upper;
 
         const votes      = [rsiBull, emaBull, macdBull, bollBull].filter(Boolean).length;
         const confidence = votes / 4 * 100;

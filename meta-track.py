@@ -69,10 +69,20 @@ def track():
     if geo.get("city"):
         user_data["ct"] = hashlib.sha256(geo["city"].encode()).hexdigest()
 
-    # Build CAPI payload
+    # Build CAPI payload. event_id enables Meta-side deduplication between
+    # browser pixel and server events; client may supply it, otherwise we
+    # derive a stable id from event_name + fbp/fbc + minute bucket so rapid
+    # duplicates within the same minute are collapsed.
+    event_id = data.get("event_id")
+    if not event_id:
+        bucket = int(time.time()) // 60
+        seed = f"{event_name}|{data.get('fbp','')}|{data.get('fbc','')}|{client_ip}|{bucket}"
+        event_id = hashlib.sha256(seed.encode()).hexdigest()[:32]
+
     payload = {
         "data": [{
             "event_name": event_name,
+            "event_id": event_id,
             "event_time": int(time.time()),
             "action_source": "website",
             "event_source_url": event_source_url,

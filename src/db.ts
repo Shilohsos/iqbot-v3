@@ -163,6 +163,22 @@ db.exec(`
 `);
 
 db.exec(`
+  CREATE TABLE IF NOT EXISTS scheduled_broadcasts (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    message         TEXT    NOT NULL,
+    target_ids      TEXT    NOT NULL,
+    button          TEXT,
+    media           TEXT,
+    delete_after_ms INTEGER NOT NULL DEFAULT 0,
+    scheduled_at    TEXT    NOT NULL,
+    created_at      TEXT    NOT NULL,
+    sent            INTEGER NOT NULL DEFAULT 0
+  )
+`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_scheduled_broadcasts_sent ON scheduled_broadcasts(sent, scheduled_at)`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_users_created_at ON users(created_at)`);
+
+db.exec(`
   CREATE TABLE IF NOT EXISTS compose_tone (
     id          INTEGER PRIMARY KEY CHECK (id = 1),
     style_guide TEXT NOT NULL DEFAULT '',
@@ -575,6 +591,10 @@ export function deleteUser(telegramId: number): void {
     db.prepare('DELETE FROM users WHERE telegram_id = ?').run(telegramId);
 }
 
+export function clearUserSsid(telegramId: number): void {
+    db.prepare('UPDATE users SET ssid = NULL WHERE telegram_id = ?').run(telegramId);
+}
+
 export function setUserTier(telegramId: number, tier: string): void {
     db.prepare('UPDATE users SET tier = ? WHERE telegram_id = ?').run(tier, telegramId);
 }
@@ -751,16 +771,25 @@ export function updateLeaderboardAuto(telegramId: number, pnl: number): void {
 
 export function addLeaderboardManual(telegramId: number, profit: number): boolean {
     const today = new Date().toISOString().split('T')[0];
-    const count = (db.prepare(
-        'SELECT COUNT(*) AS cnt FROM leaderboard WHERE date = ?'
-    ).get(today) as { cnt: number }).cnt;
-    if (count >= 10) return false;
-    db.prepare(`
-        INSERT INTO leaderboard (telegram_id, auto_profit, manual_profit, date)
-        VALUES (?, 0, ?, ?)
-        ON CONFLICT(telegram_id, date) DO UPDATE SET manual_profit = excluded.manual_profit
-    `).run(telegramId, profit, today);
-    return true;
+    return db.transaction((): boolean => {
+        // ON CONFLICT updates an existing row instead of creating a new one,
+        // so the cap only applies when this telegram_id is brand-new today.
+        const existing = db.prepare(
+            'SELECT 1 FROM leaderboard WHERE telegram_id = ? AND date = ?'
+        ).get(telegramId, today);
+        if (!existing) {
+            const count = (db.prepare(
+                'SELECT COUNT(*) AS cnt FROM leaderboard WHERE date = ?'
+            ).get(today) as { cnt: number }).cnt;
+            if (count >= 10) return false;
+        }
+        db.prepare(`
+            INSERT INTO leaderboard (telegram_id, auto_profit, manual_profit, date)
+            VALUES (?, 0, ?, ?)
+            ON CONFLICT(telegram_id, date) DO UPDATE SET manual_profit = excluded.manual_profit
+        `).run(telegramId, profit, today);
+        return true;
+    })();
 }
 
 export function getLeaderboard(date?: string): Array<{ telegram_id: number; profit: number }> {
@@ -853,6 +882,63 @@ export function getNextBroadcastAt(): string | null {
 
 export function saveNextBroadcastAt(isoStr: string): void {
     db.prepare('INSERT OR REPLACE INTO broadcast_schedule (id, next_send_at) VALUES (1, ?)').run(isoStr);
+}
+
+export interface PersistedScheduledBroadcast {
+    id: number;
+    message: string;
+    targetIds: number[];
+    button?: unknown;
+    media?: unknown;
+    deleteAfterMs: number;
+    scheduledAt: string;
+    createdAt: string;
+    sent: boolean;
+}
+
+export function insertScheduledBroadcast(input: Omit<PersistedScheduledBroadcast, 'id' | 'sent'>): number {
+    const res = db.prepare(`
+        INSERT INTO scheduled_broadcasts (message, target_ids, button, media, delete_after_ms, scheduled_at, created_at, sent)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+    `).run(
+        input.message,
+        JSON.stringify(input.targetIds),
+        input.button ? JSON.stringify(input.button) : null,
+        input.media ? JSON.stringify(input.media) : null,
+        input.deleteAfterMs,
+        input.scheduledAt,
+        input.createdAt,
+    );
+    return Number(res.lastInsertRowid);
+}
+
+export function markScheduledBroadcastSent(id: number): void {
+    db.prepare('UPDATE scheduled_broadcasts SET sent = 1 WHERE id = ?').run(id);
+}
+
+export function deleteScheduledBroadcast(id: number): void {
+    db.prepare('DELETE FROM scheduled_broadcasts WHERE id = ?').run(id);
+}
+
+export function getPendingScheduledBroadcasts(): PersistedScheduledBroadcast[] {
+    const rows = db.prepare(`
+        SELECT id, message, target_ids, button, media, delete_after_ms, scheduled_at, created_at, sent
+        FROM scheduled_broadcasts WHERE sent = 0
+    `).all() as Array<{
+        id: number; message: string; target_ids: string; button: string | null; media: string | null;
+        delete_after_ms: number; scheduled_at: string; created_at: string; sent: number;
+    }>;
+    return rows.map(r => ({
+        id: r.id,
+        message: r.message,
+        targetIds: JSON.parse(r.target_ids) as number[],
+        button: r.button ? JSON.parse(r.button) : undefined,
+        media: r.media ? JSON.parse(r.media) : undefined,
+        deleteAfterMs: r.delete_after_ms,
+        scheduledAt: r.scheduled_at,
+        createdAt: r.created_at,
+        sent: r.sent === 1,
+    }));
 }
 
 // ─── Pair win rates ───────────────────────────────────────────────────────────
