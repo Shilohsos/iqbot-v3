@@ -77,7 +77,10 @@ async function autoDetectTier(telegramId: number, sdk: ClientSdk): Promise<void>
 ---
 
 ## Funding Link
-Send me the funding link and I'll add it. Default: IQ Option deposit page or affiliate link.
+```
+https://iqoption.com/pwa/payments/deposit
+```
+Use this as the default funding URL. Configurable via `FUNDING_URL` env var.
 
 ---
 
