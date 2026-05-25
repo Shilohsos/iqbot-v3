@@ -2298,6 +2298,37 @@ bot.action('giveaway_v2:pick_winners', async ctx => {
 });
 
 bot.action(/^giveaway_winners:(\d+)$/, async ctx => {
+    await ctx.answerCbQuery();
+    const giveawayId = parseInt(ctx.match[1], 10);
+    const event = getGiveawayEvent(giveawayId);
+    if (!event) { await ctx.reply('❌ Giveaway not found.', { reply_markup: adminBackKeyboard() }); return; }
+    const { real, fabricated } = event.event_type === 'giveaway'
+        ? getRealAndFabricatedCounts(giveawayId)
+        : { real: getGiveawayParticipantCount(giveawayId), fabricated: 0 };
+    const participantCount = event.event_type === 'giveaway' ? real + fabricated : real;
+    if (participantCount === 0) {
+        await ctx.reply('❌ No eligible participants found.', { reply_markup: giveawayViewKeyboard(event) });
+        return;
+    }
+    await ctx.reply(
+        `🏆 *Pick Winners?*\n\n` +
+        `Giveaway: *${escapeMd(event.title)}*\n` +
+        `Max winners: ${event.max_winners}\n` +
+        `Participants: ${participantCount}\n\n` +
+        `This will select up to ${event.max_winners} winner${event.max_winners !== 1 ? 's' : ''} and notify them\\.`,
+        {
+            parse_mode: 'Markdown',
+            reply_markup: {
+                inline_keyboard: [
+                    [{ text: `✅ Confirm — Pick ${event.max_winners} Winners`, callback_data: `giveaway_winners_confirm:${giveawayId}` }],
+                    [{ text: '🔙 Cancel', callback_data: `giveaway_view:${giveawayId}` }],
+                ],
+            },
+        }
+    );
+});
+
+bot.action(/^giveaway_winners_confirm:(\d+)$/, async ctx => {
     await ctx.answerCbQuery('🏆 Selecting winners…');
     const giveawayId = parseInt(ctx.match[1], 10);
     ctx.telegram.sendChatAction(ctx.chat!.id, 'typing').catch(() => {});
@@ -2308,7 +2339,7 @@ bot.action(/^giveaway_winners:(\d+)$/, async ctx => {
     }
     const event = getGiveawayEvent(giveawayId);
     await ctx.reply(
-        `✅ *${winners.length} winner${winners.length !== 1 ? 's' : ''} selected* for *${event?.title ?? 'giveaway'}*!\n\nWinner notifications queued. They will be notified shortly.`,
+        `✅ *${winners.length} winner${winners.length !== 1 ? 's' : ''} selected* for *${escapeMd(event?.title ?? 'giveaway')}*\\!\n\nWinner notifications queued\\. They will be notified shortly\\.`,
         { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() }
     );
 });
