@@ -7,11 +7,9 @@ When a user clicks a locked feature, show:
 ```
 🔒 30s Timeframe — PRO Tier Required
 
-You're currently on DEMO tier. Fund your IQ Option account
-with at least $10 to automatically upgrade to PRO.
+Fund your account with at least $10 to automatically upgrade to PRO.
 
-The bot detects your balance — no proof needed.
-Once your balance reaches $10+, your tier upgrades automatically.
+You'll be automatically upgraded once you fund your account.
 
 [ 💰 Fund Account ]   [ 👤 Support ]
 ```
@@ -20,11 +18,9 @@ Once your balance reaches $10+, your tier upgrades automatically.
 ```
 🔒 Ultra-Fast Trading — MASTER Tier Required
 
-You're on PRO tier. Fund your account with at least $50
-to automatically upgrade to MASTER.
+Fund your account with at least $50 to automatically upgrade to MASTER.
 
-The bot detects your balance — no proof needed.
-Once your balance reaches $50+, your tier upgrades automatically.
+You'll be automatically upgraded once you fund your account.
 
 [ 💰 Fund Account ]   [ 👤 Support ]
 ```
