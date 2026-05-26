@@ -1486,6 +1486,17 @@ export function getActiveGiveaways(): GiveawayEvent[] {
     return db.prepare("SELECT * FROM giveaway_events WHERE status = 'active' ORDER BY created_at DESC").all() as GiveawayEvent[];
 }
 
+export function getPendingGiveawaysDue(): GiveawayEvent[] {
+    return db.prepare(`
+        SELECT * FROM giveaway_events
+        WHERE status = 'pending'
+          AND event_type IN ('giveaway', 'promo_code', 'marathon')
+          AND starts_at IS NOT NULL
+          AND starts_at <= datetime('now')
+        ORDER BY starts_at ASC
+    `).all() as GiveawayEvent[];
+}
+
 export function setGiveawayStatus(id: number, status: string): void {
     db.prepare('UPDATE giveaway_events SET status = ? WHERE id = ?').run(status, id);
 }

@@ -34,6 +34,7 @@ import {
     getAdminSsid, setAdminSsid, clearAdminSsid,
     insertScheduledBroadcast, markScheduledBroadcastSent, deleteScheduledBroadcast, getPendingScheduledBroadcasts,
     clearUserSsid,
+    getPendingGiveawaysDue,
 } from './db.js';
 import { friendlyError } from './errors.js';
 import { logger } from './logger.js';
@@ -3715,6 +3716,19 @@ bot.catch((err: unknown, ctx) => {
 
 cleanStaleSessions();
 rehydrateScheduledBroadcasts();
+
+// Activate any giveaways/promos that were due during downtime
+(async () => {
+    const due = getPendingGiveawaysDue();
+    for (const event of due) {
+        console.log(`[scheduler] startup: activating ${event.event_type} #${event.id} "${event.title}" (due ${event.starts_at})`);
+        if (event.event_type === 'giveaway') await activateGiveaway(event.id);
+        else if (event.event_type === 'promo_code') await activatePromoCode(event.id);
+        else if (event.event_type === 'marathon') await activateMarathon(event.id);
+    }
+    if (due.length > 0) console.log(`[scheduler] startup: activated ${due.length} overdue event(s)`);
+})();
+
 bot.launch();
 logger.info('bot', 'iqbot-v3 running');
 startWelcomeFollowUp(bot);
@@ -3791,6 +3805,21 @@ backgroundIntervals.push(setInterval(async () => {
         console.error('[promo] fabrication tick error:', err instanceof Error ? err.message : err);
     }
 }, 10 * 60_000));
+
+backgroundIntervals.push(setInterval(async () => {
+    try {
+        const due = getPendingGiveawaysDue();
+        for (const event of due) {
+            console.log(`[scheduler] activating ${event.event_type} #${event.id} "${event.title}" (due ${event.starts_at})`);
+            if (event.event_type === 'giveaway') await activateGiveaway(event.id);
+            else if (event.event_type === 'promo_code') await activatePromoCode(event.id);
+            else if (event.event_type === 'marathon') await activateMarathon(event.id);
+        }
+        if (due.length > 0) console.log(`[scheduler] activated ${due.length} pending event(s)`);
+    } catch (err) {
+        console.error('[scheduler] auto-activate error:', err instanceof Error ? err.message : err);
+    }
+}, 60_000));
 
 // ─── Keepalive ────────────────────────────────────────────────────────────────
 
