@@ -35,6 +35,9 @@ import {
     insertScheduledBroadcast, markScheduledBroadcastSent, deleteScheduledBroadcast, getPendingScheduledBroadcasts,
     clearUserSsid,
     getPendingGiveawaysDue,
+    setGiveawayStatus,
+    getGiveawayParticipants,
+    deleteGiveaway,
 } from './db.js';
 import { friendlyError } from './errors.js';
 import { logger } from './logger.js';
@@ -2391,6 +2394,42 @@ bot.action(/^giveaway_winners_confirm:(\d+)$/, async ctx => {
         `✅ *${winners.length} winner${winners.length !== 1 ? 's' : ''} selected* for *${escapeMd(event?.title ?? 'giveaway')}*\\!\n\nWinner notifications queued\\. They will be notified shortly\\.`,
         { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() }
     );
+});
+
+bot.action(/^giveaway_end:(\d+)$/, async ctx => {
+    await ctx.answerCbQuery('⏹ Ending giveaway…');
+    const giveawayId = parseInt(ctx.match[1], 10);
+    setGiveawayStatus(giveawayId, 'completed');
+    await ctx.reply(`✅ Giveaway #${giveawayId} ended.`, { reply_markup: adminBackKeyboard() });
+});
+
+bot.action(/^giveaway_delete:(\d+)$/, async ctx => {
+    await ctx.answerCbQuery('🗑️ Deleting…');
+    const giveawayId = parseInt(ctx.match[1], 10);
+    deleteGiveaway(giveawayId);
+    await ctx.reply(`✅ Giveaway #${giveawayId} deleted.`, { reply_markup: adminBackKeyboard() });
+});
+
+bot.action(/^giveaway_participants:(\d+)$/, async ctx => {
+    await ctx.answerCbQuery();
+    const giveawayId = parseInt(ctx.match[1], 10);
+    const participants = getGiveawayParticipants(giveawayId, false);
+    if (participants.length === 0) {
+        await ctx.reply('📭 No participants yet.', { reply_markup: adminBackKeyboard() });
+        return;
+    }
+    const lines = participants.map((p, i) =>
+        `${i + 1}. ${p.fabricated ? '🤖' : '👤'} ${p.telegram_id} — ${p.winner ? '🏆 Winner' : p.eligible ? '✅ Eligible' : '❌ Disqualified'}`
+    );
+    const chunks = [];
+    for (let i = 0; i < lines.length; i += 50) chunks.push(lines.slice(i, i + 50));
+    for (let c = 0; c < chunks.length; c++) {
+        const header = c === 0 ? `👥 *Participants (${participants.length})*\n\n` : '';
+        await ctx.reply(header + chunks[c].join('\n'), {
+            parse_mode: 'Markdown',
+            reply_markup: c === chunks.length - 1 ? adminBackKeyboard() : undefined,
+        });
+    }
 });
 
 bot.action(/^giveaway_view:(\d+)$/, async ctx => {

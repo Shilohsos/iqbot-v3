@@ -1501,6 +1501,12 @@ export function setGiveawayStatus(id: number, status: string): void {
     db.prepare('UPDATE giveaway_events SET status = ? WHERE id = ?').run(status, id);
 }
 
+export function deleteGiveaway(id: number): void {
+    db.prepare('DELETE FROM giveaway_participants WHERE giveaway_id = ?').run(id);
+    db.prepare('DELETE FROM giveaway_updates WHERE giveaway_id = ?').run(id);
+    db.prepare('DELETE FROM giveaway_events WHERE id = ?').run(id);
+}
+
 export function incrementGiveawayWinnerCount(id: number): void {
     db.prepare('UPDATE giveaway_events SET winner_count = winner_count + 1 WHERE id = ?').run(id);
 }
