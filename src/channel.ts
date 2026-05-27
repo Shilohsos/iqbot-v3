@@ -27,13 +27,16 @@ export function setupChannelHandlers(bot: Telegraf): void {
 
             // Fire Meta CompleteRegistration — tells Meta this ad click became a channel join
             const lang: string = (req.from as any)?.language_code ?? '';
+            const eventId = `cr_${userId}_${Date.now()}`;
             fetch(META_TRACK_URL, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     event_name: 'CompleteRegistration',
                     event_source_url: 'https://t.me/10xpremium',
+                    event_id: eventId,
                     custom_data: { source: 'telegram_channel', telegram_id: userId, language_code: lang },
+                    skip_ip: true,
                 }),
             }).then(() => {
                 console.log(`[meta] CompleteRegistration sent for user ${userId}`);
