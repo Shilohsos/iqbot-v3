@@ -712,9 +712,10 @@ async function askAccountConnection(ctx: Context): Promise<void> {
 }
 
 async function askCreateAccountUserId(ctx: Context): Promise<void> {
+    const escapedLink = AFFILIATE_LINK.replace(/_/g, '\\_');
     await ctx.reply(
         `👉 Create your IQ Option account\n` +
-        `👉 Create your IQ Option Account: ${AFFILIATE_LINK}\n` +
+        `👉 Create your IQ Option Account: ${escapedLink}\n` +
         `Click Above 👆🏼👾\n\n` +
         `🔢 Once your account is created, enter your User ID here:\n\n` +
         `How to find it:\n` +
