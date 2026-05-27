@@ -962,6 +962,10 @@ bot.command('start', sendStartMenu);
 // ─── Account connection choice ────────────────────────────────────────────────
 
 bot.action('onboard:yes', async ctx => {
+    if (!isValidCallbackQuery(ctx)) {
+        await ctx.answerCbQuery('⏳ This request is no longer valid. Send /start to begin again.').catch(() => {});
+        return;
+    }
     await ctx.answerCbQuery();
     const chatId = ctx.chat!.id;
     const existing = onboardSessions.get(chatId) ?? { step: 'user_id' as OnboardStep };
@@ -975,6 +979,10 @@ bot.action('onboard:yes', async ctx => {
 });
 
 bot.action('onboard:no', async ctx => {
+    if (!isValidCallbackQuery(ctx)) {
+        await ctx.answerCbQuery('⏳ This request is no longer valid. Send /start to begin again.').catch(() => {});
+        return;
+    }
     await ctx.answerCbQuery();
     const chatId = ctx.chat!.id;
     const existing = onboardSessions.get(chatId) ?? { step: 'create_user_id' as OnboardStep };
@@ -3765,34 +3773,51 @@ bot.on('text', async ctx => {
     );
 });
 
+function isValidCallbackQuery(ctx: Context): boolean {
+    if (!ctx.callbackQuery) return false;
+    if (!ctx.callbackQuery.id) return false;
+    if (!ctx.chat?.id) return false;
+    return true;
+}
+
 bot.catch((err: unknown, ctx) => {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error(`[bot.catch] ${ctx.updateType}:`, msg);
+    console.error(`[bot.catch] Update: ${ctx.updateType}, ChatID: ${ctx.chat?.id}, UserID: ${ctx.from?.id}, Message: ${msg}`);
+
     if (ctx.callbackQuery && msg.includes('query is too old')) {
-        ctx.answerCbQuery('⏳ Expired').catch(() => {});
+        ctx.answerCbQuery('⏳ This button expired. Send /start to get a fresh menu.').catch(() => {});
         ctx.editMessageText(
             '⏳ This session expired.\n\nSend /start to continue.',
             { reply_markup: { inline_keyboard: [[{ text: '🏠 Start Over', callback_data: 'ui:start' }]] } }
         ).catch(() => {});
         return;
     }
-    if (ctx.callbackQuery) {
-        ctx.answerCbQuery('⚠️ Error occurred. Try again.').catch(() => {});
-        if (msg.includes('timed out')) {
-            ctx.reply(
-                '⏳ *Request timed out*\n\nThis can happen under heavy load. Please try again.\n\nSend /start to restart.',
-                { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [[{ text: '🏠 Start Over', callback_data: 'ui:start' }]] } }
-            ).catch(() => {});
-            if (ctx.from?.id) {
-                wizardSessions.delete(ctx.chat!.id);
-                const prev = activeTradeSessions.get(ctx.from.id) ?? 0;
-                if (prev <= 1) activeTradeSessions.delete(ctx.from.id);
-                else activeTradeSessions.set(ctx.from.id, prev - 1);
-            }
-        }
-    } else {
-        ctx.reply('⚠️ Something went wrong. Please try again.').catch(() => {});
+
+    if (ctx.callbackQuery && (msg.includes('Forbidden: bot can\'t initiate conversation') || msg.includes('403'))) {
+        return;
     }
+
+    if (ctx.callbackQuery && msg.includes('timed out')) {
+        ctx.answerCbQuery('⏳ Request timed out. Please try again.').catch(() => {});
+        ctx.reply(
+            '⏳ *Request timed out*\n\nThis can happen under heavy load. Please try again.\n\nSend /start to restart.',
+            { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [[{ text: '🏠 Start Over', callback_data: 'ui:start' }]] } }
+        ).catch(() => {});
+        if (ctx.from?.id) {
+            wizardSessions.delete(ctx.chat!.id);
+            const prev = activeTradeSessions.get(ctx.from.id) ?? 0;
+            if (prev <= 1) activeTradeSessions.delete(ctx.from.id);
+            else activeTradeSessions.set(ctx.from.id, prev - 1);
+        }
+        return;
+    }
+
+    if (ctx.callbackQuery) {
+        ctx.answerCbQuery('❌ Something went wrong. Please try again or send /start.').catch(() => {});
+        return;
+    }
+
+    ctx.reply('⚠️ Something went wrong. Please try again.').catch(() => {});
 });
 
 cleanStaleSessions();
