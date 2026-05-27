@@ -34,6 +34,7 @@ export function setupChannelHandlers(bot: Telegraf): void {
                     event_name: 'CompleteRegistration',
                     event_source_url: 'https://t.me/10xpremium',
                     custom_data: { source: 'telegram_channel', telegram_id: userId, language_code: lang },
+                    skip_ip: true,
                 }),
             }).then(() => {
                 console.log(`[meta] CompleteRegistration sent for user ${userId}`);
