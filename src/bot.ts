@@ -1372,17 +1372,41 @@ bot.action('ui:stats', async ctx => {
 bot.action('ui:upgrade', async ctx => {
     await ctx.answerCbQuery();
     connectSessions.delete(ctx.chat!.id);
-    upgradeSessions.add(ctx.chat!.id);
+    const tier = normalizeTier(getUser(ctx.from!.id)?.tier);
+    const nextTier = tier === 'DEMO' ? 'PRO' : 'MASTER';
+    const cost = nextTier === 'PRO' ? '$10' : '$50';
+    const fundUrl = process.env.FUNDING_URL ?? 'https://iqoption.com/pwa/payments/deposit';
     await ctx.reply(
         `💡 *Upgrade Your Tier*\n\n` +
-        `Enter your upgrade token below to unlock *PRO* tier. ⚡\n\n` +
-        `Don't have a token? Tap the button below to contact support.`,
+        `Fund your account with at least *${cost}* to automatically unlock *${nextTier}* tier\\.\n\n` +
+        `You'll be upgraded instantly once your balance reaches this threshold\\.`,
+        {
+            parse_mode: 'Markdown',
+            reply_markup: {
+                inline_keyboard: [
+                    [{ text: '💰 Fund Account', url: fundUrl }],
+                    [{ text: '🔓 Upgrade with Token', callback_data: 'ui:upgrade_token' }],
+                    [{ text: '👤 Contact Admin', url: ADMIN_CONTACT_LINK }],
+                    [{ text: '🔙 Back', callback_data: 'ui:start' }],
+                ],
+            },
+        }
+    );
+});
+
+bot.action('ui:upgrade_token', async ctx => {
+    await ctx.answerCbQuery();
+    upgradeSessions.add(ctx.chat!.id);
+    await ctx.reply(
+        `🔑 *Upgrade with Token*\n\n` +
+        `Enter your upgrade token below to unlock *PRO* tier\\. ⚡\n\n` +
+        `Don't have a token? Contact support\\.`,
         {
             parse_mode: 'Markdown',
             reply_markup: {
                 inline_keyboard: [
                     [{ text: '👤 Contact Support', url: ADMIN_CONTACT_LINK }],
-                    [{ text: '🔙 Back', callback_data: 'ui:start' }],
+                    [{ text: '🔙 Back', callback_data: 'ui:upgrade' }],
                 ],
             },
         }

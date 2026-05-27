@@ -181,11 +181,6 @@ export async function participate(giveawayId: number, telegramId: number): Promi
     const participantId = insertGiveawayParticipant(giveawayId, telegramId);
     const count = getGiveawayParticipantCount(giveawayId);
 
-    queueParticipantUpdate(
-        giveawayId, participantId, telegramId, 'joined',
-        `✅ You're in! *${event.title}*\n\n${count} participants so far. Good luck! 🍀`,
-    );
-
     return {
         success: true,
         message: `✅ You've joined the *${event.title}* giveaway!\n\n*${count}* participants so far. Good luck! 🍀`,
