@@ -259,7 +259,7 @@ interface AdminSessionState {
     composeTopic?: LlmRequest['topic'];
     composeDescription?: string;
     composeContent?: string;
-    composeImageFileId?: string;
+    composeImageFileIds?: string[];
     composeCta?: 'start' | 'trade' | 'fund' | 'none';
 }
 const adminSessions = makeSessionMap<AdminSessionState>('admin');
@@ -2816,7 +2816,7 @@ bot.action(/^compose_delivery:(bot|channel|both)$/, async ctx => {
 
     const target = ctx.match[1] as 'bot' | 'channel' | 'both';
     const content = as.composeContent;
-    const imageFileId = as.composeImageFileId;
+    const imageFileIds = as.composeImageFileIds ?? [];
     const CHANNEL_ID = process.env.CHANNEL_ID ?? '-1002766084283';
 
     let botSent = 0, botFailed = 0;
@@ -2833,34 +2833,38 @@ bot.action(/^compose_delivery:(bot|channel|both)$/, async ctx => {
     const ctaBtn = cta && cta !== 'none' ? ctaBtnMap[cta] : { text: '🚀 Trade Now', callback_data: 'ui:trade' };
     const replyMarkup = { inline_keyboard: [[ctaBtn as { text: string; callback_data: string }]] };
 
+    const sendToUser = async (uid: number | string) => {
+        if (imageFileIds.length > 1) {
+            const media = imageFileIds.map((fid, i) => ({
+                type: 'photo' as const,
+                media: fid,
+                ...(i === 0 ? { caption: content, parse_mode: 'Markdown' as const } : {}),
+            }));
+            await bot.telegram.sendMediaGroup(uid, media);
+            await bot.telegram.sendMessage(uid, '📌', { reply_markup: replyMarkup });
+        } else if (imageFileIds.length === 1) {
+            await bot.telegram.sendPhoto(uid, imageFileIds[0], { caption: content, reply_markup: replyMarkup });
+        } else {
+            await bot.telegram.sendMessage(uid, content, { reply_markup: replyMarkup });
+        }
+    };
+
     if (target === 'bot' || target === 'both') {
         const allIds = getAllUserIds();
         for (const uid of allIds) {
-            try {
-                if (imageFileId) {
-                    await bot.telegram.sendPhoto(uid, imageFileId, { caption: content, reply_markup: replyMarkup });
-                } else {
-                    await bot.telegram.sendMessage(uid, content, { reply_markup: replyMarkup });
-                }
-                botSent++;
-            } catch { botFailed++; }
+            try { await sendToUser(uid); botSent++; } catch { botFailed++; }
             await new Promise(r => setTimeout(r, 40));
         }
     }
 
     if (target === 'channel' || target === 'both') {
         try {
-            if (imageFileId) {
-                await bot.telegram.sendPhoto(CHANNEL_ID, imageFileId, { caption: content });
-            } else {
-                await bot.telegram.sendMessage(CHANNEL_ID, content);
-            }
+            await sendToUser(CHANNEL_ID);
             channelOk = true;
         } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
             channelError = msg;
             console.error('[compose] channel send failed:', msg);
-            // Diagnose the bot's admin status to help debug permission errors
             try {
                 const me = await bot.telegram.getMe();
                 const member = await bot.telegram.getChatMember(CHANNEL_ID, me.id);
@@ -2871,7 +2875,7 @@ bot.action(/^compose_delivery:(bot|channel|both)$/, async ctx => {
         }
     }
 
-    insertBroadcastMessage('approved', content, as.composeTopic, imageFileId);
+    insertBroadcastMessage('approved', content, as.composeTopic, imageFileIds[0] ?? null);
 
     let summary: string;
     if (target === 'channel') {
@@ -3018,8 +3022,16 @@ bot.on('photo', async ctx => {
     const photo = ctx.message.photo.at(-1)!;
 
     if (as.step === 'compose_image' && as.composeContent) {
-        adminSessions.set(chatId, { ...as, composeImageFileId: photo.file_id, step: 'compose_cta' });
-        await ctx.reply('✅ Image attached\\. Add a CTA button?', { parse_mode: 'Markdown', reply_markup: composeButtonKeyboard() });
+        const existing = as.composeImageFileIds ?? [];
+        const fileId = photo.file_id;
+        if (!existing.includes(fileId)) existing.push(fileId);
+        adminSessions.set(chatId, { ...as, composeImageFileIds: existing, step: 'compose_image' });
+        const count = existing.length;
+        await ctx.reply(
+            `✅ Image ${count} attached${count > 1 ? ` (${count} total)` : ''}\\.\n` +
+            `Send more images, or type *done* to continue, or *skip* for no images\\.`,
+            { parse_mode: 'Markdown' }
+        );
         return;
     }
 
@@ -3442,11 +3454,15 @@ bot.on('text', async ctx => {
             }
 
             if (as.step === 'compose_image' && as.composeContent) {
-                if (text.toLowerCase() === 'skip') {
-                    adminSessions.set(chatId, { ...as, composeImageFileId: undefined, step: 'compose_cta' });
+                const lower = text.toLowerCase();
+                if (lower === 'skip') {
+                    adminSessions.set(chatId, { ...as, composeImageFileIds: [], step: 'compose_cta' });
+                    await ctx.reply('Add a CTA button?', { reply_markup: composeButtonKeyboard() });
+                } else if (lower === 'done') {
+                    adminSessions.set(chatId, { ...as, step: 'compose_cta' });
                     await ctx.reply('Add a CTA button?', { reply_markup: composeButtonKeyboard() });
                 } else {
-                    await ctx.reply('❌ Please send a photo or type *skip*:', { parse_mode: 'Markdown' });
+                    await ctx.reply('❌ Send photos, or type *done* when finished, or *skip* for no images:', { parse_mode: 'Markdown' });
                 }
                 return;
             }
