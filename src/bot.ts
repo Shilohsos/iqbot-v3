@@ -637,7 +637,7 @@ async function sendStartMenu(ctx: Context): Promise<void> {
         await ctx.reply(giveawayCard, { parse_mode: 'Markdown', reply_markup: giveawayMarkup });
     }
 
-    if (needsFetch) {
+    if (ssid) {
         const chatId = ctx.chat!.id;
         const msgId  = sentMsg.message_id;
         const userTier = user.tier ?? undefined;
@@ -661,14 +661,16 @@ async function sendStartMenu(ctx: Context): Promise<void> {
                         logger.info('bot', `auto-promoted user ${telegramId} from ${oldTier} to ${newTier} (balance: ${currency} ${real.amount.toFixed(2)} ≈ $${usdAmount.toFixed(2)})`);
                     }
                 }
-                const newLine = [
-                    demo ? `Practice ${fmtBalance(demo)}` : '',
-                    real ? `Real ${fmtBalance(real)}` : '',
-                ].filter(Boolean).join(' | ');
-                if (newLine) {
-                    setUserBalanceCache(telegramId, newLine);
-                    await ctx.telegram.editMessageText(chatId, msgId, undefined, buildMenu(newLine),
-                        { reply_markup: startKeyboard(userTier) });
+                if (needsFetch) {
+                    const newLine = [
+                        demo ? `Practice ${fmtBalance(demo)}` : '',
+                        real ? `Real ${fmtBalance(real)}` : '',
+                    ].filter(Boolean).join(' | ');
+                    if (newLine) {
+                        setUserBalanceCache(telegramId, newLine);
+                        await ctx.telegram.editMessageText(chatId, msgId, undefined, buildMenu(newLine),
+                            { reply_markup: startKeyboard(userTier) });
+                    }
                 }
             } catch {} finally {
                 sdkPool.release(telegramId);
@@ -3883,6 +3885,36 @@ backgroundIntervals.push(setInterval(async () => {
         console.error('[scheduler] auto-activate error:', err instanceof Error ? err.message : err);
     }
 }, 60_000));
+
+backgroundIntervals.push(setInterval(async () => {
+    try {
+        const candidates = getAllUserIds()
+            .map(id => getUser(id))
+            .filter((u): u is NonNullable<typeof u> => !!(u?.ssid) && u.tier !== 'MASTER');
+        for (const user of candidates) {
+            try {
+                const sdk = await sdkPool.get(user.telegram_id, user.ssid!);
+                try {
+                    const all = (await withTimeout(sdk.balances(), 15_000, 'balance')).getBalances();
+                    const real = all.find(b => b.type === BalanceType.Real);
+                    if (real) {
+                        const usdAmount = await convertToUsd(real.amount, real.currency ?? 'USD', sdk);
+                        const newTier = autoPromoteTier(user.telegram_id, usdAmount, user.tier ?? 'DEMO');
+                        if (newTier && newTier !== user.tier) {
+                            setUserTier(user.telegram_id, newTier);
+                            logger.info('bot', `[periodic] auto-promoted ${user.telegram_id} ${user.tier} → ${newTier} ($${usdAmount.toFixed(2)})`);
+                        }
+                    }
+                } finally {
+                    sdkPool.release(user.telegram_id);
+                }
+            } catch {}
+            await new Promise(r => setTimeout(r, 500)); // 2 SDK calls/sec
+        }
+    } catch (err) {
+        logger.error('bot', `periodic auto-promote error: ${err instanceof Error ? err.message : err}`);
+    }
+}, 30 * 60_000));
 
 // ─── Keepalive ────────────────────────────────────────────────────────────────
 
