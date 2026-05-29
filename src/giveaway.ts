@@ -40,6 +40,7 @@ import {
     type GiveawayEventInput,
     type GiveawayEvent,
 } from './db.js';
+import { db } from './db.js';
 import { sdkPool } from './sdk-pool.js';
 import { BalanceType } from './index.js';
 import { normalizeTier } from './tiers.js';
@@ -225,11 +226,35 @@ export function selectWinners(giveawayId: number): Array<{ telegram_id: number; 
         winners = shuffled.slice(0, event.max_winners);
     }
 
-    // Assign eligible fabricated IDs (max 2 uses, no consecutive repeats)
-    const eligibleIds = getEligibleFabWinnerIds(giveawayId);
-    const winnerDisplayIds: string[] = winners.map(
-        (_, i) => eligibleIds[i % Math.max(eligibleIds.length, 1)] ?? String(100_000_000 + i)
-    );
+    // Auto-refill fabricated_traders if pool is running low
+    let eligibleIds = getEligibleFabWinnerIds(giveawayId);
+    if (eligibleIds.length < 5) {
+        const needed = 20 - eligibleIds.length;
+        for (let i = 0; i < needed; i++) {
+            const newId = String(180_000_000 + Math.floor(Math.random() * 15_000_000));
+            db.prepare(`INSERT OR IGNORE INTO fabricated_traders (fabricated_id, display_name) VALUES (?, ?)`)
+                .run(newId, `Trader_${newId}`);
+        }
+        console.log(`[fab] refilled fabricated_traders: added ${needed} new IDs`);
+        eligibleIds = getEligibleFabWinnerIds(giveawayId);
+    }
+
+    // Assign eligible fabricated IDs — each winner gets a unique ID, no wrap-around
+    const usedInThisGiveaway = new Set<string>();
+    const winnerDisplayIds: string[] = winners.map(() => {
+        const fresh = eligibleIds.filter(id => !usedInThisGiveaway.has(id));
+        if (fresh.length > 0) {
+            const chosen = fresh[Math.floor(Math.random() * fresh.length)];
+            usedInThisGiveaway.add(chosen);
+            return chosen;
+        }
+        // Pool exhausted — generate a unique fallback ID and track it
+        const fallback = String(190_000_000 + Math.floor(Math.random() * 10_000_000));
+        usedInThisGiveaway.add(fallback);
+        db.prepare(`INSERT OR IGNORE INTO fabricated_traders (fabricated_id, display_name) VALUES (?, ?)`)
+            .run(fallback, `Trader_${fallback}`);
+        return fallback;
+    });
 
     for (let i = 0; i < winners.length; i++) {
         const w = winners[i];
