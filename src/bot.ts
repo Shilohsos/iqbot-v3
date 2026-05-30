@@ -534,7 +534,8 @@ function isAuthExpiredError(err: unknown): boolean {
     const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
     return msg.includes('authenticate') || msg.includes('authoriz') || msg.includes('unauthor')
         || msg.includes('ssid') || msg.includes('session expired') || msg.includes('not authenticated')
-        || msg.includes('invalid token') || msg.includes('login') || msg.includes('401');
+        || msg.includes('invalid token') || msg.includes('login') || msg.includes('401')
+        || msg.includes('wrong credentials') || msg.includes('credentials');
 }
 
 async function handlePossibleAuthExpiry(err: unknown, ctx: Context, isAdmin: boolean): Promise<boolean> {
@@ -672,7 +673,12 @@ async function sendStartMenu(ctx: Context): Promise<void> {
                             { reply_markup: startKeyboard(userTier) });
                     }
                 }
-            } catch {} finally {
+            } catch (err) {
+                if (isAuthExpiredError(err)) {
+                    clearUserSsid(telegramId);
+                    logger.warn('bot', `SSID cleared for user ${telegramId} due to auth failure: ${err instanceof Error ? err.message : err}`);
+                }
+            } finally {
                 sdkPool.release(telegramId);
             }
         });
@@ -1648,11 +1654,17 @@ bot.command('balance', async ctx => {
         if (!demo && !real) msg += 'No balances found.';
         await ctx.reply(msg, { parse_mode: 'Markdown', reply_markup: backKeyboard() });
     } catch (err: unknown) {
-        const isTimeout = err instanceof Error && err.message.startsWith('SDK timeout');
-        await ctx.reply(
-            isTimeout ? '⚠️ IQ Option is taking too long. Try again in a moment.' : `❌ Balance fetch failed: ${err instanceof Error ? err.message : 'Unknown error'}`,
-            { reply_markup: backKeyboard() }
-        );
+        if (isAuthExpiredError(err)) {
+            clearUserSsid(uid);
+            logger.warn('bot', `SSID cleared for user ${uid} due to auth failure: ${err instanceof Error ? err.message : err}`);
+            await ctx.reply('⚠️ Your IQ Option session has expired. Please reconnect using /connect.', { reply_markup: backKeyboard() });
+        } else {
+            const isTimeout = err instanceof Error && err.message.startsWith('SDK timeout');
+            await ctx.reply(
+                isTimeout ? '⚠️ IQ Option is taking too long. Try again in a moment.' : `❌ Balance fetch failed: ${err instanceof Error ? err.message : 'Unknown error'}`,
+                { reply_markup: backKeyboard() }
+            );
+        }
     } finally {
         sdkPool.release(uid);
     }
@@ -3950,7 +3962,12 @@ backgroundIntervals.push(setInterval(async () => {
                 } finally {
                     sdkPool.release(user.telegram_id);
                 }
-            } catch {}
+            } catch (err) {
+                if (isAuthExpiredError(err)) {
+                    clearUserSsid(user.telegram_id);
+                    logger.warn('bot', `SSID cleared for user ${user.telegram_id} due to auth failure: ${err instanceof Error ? err.message : err}`);
+                }
+            }
             await new Promise(r => setTimeout(r, 500)); // 2 SDK calls/sec
         }
     } catch (err) {
