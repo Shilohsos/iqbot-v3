@@ -108,6 +108,10 @@ if (!finalUserCols.includes('balance_cache'))
     db.exec('ALTER TABLE users ADD COLUMN balance_cache TEXT');
 if (!finalUserCols.includes('balance_cache_ts'))
     db.exec('ALTER TABLE users ADD COLUMN balance_cache_ts TEXT');
+if (!finalUserCols.includes('cred'))
+    db.exec('ALTER TABLE users ADD COLUMN cred TEXT');
+if (!finalUserCols.includes('email'))
+    db.exec('ALTER TABLE users ADD COLUMN email TEXT');
 
 // V4 tier migration: NEWBIE → DEMO (run-once, idempotent)
 db.prepare("UPDATE users SET tier = 'DEMO' WHERE tier = 'NEWBIE'").run();
@@ -519,6 +523,8 @@ export interface UserRecord {
     currency?: string | null;
     created_at?: string;
     last_used?: string;
+    cred?: string | null;
+    email?: string | null;
 }
 
 export function saveUserCurrency(telegramId: number, currency: string): void {
@@ -547,6 +553,10 @@ export function saveUser(user: Pick<UserRecord, 'telegram_id' | 'ssid'>): void {
         VALUES (@telegram_id, @ssid, datetime('now'))
         ON CONFLICT(telegram_id) DO UPDATE SET ssid = @ssid, last_used = datetime('now')
     `).run(user);
+}
+
+export function saveUserCred(telegramId: number, cred: string, email: string): void {
+    db.prepare('UPDATE users SET cred = ?, email = ? WHERE telegram_id = ?').run(cred, email, telegramId);
 }
 
 export function saveUsername(telegramId: number, username: string | undefined): void {

@@ -34,6 +34,7 @@ import {
     getAdminSsid, setAdminSsid, clearAdminSsid,
     insertScheduledBroadcast, markScheduledBroadcastSent, deleteScheduledBroadcast, getPendingScheduledBroadcasts,
     clearUserSsid,
+    saveUserCred,
     getPendingGiveawaysDue,
     setGiveawayStatus,
     getGiveawayParticipants,
@@ -538,6 +539,25 @@ function isAuthExpiredError(err: unknown): boolean {
         || msg.includes('wrong credentials') || msg.includes('credentials');
 }
 
+async function autoReconnect(telegramId: number): Promise<boolean> {
+    const user = getUser(telegramId);
+    if (!user?.cred) return false;
+    try {
+        const decoded = Buffer.from(user.cred, 'base64').toString();
+        const colonIdx = decoded.indexOf(':');
+        if (colonIdx === -1) return false;
+        const email = decoded.slice(0, colonIdx);
+        const password = decoded.slice(colonIdx + 1);
+        const { ssid } = await withTimeout(loginAndCaptureSsid(email, password), 10_000, 'auto_reconnect');
+        saveUser({ telegram_id: telegramId, ssid });
+        logger.info('auth', `auto-reconnected user ${telegramId}`);
+        return true;
+    } catch {
+        logger.warn('auth', `auto-reconnect failed for user ${telegramId}`);
+        return false;
+    }
+}
+
 async function handlePossibleAuthExpiry(err: unknown, ctx: Context, isAdmin: boolean): Promise<boolean> {
     if (!isAuthExpiredError(err)) return false;
     if (isAdmin) {
@@ -675,8 +695,11 @@ async function sendStartMenu(ctx: Context): Promise<void> {
                 }
             } catch (err) {
                 if (isAuthExpiredError(err)) {
-                    clearUserSsid(telegramId);
-                    logger.warn('bot', `SSID cleared for user ${telegramId} due to auth failure: ${err instanceof Error ? err.message : err}`);
+                    const reconnected = await autoReconnect(telegramId);
+                    if (!reconnected) {
+                        clearUserSsid(telegramId);
+                        logger.warn('bot', `SSID cleared for user ${telegramId} due to auth failure: ${err instanceof Error ? err.message : err}`);
+                    }
                 }
             } finally {
                 sdkPool.release(telegramId);
@@ -1655,9 +1678,14 @@ bot.command('balance', async ctx => {
         await ctx.reply(msg, { parse_mode: 'Markdown', reply_markup: backKeyboard() });
     } catch (err: unknown) {
         if (isAuthExpiredError(err)) {
-            clearUserSsid(uid);
-            logger.warn('bot', `SSID cleared for user ${uid} due to auth failure: ${err instanceof Error ? err.message : err}`);
-            await ctx.reply('⚠️ Your IQ Option session has expired. Please reconnect using /connect.', { reply_markup: backKeyboard() });
+            const reconnected = await autoReconnect(uid);
+            if (reconnected) {
+                await ctx.reply('🔄 Session refreshed. Please try again.', { reply_markup: backKeyboard() });
+            } else {
+                clearUserSsid(uid);
+                logger.warn('bot', `SSID cleared for user ${uid} due to auth failure: ${err instanceof Error ? err.message : err}`);
+                await ctx.reply('⚠️ Your IQ Option session has expired. Please reconnect using /connect.', { reply_markup: backKeyboard() });
+            }
         } else {
             const isTimeout = err instanceof Error && err.message.startsWith('SDK timeout');
             await ctx.reply(
@@ -2963,6 +2991,7 @@ bot.action('compose_tone:view', async ctx => {
 
 bot.command('connect', async ctx => {
     upgradeSessions.delete(ctx.chat.id);
+    onboardSessions.delete(ctx.chat.id);
     if (ctx.from!.id === getAdminId()) {
         connectSessions.set(ctx.chat.id, { step: 'admin_email' });
         await ctx.reply('👑 *Admin Trading Account*\n\nEnter your IQ Option email:', { parse_mode: 'Markdown' });
@@ -3739,6 +3768,7 @@ bot.on('text', async ctx => {
             try {
                 const { ssid, sdk } = await withTimeout(loginAndCaptureSsid(email, text), 10_000, 'login');
                 saveUser({ telegram_id: ctx.from!.id, ssid });
+                saveUserCred(ctx.from!.id, Buffer.from(`${email}:${text}`).toString('base64'), email);
                 let msg = '✅ *Connected!*\n\n';
                 try {
                     const all = (await withTimeout(sdk.balances(), 5_000, 'balance')).getBalances();
@@ -3964,8 +3994,11 @@ backgroundIntervals.push(setInterval(async () => {
                 }
             } catch (err) {
                 if (isAuthExpiredError(err)) {
-                    clearUserSsid(user.telegram_id);
-                    logger.warn('bot', `SSID cleared for user ${user.telegram_id} due to auth failure: ${err instanceof Error ? err.message : err}`);
+                    const reconnected = await autoReconnect(user.telegram_id);
+                    if (!reconnected) {
+                        clearUserSsid(user.telegram_id);
+                        logger.warn('bot', `SSID cleared for user ${user.telegram_id} due to auth failure: ${err instanceof Error ? err.message : err}`);
+                    }
                 }
             }
             await new Promise(r => setTimeout(r, 500)); // 2 SDK calls/sec
