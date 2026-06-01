@@ -3,7 +3,7 @@ import path from 'node:path';
 
 const DB_PATH = process.env.DB_PATH ?? path.resolve('iqbot-v3.db');
 
-export const db = new Database(DB_PATH);
+export const db = new Database(DB_PATH) as any;
 db.pragma('journal_mode = WAL');
 
 db.exec(`
