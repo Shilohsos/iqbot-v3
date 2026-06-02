@@ -646,9 +646,20 @@ Funded: {count}/{total} ({funded_pct}%)
 
 ### Environment Variables to Add
 ```
-OPENROUTER_API_KEY=***existing key from /root/.hermes/.env***
-OPENROUTER_MODEL=google/gemini-2.5-flash-lite
+OPENROUTER_API_KEY=*** already added to bot .env (VPS)***
+OPENROUTER_MODEL=google/gemini-2.5-flash
 ```
+
+### Templates Seed Data
+- Templates schema + seed SQL at `db/templates-seed.sql`
+- 195 brain templates (25 categories, 6 variants each) + onboarding + funding + re-engagement + SSID
+- Include `seedTemplates()` function in `db.ts` that:
+  1. Creates `templates` table if not exists
+  2. INSERT OR IGNORE all seed data
+  3. Call at bot startup
+- The 195 brain templates from the DB are NOT in the SQL file (too large) — instead, add a second seed function `seedBrainTemplates()` that inserts the complete set. The full data is in the live SQLite DB on the VPS, or extract the INSERT statements from the db/export if needed.
+
+### Key Files to Modify
 
 ### Key Files to Modify
 - `src/bot.ts` — main handlers, new admin actions, new triggers
