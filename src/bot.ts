@@ -4527,6 +4527,7 @@ backgroundIntervals.push(setInterval(async () => {
 // ─── Re-engagement loop (6h cadence for stuck onboarding users) ─────────────
 
 backgroundIntervals.push(setInterval(async () => {
+    if (getConfig('features_paused') === '1') return;
     try {
         const stuck = getStuckOnboardingUsers(6);
         for (const user of stuck) {

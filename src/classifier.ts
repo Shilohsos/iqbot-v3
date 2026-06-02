@@ -1,4 +1,4 @@
-import { getRandomTemplate, type TemplateRecord } from './db.js';
+import { getRandomTemplate, getConfig, type TemplateRecord } from './db.js';
 
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 const OPENROUTER_MODEL   = process.env.OPENROUTER_MODEL ?? 'google/gemini-2.5-flash';
@@ -97,6 +97,7 @@ export async function getBrainResponse(
     text: string,
     imageUrl?: string,
 ): Promise<TemplateRecord | undefined> {
+    if (getConfig('features_paused') === '1') return undefined;
     if (!checkRateLimit(userId)) return undefined;
     try {
         const category = await classifyIntent(text, imageUrl);

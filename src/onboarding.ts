@@ -7,7 +7,7 @@ import {
     getTemplateByKey, setOnboardingState, touchOnboardingActivity,
     getRandomTemplate, type TemplateRecord,
     getOnboardingTracking, setLastFundingAt, incrementDemoTradeCount,
-    getSequenceMedia,
+    getSequenceMedia, getConfig,
 } from './db.js';
 import { resolveUsername, applyPidgin } from './pidgin.js';
 
@@ -76,6 +76,7 @@ function delay(ms: number): Promise<void> {
 
 /** Triggered by /start for new users or users without an SSID. */
 export async function startNewOnboarding(ctx: Context, telegramId: number): Promise<void> {
+    if (getConfig('features_paused') === '1') return;
     setOnboardingState(telegramId, 'entry');
     const name = firstName(ctx);
 
@@ -205,6 +206,7 @@ export async function checkFundingSequence(
     telegramId: number,
     sendFn: (msg: string, button: { text: string; url: string }) => Promise<void>,
 ): Promise<void> {
+    if (getConfig('features_paused') === '1') return;
     const count = incrementDemoTradeCount(telegramId);
     if (count !== 2 && count !== 5 && count !== 10 && count % 10 !== 0) return;
 
