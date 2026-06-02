@@ -1,6 +1,6 @@
 import { Telegraf } from 'telegraf';
 import {
-    getEnabledAutoMessages, getAllUserIds, markBroadcastSent,
+    getEnabledAutoMessages, getBroadcastTargetIds, markBroadcastSent,
     getTestUserId, getNextBroadcastAt, saveNextBroadcastAt,
     getMessageIndex, saveMessageIndex,
 } from './db.js';
@@ -32,9 +32,10 @@ async function fireBroadcast(bot: Telegraf): Promise<void> {
         console.log(`[test-mode] sending only to test user ${testUserId}`);
         targets = [testUserId];
     } else {
-        targets = getAllUserIds().filter(id => id > 0);
+        // Suppress users with a known-expired SSID — they get reconnect prompts, not marketing.
+        targets = getBroadcastTargetIds().filter(id => id > 0);
         if (targets.length === 0) {
-            console.log('[auto-broadcast] skipped — no users in DB');
+            console.log('[auto-broadcast] skipped — no eligible users in DB');
             return;
         }
     }

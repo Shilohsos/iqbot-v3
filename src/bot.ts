@@ -35,6 +35,11 @@ import {
     insertScheduledBroadcast, markScheduledBroadcastSent, deleteScheduledBroadcast, getPendingScheduledBroadcasts,
     clearUserSsid,
     saveUserCred,
+    setSsidValid,
+    getUsersWithSsid,
+    getUsersDueForReconnectPrompt,
+    setReconnectPrompt,
+    clearReconnectPrompt,
     getPendingGiveawaysDue,
     setGiveawayStatus,
     getGiveawayParticipants,
@@ -550,6 +555,8 @@ async function autoReconnect(telegramId: number): Promise<boolean> {
         const password = decoded.slice(colonIdx + 1);
         const { ssid } = await withTimeout(loginAndCaptureSsid(email, password), 10_000, 'auto_reconnect');
         saveUser({ telegram_id: telegramId, ssid });
+        setSsidValid(telegramId, 1);
+        clearReconnectPrompt(telegramId);
         logger.info('auth', `auto-reconnected user ${telegramId}`);
         return true;
     } catch {
@@ -558,12 +565,46 @@ async function autoReconnect(telegramId: number): Promise<boolean> {
     }
 }
 
+/** Delete any visible reconnect-prompt message for a user and clear its tracking. */
+async function clearReconnectPromptMessage(telegramId: number): Promise<void> {
+    const user = getUser(telegramId);
+    if (user?.reconnect_prompt_msg_id) {
+        try { await bot.telegram.deleteMessage(telegramId, user.reconnect_prompt_msg_id); } catch {}
+    }
+    clearReconnectPrompt(telegramId);
+}
+
+/** Admin equivalent of autoReconnect — uses the base64 cred stored in config (admin_cred). */
+async function adminAutoReconnect(): Promise<boolean> {
+    const cred = getConfig('admin_cred');
+    if (!cred) return false;
+    try {
+        const decoded = Buffer.from(cred, 'base64').toString();
+        const colonIdx = decoded.indexOf(':');
+        if (colonIdx === -1) return false;
+        const email = decoded.slice(0, colonIdx);
+        const password = decoded.slice(colonIdx + 1);
+        const { ssid, sdk } = await withTimeout(loginAndCaptureSsid(email, password), 10_000, 'admin_auto_reconnect');
+        sdk.shutdown().catch(() => {});
+        setAdminSsid(ssid);
+        logger.info('auth', 'auto-reconnected admin account');
+        return true;
+    } catch {
+        logger.warn('auth', 'admin auto-reconnect failed');
+        return false;
+    }
+}
+
 async function handlePossibleAuthExpiry(err: unknown, ctx: Context, isAdmin: boolean): Promise<boolean> {
     if (!isAuthExpiredError(err)) return false;
+    // Try a silent re-login first — if creds are stored the user never notices.
     if (isAdmin) {
+        if (await adminAutoReconnect()) return true;
         try { clearAdminSsid(); } catch {}
     } else if (ctx.from?.id) {
+        if (await autoReconnect(ctx.from.id)) return true;
         try { clearUserSsid(ctx.from.id); } catch {}
+        try { setSsidValid(ctx.from.id, 0); } catch {}
     }
     await ctx.reply(
         '🔐 Your IQ Option session expired.\nReconnect to keep trading.',
@@ -698,6 +739,7 @@ async function sendStartMenu(ctx: Context): Promise<void> {
                     const reconnected = await autoReconnect(telegramId);
                     if (!reconnected) {
                         clearUserSsid(telegramId);
+                        setSsidValid(telegramId, 0);
                         logger.warn('bot', `SSID cleared for user ${telegramId} due to auth failure: ${err instanceof Error ? err.message : err}`);
                     }
                 }
@@ -1683,6 +1725,7 @@ bot.command('balance', async ctx => {
                 await ctx.reply('🔄 Session refreshed. Please try again.', { reply_markup: backKeyboard() });
             } else {
                 clearUserSsid(uid);
+                setSsidValid(uid, 0);
                 logger.warn('bot', `SSID cleared for user ${uid} due to auth failure: ${err instanceof Error ? err.message : err}`);
                 await ctx.reply('⚠️ Your IQ Option session has expired. Please reconnect using /connect.', { reply_markup: backKeyboard() });
             }
@@ -3737,6 +3780,7 @@ bot.on('text', async ctx => {
                 const { ssid, sdk } = await withTimeout(loginAndCaptureSsid(conn.email, text.trim()), 15_000, 'admin_login');
                 setAdminSsid(ssid);
                 setConfig('admin_email', conn.email);
+                setConfig('admin_cred', Buffer.from(`${conn.email}:${text.trim()}`).toString('base64'));
                 let msg = '✅ *Admin trading account connected!*\n\n';
                 try {
                     const all = (await withTimeout(sdk.balances(), 5_000, 'balance')).getBalances();
@@ -3769,6 +3813,8 @@ bot.on('text', async ctx => {
                 const { ssid, sdk } = await withTimeout(loginAndCaptureSsid(email, text), 10_000, 'login');
                 saveUser({ telegram_id: ctx.from!.id, ssid });
                 saveUserCred(ctx.from!.id, Buffer.from(`${email}:${text}`).toString('base64'), email);
+                setSsidValid(ctx.from!.id, 1);
+                await clearReconnectPromptMessage(ctx.from!.id);
                 let msg = '✅ *Connected!*\n\n';
                 try {
                     const all = (await withTimeout(sdk.balances(), 5_000, 'balance')).getBalances();
@@ -3997,6 +4043,7 @@ backgroundIntervals.push(setInterval(async () => {
                     const reconnected = await autoReconnect(user.telegram_id);
                     if (!reconnected) {
                         clearUserSsid(user.telegram_id);
+                        setSsidValid(user.telegram_id, 0);
                         logger.warn('bot', `SSID cleared for user ${user.telegram_id} due to auth failure: ${err instanceof Error ? err.message : err}`);
                     }
                 }
@@ -4007,6 +4054,73 @@ backgroundIntervals.push(setInterval(async () => {
         logger.error('bot', `periodic auto-promote error: ${err instanceof Error ? err.message : err}`);
     }
 }, 30 * 60_000));
+
+// ─── SSID health check (hourly) ─────────────────────────────────────────────────
+// Proactively probe every stored SSID. Expired ones are silently re-logged-in when
+// creds exist; otherwise marked invalid so broadcasts are suppressed and the
+// reconnect-prompt loop takes over.
+backgroundIntervals.push(setInterval(async () => {
+    try {
+        const users = getUsersWithSsid();
+        const BATCH = 5;
+        for (let i = 0; i < users.length; i += BATCH) {
+            const batch = users.slice(i, i + BATCH);
+            await Promise.all(batch.map(async user => {
+                try {
+                    const sdk = await sdkPool.get(user.telegram_id, user.ssid!);
+                    try {
+                        await withTimeout(sdk.balances(), 15_000, 'balance');
+                        setSsidValid(user.telegram_id, 1);
+                    } finally {
+                        sdkPool.release(user.telegram_id);
+                    }
+                } catch (err) {
+                    if (isAuthExpiredError(err)) {
+                        const reconnected = await autoReconnect(user.telegram_id);
+                        if (!reconnected) {
+                            clearUserSsid(user.telegram_id);
+                            setSsidValid(user.telegram_id, 0);
+                            logger.warn('bot', `[health] SSID expired for user ${user.telegram_id} (no cred to auto-reconnect)`);
+                        }
+                    }
+                    // Non-auth errors (timeouts etc.) leave ssid_valid untouched.
+                }
+            }));
+            await new Promise(r => setTimeout(r, 1_000)); // pause between batches
+        }
+    } catch (err) {
+        logger.error('bot', `SSID health check error: ${err instanceof Error ? err.message : err}`);
+    }
+}, 60 * 60_000));
+
+// ─── Reconnect-prompt loop (hourly tick, 6h cadence per user) ───────────────────
+// Users whose SSID is known-expired (and couldn't be auto-reconnected) get a
+// reconnect prompt. The first one stays; each follow-up deletes the previous so
+// only one is ever visible.
+backgroundIntervals.push(setInterval(async () => {
+    try {
+        const due = getUsersDueForReconnectPrompt(6);
+        for (const user of due) {
+            try {
+                if (user.reconnect_prompt_msg_id) {
+                    try { await bot.telegram.deleteMessage(user.telegram_id, user.reconnect_prompt_msg_id); } catch {}
+                }
+                const sent = await bot.telegram.sendMessage(
+                    user.telegram_id,
+                    '🔐 Your IQ Option session expired.\nReconnect to keep the bot trading for you.',
+                    { reply_markup: { inline_keyboard: [[{ text: '🔗 Reconnect', callback_data: 'ui:connect' }]] } }
+                );
+                setReconnectPrompt(user.telegram_id, sent.message_id);
+            } catch {
+                // user blocked the bot — stamp the attempt so we back off 6h
+                setReconnectPrompt(user.telegram_id, null);
+            }
+            await new Promise(r => setTimeout(r, 100));
+        }
+    } catch (err) {
+        logger.error('bot', `reconnect-prompt loop error: ${err instanceof Error ? err.message : err}`);
+    }
+}, 60 * 60_000));
 
 // ─── Keepalive ────────────────────────────────────────────────────────────────
 

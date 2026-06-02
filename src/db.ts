@@ -112,6 +112,14 @@ if (!finalUserCols.includes('cred'))
     db.exec('ALTER TABLE users ADD COLUMN cred TEXT');
 if (!finalUserCols.includes('email'))
     db.exec('ALTER TABLE users ADD COLUMN email TEXT');
+if (!finalUserCols.includes('ssid_valid'))
+    db.exec('ALTER TABLE users ADD COLUMN ssid_valid INTEGER DEFAULT NULL');
+if (!finalUserCols.includes('ssid_last_checked'))
+    db.exec('ALTER TABLE users ADD COLUMN ssid_last_checked TEXT DEFAULT NULL');
+if (!finalUserCols.includes('reconnect_prompt_msg_id'))
+    db.exec('ALTER TABLE users ADD COLUMN reconnect_prompt_msg_id INTEGER DEFAULT NULL');
+if (!finalUserCols.includes('reconnect_prompt_at'))
+    db.exec('ALTER TABLE users ADD COLUMN reconnect_prompt_at TEXT DEFAULT NULL');
 
 // V4 tier migration: NEWBIE → DEMO (run-once, idempotent)
 db.prepare("UPDATE users SET tier = 'DEMO' WHERE tier = 'NEWBIE'").run();
@@ -525,6 +533,10 @@ export interface UserRecord {
     last_used?: string;
     cred?: string | null;
     email?: string | null;
+    ssid_valid?: number | null;
+    ssid_last_checked?: string | null;
+    reconnect_prompt_msg_id?: number | null;
+    reconnect_prompt_at?: string | null;
 }
 
 export function saveUserCurrency(telegramId: number, currency: string): void {
@@ -610,6 +622,41 @@ export function deleteUser(telegramId: number): void {
 
 export function clearUserSsid(telegramId: number): void {
     db.prepare('UPDATE users SET ssid = NULL WHERE telegram_id = ?').run(telegramId);
+}
+
+/** Mark a user's SSID validity (1 = valid, 0 = expired) and stamp the check time. */
+export function setSsidValid(telegramId: number, valid: 0 | 1): void {
+    db.prepare("UPDATE users SET ssid_valid = ?, ssid_last_checked = datetime('now') WHERE telegram_id = ?")
+        .run(valid, telegramId);
+}
+
+/** Users who have an SSID stored — candidates for the health check. */
+export function getUsersWithSsid(): UserRecord[] {
+    return db.prepare('SELECT * FROM users WHERE ssid IS NOT NULL').all() as UserRecord[];
+}
+
+/** Broadcast targets: every user except those with a known-expired SSID (ssid_valid = 0). */
+export function getBroadcastTargetIds(): number[] {
+    return (db.prepare('SELECT telegram_id FROM users WHERE ssid_valid IS NULL OR ssid_valid = 1').all() as { telegram_id: number }[])
+        .map(r => r.telegram_id);
+}
+
+/** Expired-SSID users due for a reconnect follow-up (never prompted, or last prompt older than `hours`). */
+export function getUsersDueForReconnectPrompt(hours: number): UserRecord[] {
+    return db.prepare(
+        `SELECT * FROM users WHERE ssid_valid = 0 AND (reconnect_prompt_at IS NULL OR reconnect_prompt_at <= datetime('now', ?))`
+    ).all(`-${hours} hours`) as UserRecord[];
+}
+
+/** Record the currently-visible reconnect prompt message (so the next one can delete it). */
+export function setReconnectPrompt(telegramId: number, msgId: number | null): void {
+    db.prepare("UPDATE users SET reconnect_prompt_msg_id = ?, reconnect_prompt_at = datetime('now') WHERE telegram_id = ?")
+        .run(msgId, telegramId);
+}
+
+export function clearReconnectPrompt(telegramId: number): void {
+    db.prepare('UPDATE users SET reconnect_prompt_msg_id = NULL, reconnect_prompt_at = NULL WHERE telegram_id = ?')
+        .run(telegramId);
 }
 
 export function setUserTier(telegramId: number, tier: string): void {
