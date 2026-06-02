@@ -44,6 +44,23 @@ import {
     setGiveawayStatus,
     getGiveawayParticipants,
     deleteGiveaway,
+    seedTemplates,
+    setOnboardingState,
+    touchOnboardingActivity,
+    setUserPidginEnabled,
+    getTemplateByKey,
+    getTemplatesByCategory,
+    getTemplateCategories,
+    updateTemplateMessage,
+    getRandomTemplate,
+    getTierDistribution,
+    getFundedUserCount,
+    getRecentBroadcasts,
+    getOnboardingFunnelStats,
+    getAllSequenceMediaKeys,
+    getSequenceMedia,
+    setSequenceMedia,
+    getStuckOnboardingUsers,
 } from './db.js';
 import { friendlyError } from './errors.js';
 import { logger } from './logger.js';
@@ -73,11 +90,21 @@ import {
     giveawayScheduleKeyboard, activeGiveawaysKeyboard, giveawayViewKeyboard,
     promoScheduleKeyboard, marathonDurationKeyboard, marathonScheduleKeyboard,
     composeTopicKeyboard, composeResultKeyboard, composeDeliveryKeyboard, composeToneKeyboard, composeButtonKeyboard,
+    memberFilterKeyboard, userDetailKeyboard, mediaLibraryKeyboard,
+    llmCategoryKeyboard, broadcastPreviewKeyboard,
 } from './ui/admin.js';
 import { checkAffiliate } from './affiliate.js';
 import { setupChannelHandlers, startWelcomeFollowUp } from './channel.js';
 import { startAutoBroadcast } from './auto-broadcast.js';
 import { generatePost, type LlmRequest } from './llm.js';
+import { getBrainResponse } from './classifier.js';
+import { resolveUsername as resolveUsernameTemplate, applyPidgin } from './pidgin.js';
+import {
+    startNewOnboarding, handleNewTrader, handleWatchedVideo,
+    handleExperiencedTrader, handleHaveAccount, handleNeedAccount,
+    handleUserIdVerified, handleUserIdFailed, handleEmailCollected,
+    handleConnected, checkFundingSequence, getReengageTemplateKey,
+} from './onboarding.js';
 import { adminAnalyze, type AdminAnalysisResult } from './admin-analysis.js';
 import { existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -231,7 +258,8 @@ type AdminStep =
     | 'compose_tone_guide'
     | 'compose_tone_sample1'
     | 'compose_tone_sample2'
-    | 'compose_tone_sample3';
+    | 'compose_tone_sample3'
+    | 'media_upload';
 
 interface AdminSessionState {
     step: AdminStep;
@@ -267,6 +295,8 @@ interface AdminSessionState {
     composeContent?: string;
     composeImageFileIds?: string[];
     composeCta?: 'start' | 'trade' | 'fund' | 'none';
+    // Media library upload
+    mediaLibraryKey?: string;
 }
 const adminSessions = makeSessionMap<AdminSessionState>('admin');
 
@@ -753,23 +783,11 @@ async function sendStartMenu(ctx: Context): Promise<void> {
 // ─── Onboarding helpers ───────────────────────────────────────────────────────
 
 async function startOnboarding(ctx: Context): Promise<void> {
-    // L1 — welcome
-    try { await ctx.replyWithPhoto(ASSET('L1.png')); } catch {}
-    await ctx.reply(
-        `I'm 10x Special Bot.\n\n` +
-        `The smartest semi auto-trading bot for IQ Option OTC pairs.\n\n` +
-        `I scan markets. I read signals. I place trades.\n` +
-        `You sit back and watch the wins land.`
-    );
-    // L3 — Link Your Account
-    try { await ctx.replyWithPhoto(ASSET('L3.png')); } catch {}
-    await ctx.reply(
-        `Connect your IQ Option account.\n\n` +
-        `Free signup · 60 seconds · Linked instantly.\n` +
-        `Bot trades on your account. Money stays yours.\n\n` +
-        `Pick what fits 👇`,
-        { reply_markup: onboardKeyboard() }
-    );
+    const telegramId = ctx.from!.id;
+    const user = getUser(telegramId);
+    // If user already has an onboarding state in progress, don't restart from scratch
+    if (user?.onboarding_state && user.onboarding_state !== 'entry') return;
+    await startNewOnboarding(ctx, telegramId);
 }
 
 async function askAccountConnection(ctx: Context): Promise<void> {
@@ -1074,6 +1092,48 @@ bot.action('onboard:autocreate', async ctx => {
         '📧 Enter your email:',
         { parse_mode: 'Markdown' }
     );
+});
+
+// ─── New onboarding state machine callbacks ───────────────────────────────────
+
+bot.action('onboard:new', async ctx => {
+    if (!isValidCallbackQuery(ctx)) { await ctx.answerCbQuery('⏳ Expired. Send /start again.').catch(() => {}); return; }
+    await ctx.answerCbQuery();
+    const telegramId = ctx.from!.id;
+    touchOnboardingActivity(telegramId);
+    await handleNewTrader(ctx, telegramId);
+});
+
+bot.action('onboard:experienced', async ctx => {
+    if (!isValidCallbackQuery(ctx)) { await ctx.answerCbQuery('⏳ Expired. Send /start again.').catch(() => {}); return; }
+    await ctx.answerCbQuery();
+    const telegramId = ctx.from!.id;
+    touchOnboardingActivity(telegramId);
+    await handleExperiencedTrader(ctx, telegramId);
+});
+
+bot.action('onboard:watched_video', async ctx => {
+    if (!isValidCallbackQuery(ctx)) { await ctx.answerCbQuery('⏳ Expired. Send /start again.').catch(() => {}); return; }
+    await ctx.answerCbQuery();
+    const telegramId = ctx.from!.id;
+    touchOnboardingActivity(telegramId);
+    await handleWatchedVideo(ctx, telegramId);
+});
+
+bot.action('onboard:have_account', async ctx => {
+    if (!isValidCallbackQuery(ctx)) { await ctx.answerCbQuery('⏳ Expired. Send /start again.').catch(() => {}); return; }
+    await ctx.answerCbQuery();
+    const telegramId = ctx.from!.id;
+    touchOnboardingActivity(telegramId);
+    await handleHaveAccount(ctx, telegramId);
+});
+
+bot.action('onboard:need_account', async ctx => {
+    if (!isValidCallbackQuery(ctx)) { await ctx.answerCbQuery('⏳ Expired. Send /start again.').catch(() => {}); return; }
+    await ctx.answerCbQuery();
+    const telegramId = ctx.from!.id;
+    touchOnboardingActivity(telegramId);
+    await handleNeedAccount(ctx, telegramId);
 });
 
 // ─── Trade wizard — mode ──────────────────────────────────────────────────────
@@ -3030,6 +3090,216 @@ bot.action('compose_tone:view', async ctx => {
     await ctx.reply(msg, { parse_mode: 'Markdown', reply_markup: composeToneKeyboard() });
 });
 
+// ─── C1 Fix: admin:trade_connect ─────────────────────────────────────────────
+
+bot.action('admin:trade_connect', async ctx => {
+    await ctx.answerCbQuery();
+    const chatId = ctx.chat!.id;
+    connectSessions.set(chatId, { step: 'admin_email' });
+    await ctx.reply('👑 *Admin Trading Account Setup*\n\nEnter your IQ Option email:', { parse_mode: 'Markdown' });
+});
+
+// ─── Module 14: SSID Health ───────────────────────────────────────────────────
+
+bot.action('admin:ssid_health', async ctx => {
+    await ctx.answerCbQuery();
+    const all = getUsersWithSsid();
+    const valid = all.filter(u => u.ssid_valid === 1).length;
+    const expired = all.filter(u => u.ssid_valid === 0).length;
+    const unknown = all.length - valid - expired;
+    await ctx.reply(
+        `🔑 *SSID Health*\n\n` +
+        `Total with SSID: ${all.length}\n` +
+        `✅ Valid: ${valid}\n` +
+        `❌ Expired/Invalid: ${expired}\n` +
+        `⏳ Unknown: ${unknown}\n\n` +
+        `Tap below to re-prompt expired users.`,
+        {
+            parse_mode: 'Markdown',
+            reply_markup: { inline_keyboard: [
+                [{ text: '🔔 Prompt Expired Users', callback_data: 'admin:ssid_expired' }],
+                [{ text: '🔙 Admin Menu', callback_data: 'admin:back' }],
+            ]},
+        }
+    );
+});
+
+bot.action('admin:ssid_expired', async ctx => {
+    await ctx.answerCbQuery();
+    const due = getUsersDueForReconnectPrompt(0);
+    if (due.length === 0) {
+        await ctx.reply('✅ No users with expired SSIDs right now.', { reply_markup: adminBackKeyboard() });
+        return;
+    }
+    let sent = 0;
+    for (const user of due) {
+        try {
+            if (user.reconnect_prompt_msg_id) {
+                try { await bot.telegram.deleteMessage(user.telegram_id, user.reconnect_prompt_msg_id); } catch {}
+            }
+            const m = await bot.telegram.sendMessage(
+                user.telegram_id,
+                '🔐 Your IQ Option session expired. Reconnect to keep the bot trading for you.',
+                { reply_markup: { inline_keyboard: [[{ text: '🔗 Reconnect', callback_data: 'ui:connect' }]] } }
+            );
+            setReconnectPrompt(user.telegram_id, m.message_id);
+            sent++;
+        } catch { setReconnectPrompt(user.telegram_id, null); }
+    }
+    await ctx.reply(`✅ Sent reconnect prompts to *${sent}* user(s).`, { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
+});
+
+// ─── Module 15: Onboarding Funnel ────────────────────────────────────────────
+
+bot.action('admin:onboarding_funnel', async ctx => {
+    await ctx.answerCbQuery();
+    const stats = getOnboardingFunnelStats();
+    const dist = getTierDistribution();
+    let msg = '👣 *Onboarding Funnel*\n\n';
+    for (const [state, count] of Object.entries(stats)) {
+        msg += `• ${state}: ${count}\n`;
+    }
+    msg += '\n*Tier Distribution:*\n';
+    for (const row of dist) {
+        msg += `• ${row.tier}: ${row.count} (${row.pct.toFixed(1)}%)\n`;
+    }
+    await ctx.reply(msg, { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
+});
+
+// ─── Module 16: LLM Template Browser ─────────────────────────────────────────
+
+bot.action('admin:llm_templates', async ctx => {
+    await ctx.answerCbQuery();
+    const cats = getTemplateCategories();
+    if (cats.length === 0) {
+        await ctx.reply('No LLM templates seeded yet.', { reply_markup: adminBackKeyboard() });
+        return;
+    }
+    await ctx.reply('🧠 *LLM Templates* — pick a category:', { parse_mode: 'Markdown', reply_markup: llmCategoryKeyboard(cats) });
+});
+
+bot.action(/^llm:cat:(.+)$/, async ctx => {
+    await ctx.answerCbQuery();
+    const category = ctx.match[1];
+    const templates = getTemplatesByCategory(category, 'brain');
+    if (templates.length === 0) {
+        await ctx.reply(`No templates for category *${category}*.`, { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
+        return;
+    }
+    let msg = `🧠 *${category}* — ${templates.length} template(s)\n\n`;
+    for (const t of templates.slice(0, 10)) {
+        msg += `• \`${t.key}\`\n  ${t.message.slice(0, 80)}…\n\n`;
+    }
+    if (templates.length > 10) msg += `_…and ${templates.length - 10} more_`;
+    await ctx.reply(msg, { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
+});
+
+// ─── Module 17: Broadcast History ────────────────────────────────────────────
+
+bot.action('admin:broadcast_history', async ctx => {
+    await ctx.answerCbQuery();
+    const history = getRecentBroadcasts(10);
+    if (history.length === 0) {
+        await ctx.reply('📈 No broadcast history yet.', { reply_markup: adminBackKeyboard() });
+        return;
+    }
+    let msg = '📈 *Recent Broadcasts* (last 10)\n\n';
+    for (const row of history) {
+        const date = new Date(row.created_at).toLocaleDateString();
+        const preview = row.content.slice(0, 50);
+        msg += `• [${date}] ${preview}…\n`;
+    }
+    await ctx.reply(msg, { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
+});
+
+// ─── Module 18: Media Library ─────────────────────────────────────────────────
+
+bot.action('admin:media_library', async ctx => {
+    await ctx.answerCbQuery();
+    const keys = getAllSequenceMediaKeys();
+    if (keys.length === 0) {
+        await ctx.reply('📁 No sequence media uploaded yet.\n\nUpload a photo/video and it will be listed here.', { reply_markup: adminBackKeyboard() });
+        return;
+    }
+    await ctx.reply('📁 *Media Library* — tap a key to update:', { parse_mode: 'Markdown', reply_markup: mediaLibraryKeyboard(keys) });
+});
+
+bot.action(/^media:select:(.+)$/, async ctx => {
+    await ctx.answerCbQuery();
+    const templateKey = ctx.match[1];
+    adminSessions.set(ctx.chat!.id, { step: 'media_upload', mediaLibraryKey: templateKey });
+    await ctx.reply(`📎 Send a *photo* or *video* to assign to \`${templateKey}\`:\n\n(Or type /cancel to abort)`, { parse_mode: 'Markdown' });
+});
+
+// ─── Member filter / user detail / user actions ───────────────────────────────
+
+bot.action(/^member:filter:(all|DEMO|PRO|MASTER)$/, async ctx => {
+    await ctx.answerCbQuery();
+    const filter = ctx.match[1];
+    const all = getAllUsers();
+    const filtered = filter === 'all' ? all : all.filter(u => (u.tier ?? 'DEMO').toUpperCase() === filter);
+    if (filtered.length === 0) {
+        await ctx.reply(`No ${filter} members found.`, { reply_markup: adminBackKeyboard() });
+        return;
+    }
+    let msg = `👥 *Members — ${filter}* (${filtered.length})\n\n`;
+    for (const u of filtered.slice(0, 20)) {
+        const e = u.approval_status === 'approved' ? '✅' : u.approval_status === 'paused' ? '⏸️' : '❌';
+        const name = u.username ? `@${u.username}` : maskUserId(u.telegram_id);
+        msg += `${e} ${name} — ${(u.tier ?? 'DEMO').toUpperCase()}\n`;
+    }
+    if (filtered.length > 20) msg += `\n_…and ${filtered.length - 20} more_`;
+    await ctx.reply(msg, { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
+});
+
+bot.action(/^user_detail:(\d+)$/, async ctx => {
+    await ctx.answerCbQuery();
+    const uid = parseInt(ctx.match[1], 10);
+    const u = getUser(uid);
+    if (!u) { await ctx.reply('User not found.', { reply_markup: adminBackKeyboard() }); return; }
+    const ts = getTradeStats(uid);
+    const winRate = ts.total > 0 ? ((ts.wins / ts.total) * 100).toFixed(0) : '0';
+    const ssidStatus = u.ssid_valid === 1 ? '✅' : u.ssid_valid === 0 ? '❌' : '⏳';
+    let msg = `👤 *User Detail*\n\n`;
+    msg += `Telegram: ${u.username ? `@${u.username}` : `\`${maskUserId(uid)}\``}\n`;
+    if (u.iq_user_id) msg += `IQ User ID: \`${maskUserId(u.iq_user_id)}\`\n`;
+    msg += `Status: ${u.approval_status} | Tier: ${(u.tier ?? 'DEMO').toUpperCase()}\n`;
+    msg += `SSID: ${ssidStatus}\n`;
+    msg += `Trades: ${ts.total} | Win rate: ${winRate}%\n`;
+    if (u.onboarding_state) msg += `Onboarding: ${u.onboarding_state}\n`;
+    await ctx.reply(msg, { parse_mode: 'Markdown', reply_markup: userDetailKeyboard(uid) });
+});
+
+bot.action(/^user_action:(approve|pause|reset_ssid|trades|message):(\d+)$/, async ctx => {
+    await ctx.answerCbQuery();
+    const action = ctx.match[1];
+    const uid = parseInt(ctx.match[2], 10);
+    if (action === 'approve') {
+        approveUser(uid);
+        await ctx.reply(`✅ User \`${maskUserId(uid)}\` approved.`, { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
+        try { await bot.telegram.sendMessage(uid, '✅ Your account has been approved! Send /start to begin.'); } catch {}
+    } else if (action === 'pause') {
+        pauseUser(uid);
+        await ctx.reply(`⏸️ User \`${maskUserId(uid)}\` paused.`, { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
+        try { await bot.telegram.sendMessage(uid, '⏸️ Your account has been temporarily paused.'); } catch {}
+    } else if (action === 'reset_ssid') {
+        clearUserSsid(uid);
+        setSsidValid(uid, 0);
+        await ctx.reply(`🔄 SSID cleared for \`${maskUserId(uid)}\`.`, { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
+    } else if (action === 'trades') {
+        const ts = getTradeStats(uid);
+        const recent = getRecentTrades(5, uid);
+        let msg = `📊 *Trade Stats — ${maskUserId(uid)}*\n\nTotal: ${ts.total} | Wins: ${ts.wins} | Losses: ${ts.losses}\n\n*Recent:*\n`;
+        for (const t of recent) {
+            msg += `• ${t.status ?? '?'} ${t.pair} $${t.amount}\n`;
+        }
+        await ctx.reply(msg, { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
+    } else if (action === 'message') {
+        adminSessions.set(ctx.chat!.id, { step: 'member_message_text', memberMessageUserId: uid });
+        await ctx.reply(`✉️ Enter message to send to user \`${maskUserId(uid)}\`:`, { parse_mode: 'Markdown' });
+    }
+});
+
 // ─── /connect & /disconnect ───────────────────────────────────────────────────
 
 bot.command('connect', async ctx => {
@@ -3083,6 +3353,17 @@ bot.command('pairs', async ctx => {
 
 bot.command('ping', ctx => ctx.reply('pong'));
 
+bot.command('pidgin', async ctx => {
+    const uid = ctx.from!.id;
+    const user = getUser(uid);
+    if (!user) return;
+    const next = !user.pidgin_enabled;
+    setUserPidginEnabled(uid, next);
+    await ctx.reply(next
+        ? '🇳🇬 Pidgin mode on! Messages go come for Pidgin English.'
+        : '🌍 Pidgin mode off. Back to standard English.');
+});
+
 bot.command('giveaway', async ctx => {
     if (ctx.from?.id !== getAdminId()) return;
     adminSessions.set(ctx.chat.id, { step: 'giveaway_winners' });
@@ -3128,6 +3409,13 @@ bot.on('photo', async ctx => {
         return;
     }
 
+    if (as.step === 'media_upload' && as.mediaLibraryKey) {
+        setSequenceMedia(as.mediaLibraryKey, 'photo', photo.file_id);
+        adminSessions.delete(chatId);
+        await ctx.reply(`✅ Photo saved for \`${as.mediaLibraryKey}\`.`, { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
+        return;
+    }
+
     if (as.step !== 'broadcast_media') return;
     const pending = pendingBroadcasts.get(chatId);
     if (!pending) { await ctx.reply('❌ Session expired.'); return; }
@@ -3140,7 +3428,16 @@ bot.on('video', async ctx => {
     if (ctx.from?.id !== getAdminId()) return;
     const chatId = ctx.chat.id;
     const as = adminSessions.get(chatId);
-    if (!as || as.step !== 'broadcast_media') return;
+    if (!as) return;
+
+    if (as.step === 'media_upload' && as.mediaLibraryKey) {
+        setSequenceMedia(as.mediaLibraryKey, 'video', ctx.message.video.file_id);
+        adminSessions.delete(chatId);
+        await ctx.reply(`✅ Video saved for \`${as.mediaLibraryKey}\`.`, { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
+        return;
+    }
+
+    if (as.step !== 'broadcast_media') return;
     const pending = pendingBroadcasts.get(chatId);
     if (!pending) { await ctx.reply('❌ Session expired.'); return; }
     pendingBroadcasts.set(chatId, { ...pending, media: { type: 'video', fileId: ctx.message.video.file_id } });
@@ -3622,6 +3919,89 @@ bot.on('text', async ctx => {
         return;
     }
 
+    // ── New onboarding state machine text handling ────────────────────────────
+    const telegramUser = getUser(ctx.from!.id);
+    const onboardingState = telegramUser?.onboarding_state;
+    if (onboardingState === 'awaiting_user_id') {
+        touchOnboardingActivity(ctx.from!.id);
+        const iqUserId = parseInt(text, 10);
+        if (isNaN(iqUserId) || String(iqUserId).length < 5) {
+            await ctx.reply('Please enter a valid IQ Option User ID (numeric).');
+            return;
+        }
+        upsertOnboardingUser(ctx.from!.id, iqUserId);
+        try {
+            const result = await withTimeout(checkAffiliate(iqUserId), 15_000, 'affiliate').catch(() => ({ found: false, data: null }));
+            if (result.found) {
+                approveUser(ctx.from!.id, result.data ? JSON.stringify(result.data) : undefined);
+                await handleUserIdVerified(ctx, ctx.from!.id);
+            } else {
+                await handleUserIdFailed(ctx, ctx.from!.id, 1);
+                setOnboardingState(ctx.from!.id, 'awaiting_user_id');
+            }
+        } catch {
+            await handleUserIdFailed(ctx, ctx.from!.id, 1);
+            setOnboardingState(ctx.from!.id, 'awaiting_user_id');
+        }
+        return;
+    }
+
+    if (onboardingState === 'awaiting_email') {
+        touchOnboardingActivity(ctx.from!.id);
+        const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text.trim());
+        if (!emailOk) { await ctx.reply('That doesn\'t look like a valid email address. Try again 👇'); return; }
+        // Store email in session for password step
+        onboardSessions.set(chatId, { step: 'connect_email', email: text.trim() });
+        await handleEmailCollected(ctx, ctx.from!.id);
+        return;
+    }
+
+    if (onboardingState === 'awaiting_password') {
+        touchOnboardingActivity(ctx.from!.id);
+        const emailSession = onboardSessions.get(chatId);
+        const email = emailSession?.email ?? telegramUser?.email;
+        if (!email) {
+            setOnboardingState(ctx.from!.id, 'awaiting_email');
+            await ctx.reply('📧 Please enter your IQ Option email first:');
+            return;
+        }
+        try { await ctx.deleteMessage(); } catch {}
+        await ctx.reply('🔐 Logging in...');
+        try {
+            const { ssid, sdk } = await withTimeout(loginAndCaptureSsid(email, text), 12_000, 'login');
+            saveUser({ telegram_id: ctx.from!.id, ssid });
+            saveUserCred(ctx.from!.id, Buffer.from(`${email}:${text}`).toString('base64'), email);
+            setSsidValid(ctx.from!.id, 1);
+            await clearReconnectPromptMessage(ctx.from!.id);
+            try {
+                const all = (await withTimeout(sdk.balances(), 5_000, 'balance')).getBalances();
+                const real = all.find(b => b.type === BalanceType.Real);
+                const demo = all.find(b => b.type === BalanceType.Demo);
+                if (real?.currency) saveUserCurrency(ctx.from!.id, real.currency);
+                else if (demo?.currency) saveUserCurrency(ctx.from!.id, demo.currency);
+            } finally {
+                sdk.shutdown().catch(() => {});
+            }
+            onboardSessions.delete(chatId);
+            await handleConnected(ctx, ctx.from!.id);
+        } catch (err) {
+            const loginFails = ((onboardSessions.get(chatId) as any)?.loginFailCount ?? 0) + 1;
+            onboardSessions.set(chatId, { step: 'connect_email', loginFailCount: loginFails } as any);
+            if (loginFails >= 2) {
+                setOnboardingState(ctx.from!.id, 'awaiting_email');
+                onboardSessions.delete(chatId);
+                await ctx.reply(
+                    'Having trouble connecting? Contact admin for help 👇💜',
+                    { reply_markup: { inline_keyboard: [[{ text: '👾 Contact admin', url: ADMIN_CONTACT_LINK }]] } }
+                );
+            } else {
+                setOnboardingState(ctx.from!.id, 'awaiting_email');
+                await ctx.reply('❌ Login failed. Please double-check your email:\n\n📧 Enter your IQ Option email:');
+            }
+        }
+        return;
+    }
+
     // ── Onboarding wizard ────────────────────────────────────────────────────
     const ob = onboardSessions.get(chatId);
     if (ob) {
@@ -3839,9 +4219,30 @@ bot.on('text', async ctx => {
         return;
     }
 
-    // ── Trade wizard — custom amount ──────────────────────────────────────────
+    // ── LLM brain fallthrough ─────────────────────────────────────────────────
+    // Only for non-wizard, non-admin, non-onboarding messages
     const wiz = wizardSessions.get(chatId);
-    if (!wiz || wiz.step !== 'custom_amount') return;
+    if (!wiz) {
+        const brainTemplate = await getBrainResponse(ctx.from!.id, text).catch(() => undefined);
+        if (brainTemplate) {
+            const user2 = getUser(ctx.from!.id);
+            const name2 = ctx.from?.first_name ?? ctx.from?.username ?? 'there';
+            const pidginEnabled = user2?.pidgin_enabled === 1;
+            let msg2 = resolveUsernameTemplate(brainTemplate.message, name2);
+            if (pidginEnabled) msg2 = applyPidgin(msg2);
+            const markup2 = brainTemplate.button_text && brainTemplate.button_url
+                ? { inline_keyboard: [[{ text: brainTemplate.button_text, url: brainTemplate.button_url }]] }
+                : undefined;
+            if (brainTemplate.media_file_id) {
+                await ctx.replyWithPhoto(brainTemplate.media_file_id, { caption: msg2, ...(markup2 ? { reply_markup: markup2 } : {}) });
+            } else {
+                await ctx.reply(msg2, { ...(markup2 ? { reply_markup: markup2 } : {}) });
+            }
+        }
+        return;
+    }
+
+    if (wiz.step !== 'custom_amount') return;
 
     const amount = parseFloat(text);
     if (isNaN(amount) || amount <= 0) { await ctx.reply('Please enter a valid positive number (e.g. 75).'); return; }
@@ -3911,6 +4312,7 @@ bot.catch((err: unknown, ctx) => {
 
 cleanStaleSessions();
 rehydrateScheduledBroadcasts();
+seedTemplates();
 
 // Activate any giveaways/promos that were due during downtime
 (async () => {
@@ -4121,6 +4523,27 @@ backgroundIntervals.push(setInterval(async () => {
         logger.error('bot', `reconnect-prompt loop error: ${err instanceof Error ? err.message : err}`);
     }
 }, 60 * 60_000));
+
+// ─── Re-engagement loop (6h cadence for stuck onboarding users) ─────────────
+
+backgroundIntervals.push(setInterval(async () => {
+    try {
+        const stuck = getStuckOnboardingUsers(6);
+        for (const user of stuck) {
+            try {
+                const key = getReengageTemplateKey(user.onboarding_state ?? 'entry_branch_sent');
+                const t = getTemplateByKey(key);
+                if (!t) continue;
+                const msg = resolveUsernameTemplate(t.message, user.username ?? 'there');
+                await bot.telegram.sendMessage(user.telegram_id, msg);
+                touchOnboardingActivity(user.telegram_id);
+                await new Promise(r => setTimeout(r, 200));
+            } catch {}
+        }
+    } catch (err) {
+        logger.error('bot', `re-engagement loop error: ${err instanceof Error ? err.message : err}`);
+    }
+}, 6 * 60 * 60_000));
 
 // ─── Keepalive ────────────────────────────────────────────────────────────────
 

@@ -42,11 +42,20 @@ export function adminKeyboard(): IKMarkup {
                 { text: '📢 Broadcast',   callback_data: 'admin:broadcast' },
             ],
             [
-                { text: '🎁 Giveaways',  callback_data: 'admin:giveaways' },
+                { text: '🎁 Giveaways',   callback_data: 'admin:giveaways' },
+                { text: '📁 Media Lib',   callback_data: 'admin:media_library' },
             ],
             [
                 { text: '🏆 Top Traders', callback_data: 'admin:top_traders' },
                 { text: '🔻 Funnel',      callback_data: 'admin:funnel' },
+            ],
+            [
+                { text: '🔑 SSID Health', callback_data: 'admin:ssid_health' },
+                { text: '👣 Onboarding',  callback_data: 'admin:onboarding_funnel' },
+            ],
+            [
+                { text: '🧠 LLM Templates', callback_data: 'admin:llm_templates' },
+                { text: '📈 Broadcasts',    callback_data: 'admin:broadcast_history' },
             ],
             [
                 { text: '📋 Audits',      callback_data: 'admin:audits' },
@@ -58,6 +67,76 @@ export function adminKeyboard(): IKMarkup {
                 { text: '🟢 Test Mode OFF', callback_data: 'admin:testmode:off' },
             ],
             [{ text: '🔙 Back', callback_data: 'ui:start' }],
+        ],
+    };
+}
+
+export function memberFilterKeyboard(): IKMarkup {
+    return {
+        inline_keyboard: [
+            [
+                { text: 'All',      callback_data: 'member:filter:all' },
+                { text: 'DEMO',     callback_data: 'member:filter:DEMO' },
+                { text: 'PRO',      callback_data: 'member:filter:PRO' },
+                { text: 'MASTER',   callback_data: 'member:filter:MASTER' },
+            ],
+            [
+                { text: '✅ Active',  callback_data: 'member:filter:active' },
+                { text: '⏸ Inactive',callback_data: 'member:filter:inactive' },
+                { text: '💎 Funded', callback_data: 'member:filter:funded' },
+            ],
+            [{ text: '🔙 Admin Menu', callback_data: 'admin:back' }],
+        ],
+    };
+}
+
+export function userDetailKeyboard(telegramId: number): IKMarkup {
+    return {
+        inline_keyboard: [
+            [
+                { text: '✅ Approve',    callback_data: `user_action:approve:${telegramId}` },
+                { text: '⏸ Pause',      callback_data: `user_action:pause:${telegramId}` },
+            ],
+            [
+                { text: '🔄 Reset SSID', callback_data: `user_action:reset_ssid:${telegramId}` },
+                { text: '📊 Trades',     callback_data: `user_action:trades:${telegramId}` },
+            ],
+            [
+                { text: '✉️ Message',    callback_data: `user_action:message:${telegramId}` },
+            ],
+            [{ text: '🔙 Back', callback_data: 'admin:admin' }],
+        ],
+    };
+}
+
+export function mediaLibraryKeyboard(keys: { template_key: string; media_type: string | null }[]): IKMarkup {
+    const rows = keys.map(k => [{
+        text: `${k.media_type ? '✅' : '❌'} ${k.template_key}`,
+        callback_data: `media:select:${k.template_key}`,
+    }]);
+    rows.push([{ text: '🔙 Admin Menu', callback_data: 'admin:back' }]);
+    return { inline_keyboard: rows };
+}
+
+export function llmCategoryKeyboard(categories: { category: string; count: number }[]): IKMarkup {
+    const rows: Btn[][] = [];
+    for (let i = 0; i < categories.length; i += 2) {
+        const row: Btn[] = [{ text: `${categories[i].category} (${categories[i].count})`, callback_data: `llm:cat:${categories[i].category}` }];
+        if (categories[i + 1]) row.push({ text: `${categories[i + 1].category} (${categories[i + 1].count})`, callback_data: `llm:cat:${categories[i + 1].category}` });
+        rows.push(row);
+    }
+    rows.push([{ text: '🔙 Admin Menu', callback_data: 'admin:back' }]);
+    return { inline_keyboard: rows };
+}
+
+export function broadcastPreviewKeyboard(): IKMarkup {
+    return {
+        inline_keyboard: [
+            [
+                { text: '✅ Send',          callback_data: 'broadcast:preview_approve' },
+                { text: '✏️ Edit Content',  callback_data: 'broadcast:preview_edit' },
+            ],
+            [{ text: '🔙 Cancel', callback_data: 'admin:back' }],
         ],
     };
 }

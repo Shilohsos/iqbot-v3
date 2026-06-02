@@ -1,5 +1,6 @@
 import Database from 'better-sqlite3';
 import path from 'node:path';
+import { readFileSync } from 'node:fs';
 
 const DB_PATH = process.env.DB_PATH ?? path.resolve('iqbot-v3.db');
 
@@ -120,9 +121,68 @@ if (!finalUserCols.includes('reconnect_prompt_msg_id'))
     db.exec('ALTER TABLE users ADD COLUMN reconnect_prompt_msg_id INTEGER DEFAULT NULL');
 if (!finalUserCols.includes('reconnect_prompt_at'))
     db.exec('ALTER TABLE users ADD COLUMN reconnect_prompt_at TEXT DEFAULT NULL');
+if (!finalUserCols.includes('onboarding_state'))
+    db.exec('ALTER TABLE users ADD COLUMN onboarding_state TEXT DEFAULT NULL');
+if (!finalUserCols.includes('pidgin_enabled'))
+    db.exec('ALTER TABLE users ADD COLUMN pidgin_enabled INTEGER NOT NULL DEFAULT 0');
 
 // V4 tier migration: NEWBIE → DEMO (run-once, idempotent)
 db.prepare("UPDATE users SET tier = 'DEMO' WHERE tier = 'NEWBIE'").run();
+
+// ─── Templates, media library, onboarding tracking ───────────────────────────
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS templates (
+    key           TEXT PRIMARY KEY,
+    category      TEXT NOT NULL,
+    state         TEXT,
+    message       TEXT NOT NULL,
+    media_file_id TEXT,
+    button_text   TEXT,
+    button_url    TEXT,
+    auto_delete   INTEGER NOT NULL DEFAULT 1,
+    delay_sec     INTEGER,
+    created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+  )
+`);
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS sequence_media (
+    template_key TEXT PRIMARY KEY,
+    media_type   TEXT NOT NULL,
+    file_id      TEXT NOT NULL,
+    updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
+  )
+`);
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS onboarding_tracking (
+    telegram_id       INTEGER PRIMARY KEY,
+    entry_sent_at     TEXT,
+    state_changed_at  TEXT,
+    last_followup_at  TEXT,
+    followup_count    INTEGER NOT NULL DEFAULT 0,
+    last_activity_at  TEXT,
+    demo_trade_count  INTEGER NOT NULL DEFAULT 0,
+    last_funding_at   TEXT,
+    FOREIGN KEY (telegram_id) REFERENCES users(telegram_id)
+  )
+`);
+
+export function seedTemplates(): void {
+    const sqlDir = path.resolve('db');
+    for (const file of ['templates-seed.sql', 'templates-brain-seed.sql']) {
+        try {
+            const sql = readFileSync(path.join(sqlDir, file), 'utf-8');
+            const cleaned = sql.split('\n').filter(l => !l.trim().startsWith('PRAGMA')).join('\n');
+            db.exec(cleaned);
+        } catch (err) {
+            console.warn(`[db] seedTemplates: could not load ${file}:`, err instanceof Error ? err.message : err);
+        }
+    }
+    const count = (db.prepare('SELECT COUNT(*) AS cnt FROM templates').get() as { cnt: number }).cnt;
+    console.log(`[db] templates: ${count} rows after seed`);
+}
 
 // ─── Section 10 tables ────────────────────────────────────────────────────────
 
@@ -537,6 +597,8 @@ export interface UserRecord {
     ssid_last_checked?: string | null;
     reconnect_prompt_msg_id?: number | null;
     reconnect_prompt_at?: string | null;
+    onboarding_state?: string | null;
+    pidgin_enabled?: number;
 }
 
 export function saveUserCurrency(telegramId: number, currency: string): void {
@@ -1913,4 +1975,171 @@ export function getGiveawayStats(): { active: number; scheduled: number; complet
         scheduled: row.scheduled ?? 0,
         completed: row.completed ?? 0,
     };
+}
+
+// ─── Template queries ─────────────────────────────────────────────────────────
+
+export interface TemplateRecord {
+    key: string;
+    category: string;
+    state: string | null;
+    message: string;
+    media_file_id: string | null;
+    button_text: string | null;
+    button_url: string | null;
+    auto_delete: number;
+    delay_sec: number | null;
+    created_at: string;
+}
+
+export function getTemplateByKey(key: string): TemplateRecord | undefined {
+    return db.prepare('SELECT * FROM templates WHERE key = ?').get(key) as TemplateRecord | undefined;
+}
+
+export function getTemplatesByCategory(category: string, state?: string): TemplateRecord[] {
+    if (state) {
+        return db.prepare('SELECT * FROM templates WHERE category = ? AND state = ?').all(category, state) as TemplateRecord[];
+    }
+    return db.prepare('SELECT * FROM templates WHERE category = ?').all(category) as TemplateRecord[];
+}
+
+export function getRandomTemplate(category: string, state?: string): TemplateRecord | undefined {
+    const rows = getTemplatesByCategory(category, state);
+    if (rows.length === 0) return undefined;
+    return rows[Math.floor(Math.random() * rows.length)];
+}
+
+export function getTemplateCategories(): { category: string; count: number }[] {
+    return db.prepare(
+        "SELECT category, COUNT(*) AS count FROM templates WHERE state = 'brain' GROUP BY category ORDER BY category"
+    ).all() as { category: string; count: number }[];
+}
+
+export function updateTemplateMessage(key: string, message: string): void {
+    db.prepare('UPDATE templates SET message = ? WHERE key = ?').run(message, key);
+}
+
+// ─── Onboarding state helpers ─────────────────────────────────────────────────
+
+export function setOnboardingState(telegramId: number, state: string): void {
+    db.prepare("UPDATE users SET onboarding_state = ? WHERE telegram_id = ?").run(state, telegramId);
+    db.prepare(`
+        INSERT INTO onboarding_tracking (telegram_id, state_changed_at, last_activity_at)
+        VALUES (?, datetime('now'), datetime('now'))
+        ON CONFLICT(telegram_id) DO UPDATE SET state_changed_at = datetime('now'), last_activity_at = datetime('now')
+    `).run(telegramId);
+}
+
+export function touchOnboardingActivity(telegramId: number): void {
+    db.prepare(`
+        INSERT INTO onboarding_tracking (telegram_id, last_activity_at)
+        VALUES (?, datetime('now'))
+        ON CONFLICT(telegram_id) DO UPDATE SET last_activity_at = datetime('now')
+    `).run(telegramId);
+}
+
+export function setUserPidginEnabled(telegramId: number, enabled: boolean): void {
+    db.prepare('UPDATE users SET pidgin_enabled = ? WHERE telegram_id = ?').run(enabled ? 1 : 0, telegramId);
+}
+
+/** Increment demo trade count; returns new count. */
+export function incrementDemoTradeCount(telegramId: number): number {
+    db.prepare(`
+        INSERT INTO onboarding_tracking (telegram_id, demo_trade_count, last_activity_at)
+        VALUES (?, 1, datetime('now'))
+        ON CONFLICT(telegram_id) DO UPDATE SET demo_trade_count = demo_trade_count + 1, last_activity_at = datetime('now')
+    `).run(telegramId);
+    const row = db.prepare('SELECT demo_trade_count FROM onboarding_tracking WHERE telegram_id = ?').get(telegramId) as { demo_trade_count: number } | undefined;
+    return row?.demo_trade_count ?? 0;
+}
+
+export function setLastFundingAt(telegramId: number): void {
+    db.prepare(`
+        INSERT INTO onboarding_tracking (telegram_id, last_funding_at)
+        VALUES (?, datetime('now'))
+        ON CONFLICT(telegram_id) DO UPDATE SET last_funding_at = datetime('now')
+    `).run(telegramId);
+}
+
+export function getOnboardingTracking(telegramId: number): { demo_trade_count: number; last_funding_at: string | null } | undefined {
+    return db.prepare('SELECT demo_trade_count, last_funding_at FROM onboarding_tracking WHERE telegram_id = ?')
+        .get(telegramId) as { demo_trade_count: number; last_funding_at: string | null } | undefined;
+}
+
+/** Users stuck in an onboarding state for longer than `hours`. */
+export function getStuckOnboardingUsers(hours: number): UserRecord[] {
+    return db.prepare(`
+        SELECT u.* FROM users u
+        JOIN onboarding_tracking ot ON u.telegram_id = ot.telegram_id
+        WHERE u.onboarding_state IS NOT NULL
+          AND u.ssid IS NULL
+          AND (ot.last_activity_at IS NULL OR ot.last_activity_at <= datetime('now', ?))
+    `).all(`-${hours} hours`) as UserRecord[];
+}
+
+// ─── Sequence media ───────────────────────────────────────────────────────────
+
+export function getSequenceMedia(templateKey: string): { media_type: string; file_id: string } | undefined {
+    return db.prepare('SELECT media_type, file_id FROM sequence_media WHERE template_key = ?').get(templateKey) as
+        { media_type: string; file_id: string } | undefined;
+}
+
+export function setSequenceMedia(templateKey: string, mediaType: 'photo' | 'video', fileId: string): void {
+    db.prepare(`
+        INSERT INTO sequence_media (template_key, media_type, file_id, updated_at)
+        VALUES (?, ?, ?, datetime('now'))
+        ON CONFLICT(template_key) DO UPDATE SET media_type = ?, file_id = ?, updated_at = datetime('now')
+    `).run(templateKey, mediaType, fileId, mediaType, fileId);
+}
+
+export function getAllSequenceMediaKeys(): { template_key: string; media_type: string | null }[] {
+    const keys = [
+        'entry_stuck', 'new_trader_video', 'user_id_stuck', 'email_stuck',
+        'password_stuck', 'never_traded',
+    ];
+    return keys.map(k => {
+        const row = db.prepare('SELECT media_type FROM sequence_media WHERE template_key = ?').get(k) as { media_type: string } | undefined;
+        return { template_key: k, media_type: row?.media_type ?? null };
+    });
+}
+
+// ─── Admin analytics ──────────────────────────────────────────────────────────
+
+export function getTierDistribution(): { tier: string; count: number; pct: number }[] {
+    const rows = db.prepare(
+        "SELECT COALESCE(tier,'DEMO') AS tier, COUNT(*) AS count FROM users GROUP BY tier ORDER BY count DESC"
+    ).all() as { tier: string; count: number }[];
+    const total = rows.reduce((s, r) => s + r.count, 0);
+    return rows.map(r => ({ ...r, pct: total > 0 ? Math.round((r.count / total) * 100) : 0 }));
+}
+
+export function getFundedUserCount(): number {
+    const row = db.prepare(
+        "SELECT COUNT(*) AS cnt FROM users WHERE ssid IS NOT NULL AND tier IN ('PRO','MASTER')"
+    ).get() as { cnt: number };
+    return row.cnt;
+}
+
+export interface BroadcastHistoryRow {
+    id: number; type: string; category: string | null; content: string;
+    created_at: string; last_sent_at: string | null; sent_count: number;
+}
+
+export function getRecentBroadcasts(limit = 10): BroadcastHistoryRow[] {
+    return db.prepare(
+        "SELECT id, type, category, content, created_at, last_sent_at, sent_count FROM broadcast_messages ORDER BY created_at DESC LIMIT ?"
+    ).all(limit) as BroadcastHistoryRow[];
+}
+
+export function getOnboardingFunnelStats(): Record<string, number> {
+    const states = ['entry', 'new_user_watch_video', 'returning_user_ask_account',
+        'awaiting_user_id', 'awaiting_email', 'awaiting_password', 'connected', 'trading'];
+    const result: Record<string, number> = {};
+    for (const s of states) {
+        const row = db.prepare("SELECT COUNT(*) AS cnt FROM users WHERE onboarding_state = ?").get(s) as { cnt: number };
+        result[s] = row.cnt;
+    }
+    // connected = has ssid
+    result['connected_ssid'] = (db.prepare("SELECT COUNT(*) AS cnt FROM users WHERE ssid IS NOT NULL").get() as { cnt: number }).cnt;
+    return result;
 }
