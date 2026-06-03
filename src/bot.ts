@@ -3107,6 +3107,58 @@ bot.action('compose_tone:view', async ctx => {
     await ctx.reply(msg, { parse_mode: 'Markdown', reply_markup: composeToneKeyboard() });
 });
 
+// ─── Go Live broadcast ────────────────────────────────────────────────────────
+
+bot.action('admin:golive', async ctx => {
+    await ctx.answerCbQuery();
+    if (ctx.from?.id !== getAdminId()) return;
+
+    const LIVE_MSG_APPROVED =
+        `🟣 *10x Shiloh is LIVE right now!*\n\n` +
+        `I'm in the channel — come through if you want to see what I'm trading and ask questions in real\\-time\\.\n\n` +
+        `👇 Join the live session now\n` +
+        `https://t.me/tenxpremiumvip`;
+
+    const LIVE_MSG_PENDING =
+        `🟣 *10x Shiloh is LIVE right now!*\n\n` +
+        `Waiting for approval? No worries — you can still watch the live session\\.\n\n` +
+        `👇 Join here\n` +
+        `https://t.me/tenxpremiumvip`;
+
+    // Test mode: send only to test user
+    const testUserId = getTestUserId();
+    if (testUserId) {
+        await bot.telegram.sendMessage(testUserId, LIVE_MSG_APPROVED, { parse_mode: 'MarkdownV2' }).catch(() => {});
+        await ctx.reply('🧪 Test mode: sent to test user only.', { reply_markup: adminBackKeyboard() });
+        return;
+    }
+
+    const users = getAllUsers();
+    const approved = users.filter(u => u.approval_status === 'approved');
+    const pending  = users.filter(u => u.approval_status === 'pending' || u.approval_status === 'manual');
+
+    let sent = 0; let failed = 0;
+    for (const u of approved) {
+        try {
+            await bot.telegram.sendMessage(u.telegram_id, LIVE_MSG_APPROVED, { parse_mode: 'MarkdownV2' });
+            sent++;
+        } catch { failed++; }
+        if (sent % 30 === 0) await new Promise(r => setTimeout(r, 1_000));
+    }
+    for (const u of pending) {
+        try {
+            await bot.telegram.sendMessage(u.telegram_id, LIVE_MSG_PENDING, { parse_mode: 'MarkdownV2' });
+            sent++;
+        } catch { failed++; }
+        if (sent % 30 === 0) await new Promise(r => setTimeout(r, 1_000));
+    }
+
+    await ctx.reply(
+        `🟢 Go Live broadcast sent.\n✅ Sent: ${sent} | ❌ Failed: ${failed}`,
+        { reply_markup: adminBackKeyboard() }
+    );
+});
+
 // ─── C1 Fix: admin:trade_connect ─────────────────────────────────────────────
 
 bot.action('admin:trade_connect', async ctx => {
