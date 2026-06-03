@@ -1,65 +1,102 @@
-# DIRECTIVE: Add Go Live Admin Button
+# Go Live Broadcast Button
 
-## Problem
-When the admin goes live on Telegram, there's no quick broadcast button to notify all users.
+**IMPORTANT: Merge master first** — this branch may be behind.
 
-## Fix: Add "🔴 Go Live" admin button + broadcast handler
+## What to Build
 
-### 1. Add button to adminKeyboard in src/ui/admin.ts
+Add a single admin callback button that broadcasts a "Go Live" message to all approved users, directing them to the Telegram channel.
 
-Find the adminKeyboard rows and add before any existing broadcast/action buttons:
+### 1. Admin Button
 
-```typescript
-// Go Live
-{ text: '🔴 Go Live', callback_data: 'admin:golive' },
+In the admin keyboard (`src/ui/admin.ts`), add a button under the "Broadcasts" section:
+
+```
+🟢 Go Live
 ```
 
-Add it to the first row alongside existing action buttons (e.g. alongside Broadcasts or as a standalone row).
+Callback data: `admin:golive`
 
-### 2. Add handler in src/bot.ts
+### 2. Handler
+
+In `src/bot.ts`, add handler for `admin:golive`:
 
 ```typescript
-// ─── Go Live broadcast ────────────────────────────────────────────────────────
+bot.action('admin:golive', async (ctx) => {
+  if (!isAdmin(ctx.from?.id)) return;
 
-bot.action('admin:golive', async ctx => {
-    await ctx.answerCbQuery();
-    if (ctx.from!.id !== getAdminId()) return;
-    const channelLink = process.env.CHANNEL_INVITE_LINK ?? 'https://t.me/Shiloh10xVIP';
-    const msg = `🔴 *I'M GOING LIVE NOW!* 🔴\n\n` +
-        `Come join me live in the Telegram channel — I'm breaking down trades, answering questions, and showing you exactly how 10x Bot works in real time.\n\n` +
-        `👇 Tap below to join`;
-    const chatIds = getAllChatIds();
-    let sent = 0;
-    for (const chatId of chatIds) {
-        try {
-            await bot.telegram.sendMessage(chatId, msg, {
-                parse_mode: 'Markdown',
-                reply_markup: { inline_keyboard: [[{ text: '🔴 Join Live', url: channelLink }]] }
-            });
-            sent++;
-            await new Promise(r => setTimeout(r, 50));
-        } catch {}
+  const approved = db.prepare(`
+    SELECT telegram_id FROM users WHERE status = 'approved'
+  `).all() as { telegram_id: number }[];
+
+  let sent = 0; let failed = 0;
+  for (const u of approved) {
+    try {
+      await ctx.telegram.sendMessage(u.telegram_id,
+        `🟣 *10x Shiloh is LIVE right now!*\n\n` +
+        `I'm in the channel — come through if you want to see what I'm trading and ask questions in real-time.\n\n` +
+        `👇 Join the live session now\n` +
+        `https://t.me/tenxpremiumvip`,
+        { parse_mode: 'Markdown' }
+      );
+      sent++;
+    } catch {
+      failed++;
     }
-    await ctx.reply(`✅ Go Live broadcast sent to ${sent} users.`);
+    // Rate limit safety — 30 messages/sec
+    if (sent % 30 === 0) await new Promise(r => setTimeout(r, 1000));
+  }
+
+  // Also send to pending users
+  const pending = db.prepare(`
+    SELECT telegram_id FROM users WHERE status = 'pending'
+  `).all() as { telegram_id: number }[];
+  for (const u of pending) {
+    try {
+      await ctx.telegram.sendMessage(u.telegram_id,
+        `🟣 *10x Shiloh is LIVE right now!*\n\n` +
+        `Waiting for approval? No worries — you can still watch the live session.\n\n` +
+        `👇 Join here\n` +
+        `https://t.me/tenxpremiumvip`,
+        { parse_mode: 'Markdown' }
+      );
+      sent++;
+    } catch {
+      failed++;
+    }
+    if (sent % 30 === 0) await new Promise(r => setTimeout(r, 1000));
+  }
+
+  await ctx.answerCbQuery(`Live broadcast sent to ${sent} users. ${failed} failed.`);
 });
 ```
 
-### 3. Export getAllChatIds from db.ts
+### 3. Send to test user if test mode is ON
 
-Add to `src/db.ts`:
+Before the main loop, check test mode:
 
 ```typescript
-export function getAllChatIds(): number[] {
-    return db.prepare('SELECT telegram_id FROM users WHERE approval_status = ?').all('approved')
-        .map((r: any) => r.telegram_id);
+const testUser = db.prepare(`SELECT value FROM config WHERE key = 'test_user'`).pluck().get() as string | undefined;
+const testMode = db.prepare(`SELECT value FROM config WHERE key = 'test_mode'`).pluck().get();
+
+if (testMode === 'on' && testUser) {
+  await ctx.telegram.sendMessage(Number(testUser), 
+    `🟣 *10x Shiloh is LIVE right now!*\n\n` +
+    `👇 Join the live session\n` +
+    `https://t.me/tenxpremiumvip`,
+    { parse_mode: 'Markdown' }
+  );
+  await ctx.answerCbQuery(`Test mode: sent to test user only.`);
+  return;
 }
 ```
 
-### 4. Add CHANNEL_INVITE_LINK to .env
+### 4. Channel link
 
-Placeholder for the channel invite link. Set to actual invite link before enabling.
+Channel: `https://t.me/tenxpremiumvip`
 
-## Verification
-- Admin sees "🔴 Go Live" button in admin menu
-- Tapping it sends broadcast to all approved users with "Join Live" button
-- Count confirms how many users received it
+### 5. Build & Deploy
+
+```bash
+npm run build
+pm2 restart iqbot-v3-bot --update-env
+```
