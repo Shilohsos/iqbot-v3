@@ -37,6 +37,8 @@ const fallback = prefix + suffix;
 
 ## Fix 3: Pre-Seed 15 More Fabricated Traders (db.ts after schema)
 
+**ALREADY DONE MANUALLY** — DB seeded with 15 new entries (31 total, 24 eligible). Skip this fix.
+
 In the `seedFabricatedTraders()` function or as a one-time migration in `db.ts`, add 15 more entries to the `fabricated_traders` table. Use the same prefix-based ID generation (`seedFabricatedTraders` logic at line 1373-1417) to ensure IDs look authentic and don't collide with existing users or each other.
 
 Prefixes to use from real IQ Option user ID starts: `182`, `185`, `181`, `192`, `183`, `189`, `186`, `184`, `188`, `187`.
