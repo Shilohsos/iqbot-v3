@@ -80,20 +80,22 @@ export async function startNewOnboarding(ctx: Context, telegramId: number): Prom
     setOnboardingState(telegramId, 'entry');
     const name = firstName(ctx);
 
-    // Message 1
-    const t1 = getTemplateByKey('entry_welcome_1');
-    if (t1) await ctx.reply(resolveUsername(t1.message, name));
+    // Message 1 — includes media from sequence_media or template
+    if (getTemplateByKey('entry_welcome_1')) {
+        await sendTemplate(ctx, 'entry_welcome_1');
+    }
     await delay(5_000);
 
-    // Message 2
-    const t2 = getTemplateByKey('entry_welcome_2');
-    if (t2) await ctx.reply(resolveUsername(t2.message, name));
+    // Message 2 — includes media
+    if (getTemplateByKey('entry_welcome_2')) {
+        await sendTemplate(ctx, 'entry_welcome_2');
+    }
     await delay(5_000);
 
-    // Branch question
+    // Branch question — text only (buttons needed, no media)
     setOnboardingState(telegramId, 'entry_branch_sent');
     const t3 = getTemplateByKey('entry_branch_question');
-    const branchMsg = t3 ? resolveUsername(t3.message, name) : 'Are you new to trading?';
+    const branchMsg = t3 ? resolveUsername(t3.message, firstName(ctx)) : 'Are you new to trading?';
     await ctx.reply(branchMsg, {
         reply_markup: makeKeyboard([[
             { text: "I'm new to trading",    callback_data: 'onboard:new' },
