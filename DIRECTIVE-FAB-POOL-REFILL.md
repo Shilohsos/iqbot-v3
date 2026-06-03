@@ -35,6 +35,11 @@ const suffix = String(Math.floor(Math.random() * 1_000_000)).padStart(6, '0');
 const fallback = prefix + suffix;
 ```
 
+Also fix the display_name on the INSERT that follows (line 254-255). Currently it uses `Trader_${fallback}` but should use the consistent `first5 + 'XXXX'` format:
+```typescript
+.run(fallback, fallback.slice(0, 5) + 'XXXX');
+```
+
 ## Fix 3: Pre-Seed 15 More Fabricated Traders (db.ts after schema)
 
 **ALREADY DONE MANUALLY** — DB seeded with 15 new entries (31 total, 24 eligible). Skip this fix.
