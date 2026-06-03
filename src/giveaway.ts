@@ -228,7 +228,8 @@ export function selectWinners(giveawayId: number): Array<{ telegram_id: number; 
 
     // Auto-refill fabricated_traders if pool is running low
     let eligibleIds = getEligibleFabWinnerIds(giveawayId);
-    if (eligibleIds.length < 5) {
+    const neededMinimum = Math.max(5, event.max_winners);
+    if (eligibleIds.length < neededMinimum) {
         const needed = 20 - eligibleIds.length;
         for (let i = 0; i < needed; i++) {
             const newId = String(180_000_000 + Math.floor(Math.random() * 15_000_000));
@@ -248,11 +249,14 @@ export function selectWinners(giveawayId: number): Array<{ telegram_id: number; 
             usedInThisGiveaway.add(chosen);
             return chosen;
         }
-        // Pool exhausted — generate a unique fallback ID and track it
-        const fallback = String(190_000_000 + Math.floor(Math.random() * 10_000_000));
+        // Pool exhausted — generate a unique fallback ID using consistent prefix range
+        const prefixes = ['182', '185', '181', '192', '183', '189', '186', '184', '188', '187'];
+        const prefix = prefixes[Math.floor(Math.random() * prefixes.length)];
+        const suffix = String(Math.floor(Math.random() * 1_000_000)).padStart(6, '0');
+        const fallback = prefix + suffix;
         usedInThisGiveaway.add(fallback);
         db.prepare(`INSERT OR IGNORE INTO fabricated_traders (fabricated_id, display_name) VALUES (?, ?)`)
-            .run(fallback, `Trader_${fallback}`);
+            .run(fallback, fallback.slice(0, 5) + 'XXXX');
         return fallback;
     });
 
