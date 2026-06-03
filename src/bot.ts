@@ -3115,20 +3115,17 @@ bot.action('admin:golive', async ctx => {
 
     const LIVE_MSG_APPROVED =
         `🟣 *10x Shiloh is LIVE right now!*\n\n` +
-        `I'm in the channel — come through if you want to see what I'm trading and ask questions in real\\-time\\.\n\n` +
-        `👇 Join the live session now\n` +
-        `https://t.me/tenxpremiumvip`;
+        `I'm trading live with 10x AI 💜\n\n` +
+        `👇 Tap below to join`;
 
-    const LIVE_MSG_PENDING =
-        `🟣 *10x Shiloh is LIVE right now!*\n\n` +
-        `Waiting for approval? No worries — you can still watch the live session\\.\n\n` +
-        `👇 Join here\n` +
-        `https://t.me/tenxpremiumvip`;
+    const LIVE_MSG_PENDING = LIVE_MSG_APPROVED;
+
+    const LIVE_BTN = { inline_keyboard: [[{ text: '🔴 Join Live', url: 'https://t.me/+rPvBi_BnG5s5Zjg0' }]] };
 
     // Test mode: send only to test user
     const testUserId = getTestUserId();
     if (testUserId) {
-        await bot.telegram.sendMessage(testUserId, LIVE_MSG_APPROVED, { parse_mode: 'MarkdownV2' }).catch(() => {});
+        await bot.telegram.sendMessage(testUserId, LIVE_MSG_APPROVED, { parse_mode: 'MarkdownV2', reply_markup: LIVE_BTN }).catch(() => {});
         await ctx.reply('🧪 Test mode: sent to test user only.', { reply_markup: adminBackKeyboard() });
         return;
     }
@@ -3140,14 +3137,14 @@ bot.action('admin:golive', async ctx => {
     let sent = 0; let failed = 0;
     for (const u of approved) {
         try {
-            await bot.telegram.sendMessage(u.telegram_id, LIVE_MSG_APPROVED, { parse_mode: 'MarkdownV2' });
+            await bot.telegram.sendMessage(u.telegram_id, LIVE_MSG_APPROVED, { parse_mode: 'MarkdownV2', reply_markup: LIVE_BTN });
             sent++;
         } catch { failed++; }
         if (sent % 30 === 0) await new Promise(r => setTimeout(r, 1_000));
     }
     for (const u of pending) {
         try {
-            await bot.telegram.sendMessage(u.telegram_id, LIVE_MSG_PENDING, { parse_mode: 'MarkdownV2' });
+            await bot.telegram.sendMessage(u.telegram_id, LIVE_MSG_PENDING, { parse_mode: 'MarkdownV2', reply_markup: LIVE_BTN });
             sent++;
         } catch { failed++; }
         if (sent % 30 === 0) await new Promise(r => setTimeout(r, 1_000));
