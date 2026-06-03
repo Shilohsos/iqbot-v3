@@ -206,7 +206,7 @@ const PROMO_CODES = ['10xfirst', '10xsecond'];
 /** Call this after each demo trade completes. Sends funding message at 2, 5, 10 trades. */
 export async function checkFundingSequence(
     telegramId: number,
-    sendFn: (msg: string, button: { text: string; url: string }) => Promise<void>,
+    sendFn: (msg: string, button: { text: string; url: string }, templateKey: string) => Promise<void>,
 ): Promise<void> {
     if (getConfig('features_paused') === '1') return;
     const count = incrementDemoTradeCount(telegramId);
@@ -228,7 +228,7 @@ export async function checkFundingSequence(
     await sendFn(msg, {
         text: template.button_text ?? '💎 Fund now',
         url:  template.button_url  ?? 'https://iqoption.com/pwa/payments/deposit',
-    });
+    }, templateKey);
 }
 
 // ─── Re-engagement ────────────────────────────────────────────────────────────

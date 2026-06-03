@@ -61,6 +61,8 @@ import {
     getSequenceMedia,
     setSequenceMedia,
     getStuckOnboardingUsers,
+    getOnboardingTracking,
+    setLastFollowupMsgId,
 } from './db.js';
 import { friendlyError } from './errors.js';
 import { logger } from './logger.js';
@@ -958,7 +960,22 @@ async function runMartingale(
             );
             sentMessages.push(winReply.message_id);
             scheduleCleanup();
-            if (balanceType === 'demo') await showDemoUpsell(ctx, sentMessages);
+            if (balanceType === 'demo') {
+                await showDemoUpsell(ctx, sentMessages);
+                await checkFundingSequence(ctx.from!.id, async (msg, button, templateKey) => {
+                    const fundMedia = getSequenceMedia(templateKey);
+                    const btnMarkup = { inline_keyboard: [[{ text: button.text, url: button.url }]] };
+                    if (fundMedia?.file_id) {
+                        if (fundMedia.media_type === 'video') {
+                            await ctx.replyWithVideo(fundMedia.file_id, { caption: msg, reply_markup: btnMarkup });
+                        } else {
+                            await ctx.replyWithPhoto(fundMedia.file_id, { caption: msg, reply_markup: btnMarkup });
+                        }
+                    } else {
+                        await ctx.reply(msg, { reply_markup: btnMarkup });
+                    }
+                }).catch(() => {});
+            }
             return;
         }
 
@@ -4536,8 +4553,34 @@ backgroundIntervals.push(setInterval(async () => {
                 const t = getTemplateByKey(key);
                 if (!t) continue;
                 const msg = resolveUsernameTemplate(t.message, user.username ?? 'there');
-                await bot.telegram.sendMessage(user.telegram_id, msg);
-                touchOnboardingActivity(user.telegram_id);
+                const chatId = user.telegram_id;
+
+                // Auto-delete previous follow-up message
+                const tracking = getOnboardingTracking(chatId);
+                if (tracking?.last_followup_msg_id) {
+                    try { await bot.telegram.deleteMessage(chatId, tracking.last_followup_msg_id); } catch {}
+                }
+
+                // Send with media if available (strip 'reengage_' prefix to match sequence_media keys)
+                const mediaKey = key.replace(/^reengage_/, '');
+                const media = getSequenceMedia(mediaKey);
+                let sentMsgId: number;
+
+                if (media?.file_id) {
+                    if (media.media_type === 'video') {
+                        const sent = await bot.telegram.sendVideo(chatId, media.file_id, { caption: msg });
+                        sentMsgId = sent.message_id;
+                    } else {
+                        const sent = await bot.telegram.sendPhoto(chatId, media.file_id, { caption: msg });
+                        sentMsgId = sent.message_id;
+                    }
+                } else {
+                    const sent = await bot.telegram.sendMessage(chatId, msg);
+                    sentMsgId = sent.message_id;
+                }
+
+                setLastFollowupMsgId(chatId, sentMsgId);
+                touchOnboardingActivity(chatId);
                 await new Promise(r => setTimeout(r, 200));
             } catch {}
         }

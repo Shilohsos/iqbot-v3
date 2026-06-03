@@ -126,6 +126,24 @@ if (!finalUserCols.includes('onboarding_state'))
 if (!finalUserCols.includes('pidgin_enabled'))
     db.exec('ALTER TABLE users ADD COLUMN pidgin_enabled INTEGER NOT NULL DEFAULT 0');
 
+// onboarding_tracking lazy migration — add last_followup_msg_id for existing DBs
+try {
+    const otCols = (db.prepare("PRAGMA table_info(onboarding_tracking)").all() as { name: string }[]).map(r => r.name);
+    if (!otCols.includes('last_followup_msg_id'))
+        db.exec('ALTER TABLE onboarding_tracking ADD COLUMN last_followup_msg_id INTEGER');
+} catch {}
+
+// Clean [link] placeholders from follow-up templates (idempotent)
+try {
+    db.exec(`
+        UPDATE templates SET message = TRIM(REPLACE(REPLACE(REPLACE(message,
+            '📱 See what they''re saying: [link]', ''),
+            '📸 Real results: [link]', ''),
+            '👇 Tap below. First trade is on the house.', ''))
+        WHERE key IN ('followup_never_traded', 'reengage_never_traded');
+    `);
+} catch {}
+
 // V4 tier migration: NEWBIE → DEMO (run-once, idempotent)
 db.prepare("UPDATE users SET tier = 'DEMO' WHERE tier = 'NEWBIE'").run();
 
@@ -161,6 +179,7 @@ db.exec(`
     entry_sent_at     TEXT,
     state_changed_at  TEXT,
     last_followup_at  TEXT,
+    last_followup_msg_id INTEGER,
     followup_count    INTEGER NOT NULL DEFAULT 0,
     last_activity_at  TEXT,
     demo_trade_count  INTEGER NOT NULL DEFAULT 0,
@@ -2061,9 +2080,21 @@ export function setLastFundingAt(telegramId: number): void {
     `).run(telegramId);
 }
 
-export function getOnboardingTracking(telegramId: number): { demo_trade_count: number; last_funding_at: string | null } | undefined {
-    return db.prepare('SELECT demo_trade_count, last_funding_at FROM onboarding_tracking WHERE telegram_id = ?')
-        .get(telegramId) as { demo_trade_count: number; last_funding_at: string | null } | undefined;
+export function getOnboardingTracking(telegramId: number): {
+    demo_trade_count: number;
+    last_funding_at: string | null;
+    last_followup_msg_id: number | null;
+} | undefined {
+    return db.prepare('SELECT demo_trade_count, last_funding_at, last_followup_msg_id FROM onboarding_tracking WHERE telegram_id = ?')
+        .get(telegramId) as { demo_trade_count: number; last_funding_at: string | null; last_followup_msg_id: number | null } | undefined;
+}
+
+export function setLastFollowupMsgId(telegramId: number, messageId: number): void {
+    db.prepare(`
+        INSERT INTO onboarding_tracking (telegram_id, last_followup_msg_id)
+        VALUES (?, ?)
+        ON CONFLICT(telegram_id) DO UPDATE SET last_followup_msg_id = ?
+    `).run(telegramId, messageId, messageId);
 }
 
 /** Users stuck in an onboarding state for longer than `hours`. */
