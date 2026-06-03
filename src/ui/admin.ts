@@ -109,9 +109,9 @@ export function userDetailKeyboard(telegramId: number): IKMarkup {
     };
 }
 
-export function mediaLibraryKeyboard(keys: { template_key: string; media_type: string | null }[]): IKMarkup {
+export function mediaLibraryKeyboard(keys: { template_key: string; media_type: string | null; description?: string }[]): IKMarkup {
     const rows = keys.map(k => [{
-        text: `${k.media_type ? '✅' : '❌'} ${k.template_key}`,
+        text: `${k.media_type ? '✅' : '❌'} ${k.template_key}${k.description ? ` — ${k.description}` : ''}`,
         callback_data: `media:select:${k.template_key}`,
     }]);
     rows.push([{ text: '🔙 Admin Menu', callback_data: 'admin:back' }]);

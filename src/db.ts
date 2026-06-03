@@ -2092,14 +2092,18 @@ export function setSequenceMedia(templateKey: string, mediaType: 'photo' | 'vide
     `).run(templateKey, mediaType, fileId, mediaType, fileId);
 }
 
-export function getAllSequenceMediaKeys(): { template_key: string; media_type: string | null }[] {
-    const keys = [
-        'entry_stuck', 'new_trader_video', 'user_id_stuck', 'email_stuck',
-        'password_stuck', 'never_traded',
+export function getAllSequenceMediaKeys(): { template_key: string; media_type: string | null; description: string }[] {
+    const keys: { key: string; desc: string }[] = [
+        { key: 'entry_stuck',      desc: 'User didn\'t respond to welcome' },
+        { key: 'new_trader_video', desc: 'How it works explainer video' },
+        { key: 'user_id_stuck',    desc: 'User stopped at User ID step' },
+        { key: 'email_stuck',      desc: 'User stopped at email step' },
+        { key: 'password_stuck',   desc: 'User stopped at password step' },
+        { key: 'never_traded',     desc: 'Connected but never traded' },
     ];
     return keys.map(k => {
-        const row = db.prepare('SELECT media_type FROM sequence_media WHERE template_key = ?').get(k) as { media_type: string } | undefined;
-        return { template_key: k, media_type: row?.media_type ?? null };
+        const row = db.prepare('SELECT media_type FROM sequence_media WHERE template_key = ?').get(k.key) as { media_type: string } | undefined;
+        return { template_key: k.key, media_type: row?.media_type ?? null, description: k.desc };
     });
 }
 
