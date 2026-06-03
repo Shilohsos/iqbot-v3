@@ -4056,10 +4056,18 @@ bot.on('text', async ctx => {
             if (loginFails >= 2) {
                 setOnboardingState(ctx.from!.id, 'awaiting_email');
                 onboardSessions.delete(chatId);
-                await ctx.reply(
-                    'Having trouble connecting? Contact admin for help 👇💜',
-                    { reply_markup: { inline_keyboard: [[{ text: '👾 Contact admin', url: ADMIN_CONTACT_LINK }]] } }
-                );
+                const vf3 = getTemplateByKey('verify_fail_3');
+                if (vf3) {
+                    const markup3 = vf3.button_text && vf3.button_url
+                        ? { reply_markup: { inline_keyboard: [[{ text: vf3.button_text, url: vf3.button_url }]] } }
+                        : undefined;
+                    await ctx.reply(vf3.message || 'Having trouble connecting? Contact admin for help 👇💜', markup3);
+                } else {
+                    await ctx.reply(
+                        'Having trouble connecting? Contact admin for help 👇💜',
+                        { reply_markup: { inline_keyboard: [[{ text: '👾 Contact admin', url: ADMIN_CONTACT_LINK }]] } }
+                    );
+                }
             } else {
                 setOnboardingState(ctx.from!.id, 'awaiting_email');
                 await ctx.reply('❌ Login failed. Please double-check your email:\n\n📧 Enter your IQ Option email:');

@@ -105,7 +105,7 @@ export function startWelcomeFollowUp(bot: Telegraf): void {
                             parse_mode: 'Markdown',
                             reply_markup: {
                                 inline_keyboard: [[
-                                    { text: '🔗 Connect IQ Option', callback_data: 'ui:trade' },
+                                    { text: '🔗 Connect IQ Option', callback_data: 'ui:connect' },
                                     { text: '👤 Contact Admin', url: process.env.ADMIN_CONTACT_LINK ?? 'https://t.me/shiloh_is_10xing' },
                                 ]],
                             },

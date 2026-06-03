@@ -199,6 +199,7 @@ export async function handleConnected(ctx: Context, telegramId: number): Promise
 const FUNDING_TEMPLATES = [
     'funding_win_screenshot', 'funding_lifestyle_video', 'funding_testimonial',
     'funding_payout_proof',  'funding_lifestyle_photo', 'funding_user_result',
+    'funding_user_result_video',
 ];
 
 const PROMO_CODES = ['10xfirst', '10xsecond'];
@@ -235,7 +236,7 @@ export async function checkFundingSequence(
 
 const REENGAGE_MAP: Record<string, string> = {
     'entry_branch_sent':         'reengage_entry_stuck',
-    'new_trader_video_sent':     'reengage_video_stuck',
+    'new_user_watch_video':      'reengage_video_stuck',
     'awaiting_user_id':          'reengage_userid_stuck',
     'awaiting_email':            'reengage_email_stuck',
     'awaiting_password':         'reengage_password_stuck',
