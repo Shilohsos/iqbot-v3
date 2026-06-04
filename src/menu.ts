@@ -8,19 +8,14 @@ export const OTC_PAIRS = [
 type Btn = { text: string; callback_data: string } | { text: string; url: string };
 type IKMarkup = { inline_keyboard: Btn[][] };
 
-const CURRENCY_SYMBOLS: Record<string, string> = {
-    USD: '$', NGN: '₦', EUR: '€', GBP: '£', JPY: '¥', AUD: 'A$', CAD: 'C$',
-};
-
-export function amountKeyboard(currency = 'USD'): IKMarkup {
-    const sym = CURRENCY_SYMBOLS[currency] || currency;
+export function amountKeyboard(): IKMarkup {
     return {
         inline_keyboard: [
             [
-                { text: `${sym}10`,  callback_data: 'amt:10' },
-                { text: `${sym}25`,  callback_data: 'amt:25' },
-                { text: `${sym}50`,  callback_data: 'amt:50' },
-                { text: `${sym}100`, callback_data: 'amt:100' },
+                { text: '$10',  callback_data: 'amt:10' },
+                { text: '$25',  callback_data: 'amt:25' },
+                { text: '$50',  callback_data: 'amt:50' },
+                { text: '$100', callback_data: 'amt:100' },
             ],
             [
                 { text: '✏️ Custom', callback_data: 'amt:custom' },

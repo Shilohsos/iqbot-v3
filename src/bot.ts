@@ -1226,8 +1226,7 @@ bot.action(/^mode:(demo|live)$/, async ctx => {
     if (!state || state.step !== 'mode') return;
     state.mode = ctx.match[1] as 'demo' | 'live';
     state.step = 'amount';
-    const modeUser = getUser(ctx.from!.id);
-    await ctx.reply('Enter amount', { reply_markup: amountKeyboard(modeUser?.currency ?? 'USD') });
+    await ctx.reply('Enter amount', { reply_markup: amountKeyboard() });
 });
 
 // ─── Trade wizard — amount ────────────────────────────────────────────────────
@@ -1543,8 +1542,7 @@ bot.action('upsell:live', async ctx => {
     const state: WizardState = { step: 'amount', mode: 'live' };
     try { const m = await ctx.replyWithPhoto(ASSET('L5.png')); state.lastImageMsgId = m.message_id; } catch {}
     wizardSessions.set(chatId, state);
-    const upsellLiveUser = getUser(ctx.from!.id);
-    await ctx.reply('💰 Enter amount for Live trade:', { reply_markup: amountKeyboard(upsellLiveUser?.currency ?? 'USD') });
+    await ctx.reply('💰 Enter amount for Live trade:', { reply_markup: amountKeyboard() });
 });
 
 bot.action('upsell:demo', async ctx => {
@@ -1553,8 +1551,7 @@ bot.action('upsell:demo', async ctx => {
     const state: WizardState = { step: 'amount', mode: 'demo' };
     try { const m = await ctx.replyWithPhoto(ASSET('L5.png')); state.lastImageMsgId = m.message_id; } catch {}
     wizardSessions.set(chatId, state);
-    const upsellDemoUser = getUser(ctx.from!.id);
-    await ctx.reply('💰 Enter amount for Demo trade:', { reply_markup: amountKeyboard(upsellDemoUser?.currency ?? 'USD') });
+    await ctx.reply('💰 Enter amount for Demo trade:', { reply_markup: amountKeyboard() });
 });
 
 // ─── User menu actions ────────────────────────────────────────────────────────
@@ -1815,7 +1812,7 @@ bot.command('trade', async ctx => {
             return;
         }
         wizardSessions.set(ctx.chat.id, { step: 'amount', mode: 'live' });
-        await ctx.reply('Enter trade amount (USD):', { reply_markup: amountKeyboard('USD') });
+        await ctx.reply('Enter trade amount (USD):', { reply_markup: amountKeyboard() });
         return;
     }
     if (!await requireApproval(ctx)) return;
