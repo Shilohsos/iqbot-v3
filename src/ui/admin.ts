@@ -149,14 +149,11 @@ export function adminBackKeyboard(): IKMarkup {
 export function broadcastTargetKeyboard(): IKMarkup {
     return {
         inline_keyboard: [
-            [{ text: '🟢 Active Traders (< 5h ago)',         callback_data: 'broadcast:active' }],
-            [{ text: '🔴 Inactive Traders (5h+ idle)',       callback_data: 'broadcast:inactive' }],
-            [{ text: '✅ Activated (IQ connected)',           callback_data: 'broadcast:activated' }],
-            [{ text: '❌ Non-Activated (no IQ / rejected)',  callback_data: 'broadcast:nonactivated' }],
-            [{ text: '👥 All Users',                          callback_data: 'broadcast:all' }],
-            [{ text: '🧪 Test User Only',                     callback_data: 'broadcast:testuser' }],
-            [{ text: '📅 Scheduled',                          callback_data: 'admin:scheduled' }],
-            [{ text: '🔙 Admin Menu',                         callback_data: 'admin:back' }],
+            [{ text: '💰 Funded',                              callback_data: 'broadcast:funded' }],
+            [{ text: '💎 Non-Funded (connected, no deposit)',  callback_data: 'broadcast:nonfunded' }],
+            [{ text: '❌ Non-Activated (no IQ / rejected)',    callback_data: 'broadcast:nonactivated' }],
+            [{ text: '🧪 Test User Only',                      callback_data: 'broadcast:testuser' }],
+            [{ text: '🔙 Admin Menu',                          callback_data: 'admin:back' }],
         ],
     };
 }
