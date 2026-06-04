@@ -188,6 +188,24 @@ db.exec(`
   )
 `);
 
+db.exec(`
+  CREATE TABLE IF NOT EXISTS reengage_tracking (
+    telegram_id INTEGER PRIMARY KEY,
+    last_msg_id INTEGER,
+    last_segment TEXT,
+    updated_at TEXT DEFAULT (datetime('now'))
+  )
+`);
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS daily_demo_tracking (
+    telegram_id INTEGER,
+    date TEXT,
+    trade_count INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (telegram_id, date)
+  )
+`);
+
 export function seedTemplates(): void {
     const sqlDir = path.resolve('db');
     for (const file of ['templates-seed.sql', 'templates-brain-seed.sql']) {
@@ -688,6 +706,7 @@ export function rejectUser(telegramId: number): void {
 export function resetUser(telegramId: number): void {
     db.prepare(`UPDATE users SET ssid = NULL, iq_user_id = NULL, approval_status = 'pending', onboarding_state = NULL WHERE telegram_id = ?`).run(telegramId);
     db.prepare(`DELETE FROM onboarding_tracking WHERE telegram_id = ?`).run(telegramId);
+    db.prepare(`DELETE FROM daily_demo_tracking WHERE telegram_id = ?`).run(telegramId);
 }
 
 export function pauseUser(telegramId: number): void {
@@ -2112,6 +2131,60 @@ export function getStuckOnboardingUsers(hours: number): UserRecord[] {
           AND u.ssid IS NULL
           AND (ot.last_activity_at IS NULL OR ot.last_activity_at <= datetime('now', ?))
     `).all(`-${hours} hours`) as UserRecord[];
+}
+
+/** Users who are connected but have never taken a demo trade. */
+export function getConnectedNonTraders(hours: number): UserRecord[] {
+    const since = `-${hours} hours`;
+    return db.prepare(`
+        SELECT u.* FROM users u
+        LEFT JOIN onboarding_tracking ot ON u.telegram_id = ot.telegram_id
+        WHERE u.ssid IS NOT NULL AND u.ssid != ''
+          AND u.approval_status = 'approved'
+          AND (ot.demo_trade_count IS NULL OR ot.demo_trade_count = 0)
+          AND (ot.last_activity_at IS NULL OR ot.last_activity_at <= datetime('now', ?))
+    `).all(since) as UserRecord[];
+}
+
+/** Users who have taken at least one demo trade. */
+export function getDemoTraders(): UserRecord[] {
+    return db.prepare(`
+        SELECT u.* FROM users u
+        JOIN onboarding_tracking ot ON u.telegram_id = ot.telegram_id
+        WHERE u.ssid IS NOT NULL AND u.ssid != ''
+          AND u.approval_status = 'approved'
+          AND ot.demo_trade_count >= 1
+    `).all() as UserRecord[];
+}
+
+export function setReengageMsgId(telegramId: number, msgId: number | null, segment: string): void {
+    db.prepare(`
+        INSERT INTO reengage_tracking (telegram_id, last_msg_id, last_segment, updated_at)
+        VALUES (?, ?, ?, datetime('now'))
+        ON CONFLICT(telegram_id) DO UPDATE SET last_msg_id = ?, last_segment = ?, updated_at = datetime('now')
+    `).run(telegramId, msgId, segment, msgId, segment);
+}
+
+export function getReengageTracking(telegramId: number): { last_msg_id: number | null; last_segment: string | null } | undefined {
+    return db.prepare('SELECT last_msg_id, last_segment FROM reengage_tracking WHERE telegram_id = ?').get(telegramId) as
+        { last_msg_id: number | null; last_segment: string | null } | undefined;
+}
+
+export function getDailyDemoCount(telegramId: number): number {
+    const today = new Date().toISOString().slice(0, 10);
+    const row = db.prepare('SELECT trade_count FROM daily_demo_tracking WHERE telegram_id = ? AND date = ?')
+        .get(telegramId, today) as { trade_count: number } | undefined;
+    return row?.trade_count ?? 0;
+}
+
+export function incrementDailyDemoCount(telegramId: number): number {
+    const today = new Date().toISOString().slice(0, 10);
+    db.prepare(`
+        INSERT INTO daily_demo_tracking (telegram_id, date, trade_count)
+        VALUES (?, ?, 1)
+        ON CONFLICT(telegram_id, date) DO UPDATE SET trade_count = trade_count + 1
+    `).run(telegramId, today);
+    return getDailyDemoCount(telegramId);
 }
 
 // ─── Sequence media ───────────────────────────────────────────────────────────
