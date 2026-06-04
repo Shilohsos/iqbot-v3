@@ -43,7 +43,7 @@ import {
 import { db } from './db.js';
 import { sdkPool } from './sdk-pool.js';
 import { BalanceType } from './index.js';
-import { normalizeTier } from './tiers.js';
+import { normalizeTier, convertToUsd } from './tiers.js';
 
 export type { GiveawayEventInput, GiveawayEvent };
 export { getGiveawayEvents, getActiveGiveaways, getGiveawayEvent, getRealAndFabricatedCounts };
@@ -167,7 +167,11 @@ export async function participate(giveawayId: number, telegramId: number): Promi
             try {
                 const balances = (await sdk.balances()).getBalances();
                 const real = balances.find((b: { type: unknown }) => b.type === BalanceType.Real);
-                const amount = (real as { amount?: number } | undefined)?.amount ?? 0;
+                const rawAmount = (real as { amount?: number; currency?: string } | undefined)?.amount ?? 0;
+                const currency = (real as { currency?: string } | undefined)?.currency ?? 'USD';
+                const amount = currency === 'USD'
+                    ? rawAmount
+                    : await convertToUsd(rawAmount, currency, sdk).catch(() => rawAmount);
                 if (amount < minBalance) {
                     return {
                         success: false,
