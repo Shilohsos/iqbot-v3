@@ -2072,6 +2072,11 @@ export function incrementDemoTradeCount(telegramId: number): number {
     return row?.demo_trade_count ?? 0;
 }
 
+export function getDemoTradeCount(telegramId: number): number {
+    const row = db.prepare('SELECT demo_trade_count FROM onboarding_tracking WHERE telegram_id = ?').get(telegramId) as { demo_trade_count: number } | undefined;
+    return row?.demo_trade_count ?? 0;
+}
+
 export function setLastFundingAt(telegramId: number): void {
     db.prepare(`
         INSERT INTO onboarding_tracking (telegram_id, last_funding_at)

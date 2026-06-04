@@ -63,6 +63,7 @@ import {
     getStuckOnboardingUsers,
     getOnboardingTracking,
     setLastFollowupMsgId,
+    getDemoTradeCount,
 } from './db.js';
 import { friendlyError } from './errors.js';
 import { logger } from './logger.js';
@@ -961,20 +962,38 @@ async function runMartingale(
             sentMessages.push(winReply.message_id);
             scheduleCleanup();
             if (balanceType === 'demo') {
-                await showDemoUpsell(ctx, sentMessages);
-                await checkFundingSequence(ctx.from!.id, async (msg, button, templateKey) => {
-                    const fundMedia = getSequenceMedia(templateKey);
-                    const btnMarkup = { inline_keyboard: [[{ text: button.text, url: button.url }]] };
-                    if (fundMedia?.file_id) {
-                        if (fundMedia.media_type === 'video') {
-                            await ctx.replyWithVideo(fundMedia.file_id, { caption: msg, reply_markup: btnMarkup });
+                const demoCount = getDemoTradeCount(ctx.from!.id);
+                if (demoCount === 0) {
+                    const name = ctx.from?.first_name ?? 'there';
+                    await ctx.reply(
+                        `🎉 Congratulations ${name}! You just won your first trade.\n\n` +
+                        `This is just the beginning — you're now trading with the 10x Special Bot 💜`
+                    );
+                    await ctx.reply(
+                        `Use the commands below to make use of your 10x bot 👇\n\n` +
+                        `/start — Main menu\n` +
+                        `/help — Contact admin\n` +
+                        `/connect — Reconnect your IQ Option account\n` +
+                        `/balance — Check your balances\n` +
+                        `/tiers — View your account tier`
+                    );
+                    await sendStartMenu(ctx);
+                } else {
+                    await showDemoUpsell(ctx, sentMessages);
+                    await checkFundingSequence(ctx.from!.id, async (msg, button, templateKey) => {
+                        const fundMedia = getSequenceMedia(templateKey);
+                        const btnMarkup = { inline_keyboard: [[{ text: button.text, url: button.url }]] };
+                        if (fundMedia?.file_id) {
+                            if (fundMedia.media_type === 'video') {
+                                await ctx.replyWithVideo(fundMedia.file_id, { caption: msg, reply_markup: btnMarkup });
+                            } else {
+                                await ctx.replyWithPhoto(fundMedia.file_id, { caption: msg, reply_markup: btnMarkup });
+                            }
                         } else {
-                            await ctx.replyWithPhoto(fundMedia.file_id, { caption: msg, reply_markup: btnMarkup });
+                            await ctx.reply(msg, { reply_markup: btnMarkup });
                         }
-                    } else {
-                        await ctx.reply(msg, { reply_markup: btnMarkup });
-                    }
-                }).catch(() => {});
+                    }).catch(() => {});
+                }
             }
             return;
         }
@@ -1032,7 +1051,9 @@ async function runMartingale(
         ).catch(() => undefined);
         if (promoText) sentMessages.push(promoText.message_id);
     }
-    if (balanceType === 'demo') await showDemoUpsell(ctx, sentMessages);
+    if (balanceType === 'demo') {
+        if (getDemoTradeCount(ctx.from!.id) > 0) await showDemoUpsell(ctx, sentMessages);
+    }
     } finally {
         const prev = activeTradeSessions.get(userId) ?? 0;
         if (prev <= 1) activeTradeSessions.delete(userId);
@@ -4039,17 +4060,22 @@ bot.on('text', async ctx => {
             saveUserCred(ctx.from!.id, Buffer.from(`${email}:${text}`).toString('base64'), email);
             setSsidValid(ctx.from!.id, 1);
             await clearReconnectPromptMessage(ctx.from!.id);
+            let balanceText: string | undefined;
             try {
                 const all = (await withTimeout(sdk.balances(), 5_000, 'balance')).getBalances();
                 const real = all.find(b => b.type === BalanceType.Real);
                 const demo = all.find(b => b.type === BalanceType.Demo);
                 if (real?.currency) saveUserCurrency(ctx.from!.id, real.currency);
                 else if (demo?.currency) saveUserCurrency(ctx.from!.id, demo.currency);
+                const parts: string[] = [];
+                if (demo) parts.push(`🎮 Practice: ${fmtBalance(demo)}`);
+                if (real) parts.push(`💎 Live: ${fmtBalance(real)}`);
+                if (parts.length) balanceText = parts.join('\n');
             } finally {
                 sdk.shutdown().catch(() => {});
             }
             onboardSessions.delete(chatId);
-            await handleConnected(ctx, ctx.from!.id);
+            await handleConnected(ctx, ctx.from!.id, balanceText);
         } catch (err) {
             const loginFails = ((onboardSessions.get(chatId) as any)?.loginFailCount ?? 0) + 1;
             onboardSessions.set(chatId, { step: 'connect_email', loginFailCount: loginFails } as any);

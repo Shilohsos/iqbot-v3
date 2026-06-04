@@ -6,7 +6,7 @@ import type { Context } from 'telegraf';
 import {
     getTemplateByKey, setOnboardingState, touchOnboardingActivity,
     getRandomTemplate, type TemplateRecord,
-    getOnboardingTracking, setLastFundingAt, incrementDemoTradeCount,
+    getOnboardingTracking, setLastFundingAt, incrementDemoTradeCount, getDemoTradeCount,
     getSequenceMedia, getConfig,
 } from './db.js';
 import { resolveUsername, applyPidgin } from './pidgin.js';
@@ -180,15 +180,21 @@ export async function handleUserIdFailed(ctx: Context, telegramId: number, attem
 export async function handleEmailCollected(ctx: Context, telegramId: number): Promise<void> {
     setOnboardingState(telegramId, 'awaiting_password');
     const t = getTemplateByKey('awaiting_password');
-    await ctx.reply(t?.message ?? '🔑 Now enter your password:');
+    const name = firstName(ctx);
+    await ctx.reply(t ? resolveUsername(t.message, name) : '🔑 Now enter your password:');
 }
 
 /** Called after successful login. Marks connected. */
-export async function handleConnected(ctx: Context, telegramId: number): Promise<void> {
+export async function handleConnected(ctx: Context, telegramId: number, balanceText?: string): Promise<void> {
     setOnboardingState(telegramId, 'connected');
     const name = firstName(ctx);
-    const t = getTemplateByKey('connected_success');
-    const msg = t ? resolveUsername(t.message, name) : `✅ Connected ${name}! 💜\n\nYou're locked in. The bot is ready.`;
+    let msg: string;
+    if (balanceText) {
+        msg = `✅ Connected ${name}! 💜\n\n${balanceText}\n\nYou're now locked in. The 10x Special Bot is live and ready.\n\n👇 Tap below to take your first trade.`;
+    } else {
+        const t = getTemplateByKey('connected_success');
+        msg = t ? resolveUsername(t.message, name) : `✅ Connected ${name}! 💜\n\nYou're locked in. The bot is ready.`;
+    }
     await ctx.reply(msg, {
         reply_markup: makeKeyboard([[{ text: 'Take a trade 👾', callback_data: 'ui:trade' }]]),
     });
