@@ -207,20 +207,6 @@ db.exec(`
 `);
 
 export function seedTemplates(): void {
-    // Always remove unwanted categories (idempotent — keeps DB clean across restarts)
-    db.exec(`
-        DELETE FROM templates WHERE category IN (
-            'pricing_tiers', 'upgrade_migration', 'funding_deposit',
-            'withdrawal', 'scam_legit', 'risk_safety',
-            'bot_strategy', 'referral_affiliate', 'leaderboard_stats',
-            'trading_explanation', 'how_bot_works', 'bot_not_working',
-            'loss_recovery', 'frustration_complaint', 'need_time',
-            'unrecognized', 'thanks_response', 'talk_to_admin',
-            'ssid_connect_fail', 'promo_bonus', 'returning_user',
-            'new_user_greeting', 'greeting', 'reengage'
-        )
-    `);
-
     // Guard: skip re-seed if templates already exist
     const cnt = (db.prepare('SELECT COUNT(*) AS cnt FROM templates').get() as { cnt: number }).cnt;
     if (cnt > 0) {
@@ -238,6 +224,15 @@ export function seedTemplates(): void {
             console.warn(`[db] seedTemplates: could not load ${file}:`, err instanceof Error ? err.message : err);
         }
     }
+
+    // On fresh DB only: remove categories we deliberately don't use
+    db.exec(`
+        DELETE FROM templates WHERE category IN (
+            'pricing_tiers', 'upgrade_migration', 'funding_deposit',
+            'withdrawal', 'scam_legit', 'risk_safety'
+        )
+    `);
+
     const count = (db.prepare('SELECT COUNT(*) AS cnt FROM templates').get() as { cnt: number }).cnt;
     console.log(`[db] templates: ${count} rows after seed`);
 }
