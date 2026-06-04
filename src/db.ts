@@ -2153,6 +2153,7 @@ export function getDemoTraders(): UserRecord[] {
         JOIN onboarding_tracking ot ON u.telegram_id = ot.telegram_id
         WHERE u.ssid IS NOT NULL AND u.ssid != ''
           AND u.approval_status = 'approved'
+          AND (u.tier IS NULL OR u.tier = 'DEMO')
           AND ot.demo_trade_count >= 1
     `).all() as UserRecord[];
 }

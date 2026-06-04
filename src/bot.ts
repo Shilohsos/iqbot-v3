@@ -647,7 +647,7 @@ async function handlePossibleAuthExpiry(err: unknown, ctx: Context, isAdmin: boo
         try { setSsidValid(ctx.from.id, 0); } catch {}
     }
     await ctx.reply(
-        '🔐 Your IQ Option session expired.\nReconnect to keep trading.',
+        '🔐 Your session expired.\n\nReconnect in 3 steps:\n1️⃣ Tap the 🔗 Reconnect button below\n2️⃣ Enter your IQ Option email and password\n3️⃣ Get back to trading instantly',
         { reply_markup: { inline_keyboard: [[{ text: '🔗 Reconnect', callback_data: isAdmin ? 'admin:trade_connect' : 'ui:connect' }]] } }
     ).catch(() => {});
     return true;
@@ -983,35 +983,19 @@ async function runMartingale(
                     await ctx.reply(counterMsg).catch(() => {});
                 }
 
-                if (newDailyCount === 2 || newDailyCount === 5 || newDailyCount === 10) {
-                    setTimeout(async () => {
-                        try {
-                            const fundKeys = [
-                                'funding_win_screenshot', 'funding_lifestyle_video', 'funding_testimonial',
-                                'funding_payout_proof', 'funding_lifestyle_photo', 'funding_user_result',
-                                'funding_user_result_video',
-                            ];
-                            const key = fundKeys[Math.floor(Math.random() * fundKeys.length)];
-                            const t = getTemplateByKey(key);
-                            if (!t) return;
-                            const promo = ['10xfirst', '10xsecond'][Math.floor(Math.random() * 2)];
-                            const msg = t.message.replace(/10xfirst|10xsecond/g, promo);
-                            const btnMarkup = t.button_text && t.button_url
-                                ? { inline_keyboard: [[{ text: t.button_text, url: t.button_url }]] }
-                                : { inline_keyboard: [[{ text: '💰 Fund Account', url: 'https://iqoption.com/pwa/payments/deposit?payment_method_id=6786' }]] };
-                            const media = getSequenceMedia(key);
-                            if (media?.file_id) {
-                                if (media.media_type === 'video') {
-                                    await ctx.replyWithVideo(media.file_id, { caption: msg, reply_markup: btnMarkup });
-                                } else {
-                                    await ctx.replyWithPhoto(media.file_id, { caption: msg, reply_markup: btnMarkup });
-                                }
-                            } else {
-                                await ctx.reply(msg, { reply_markup: btnMarkup });
-                            }
-                        } catch {}
-                    }, 5 * 60_000);
-                }
+                checkFundingSequence(ctx.from!.id, async (msg, button, templateKey) => {
+                    const fundMedia = getSequenceMedia(templateKey);
+                    const btnMarkup = { inline_keyboard: [[{ text: button.text, url: button.url }]] };
+                    if (fundMedia?.file_id) {
+                        if (fundMedia.media_type === 'video') {
+                            await ctx.replyWithVideo(fundMedia.file_id, { caption: msg, reply_markup: btnMarkup });
+                        } else {
+                            await ctx.replyWithPhoto(fundMedia.file_id, { caption: msg, reply_markup: btnMarkup });
+                        }
+                    } else {
+                        await ctx.reply(msg, { reply_markup: btnMarkup });
+                    }
+                }).catch(() => {});
 
                 if (prevDailyCount > 0 && newDailyCount < 10) {
                     await showDemoUpsell(ctx, sentMessages);
@@ -3230,7 +3214,7 @@ bot.action('admin:golive', async ctx => {
     // Test mode: send only to test user
     const testUserId = getTestUserId();
     if (testUserId) {
-        await bot.telegram.sendMessage(testUserId, LIVE_MSG_APPROVED, { parse_mode: 'MarkdownV2', reply_markup: LIVE_BTN }).catch(() => {});
+        await bot.telegram.sendMessage(testUserId, LIVE_MSG_APPROVED, { parse_mode: 'Markdown', reply_markup: LIVE_BTN }).catch(() => {});
         await ctx.reply('🧪 Test mode: sent to test user only.', { reply_markup: adminBackKeyboard() });
         return;
     }
@@ -3242,14 +3226,14 @@ bot.action('admin:golive', async ctx => {
     let sent = 0; let failed = 0;
     for (const u of approved) {
         try {
-            await bot.telegram.sendMessage(u.telegram_id, LIVE_MSG_APPROVED, { parse_mode: 'MarkdownV2', reply_markup: LIVE_BTN });
+            await bot.telegram.sendMessage(u.telegram_id, LIVE_MSG_APPROVED, { parse_mode: 'Markdown', reply_markup: LIVE_BTN });
             sent++;
         } catch { failed++; }
         if (sent % 30 === 0) await new Promise(r => setTimeout(r, 1_000));
     }
     for (const u of pending) {
         try {
-            await bot.telegram.sendMessage(u.telegram_id, LIVE_MSG_PENDING, { parse_mode: 'MarkdownV2', reply_markup: LIVE_BTN });
+            await bot.telegram.sendMessage(u.telegram_id, LIVE_MSG_PENDING, { parse_mode: 'Markdown', reply_markup: LIVE_BTN });
             sent++;
         } catch { failed++; }
         if (sent % 30 === 0) await new Promise(r => setTimeout(r, 1_000));
@@ -3310,7 +3294,7 @@ bot.action('admin:ssid_expired', async ctx => {
             }
             const m = await bot.telegram.sendMessage(
                 user.telegram_id,
-                '🔐 Your IQ Option session expired. Reconnect to keep the bot trading for you.',
+                '🔐 Your session expired.\n\nReconnect in 3 steps:\n1️⃣ Tap the 🔗 Reconnect button below\n2️⃣ Enter your IQ Option email and password\n3️⃣ Get back to trading instantly',
                 { reply_markup: { inline_keyboard: [[{ text: '🔗 Reconnect', callback_data: 'ui:connect' }]] } }
             );
             setReconnectPrompt(user.telegram_id, m.message_id);
@@ -4698,7 +4682,7 @@ backgroundIntervals.push(setInterval(async () => {
                 }
                 const sent = await bot.telegram.sendMessage(
                     user.telegram_id,
-                    '🔐 Your IQ Option session expired.\nReconnect to keep the bot trading for you.',
+                    '🔐 Your session expired.\n\nReconnect in 3 steps:\n1️⃣ Tap the 🔗 Reconnect button below\n2️⃣ Enter your IQ Option email and password\n3️⃣ Get back to trading instantly',
                     { reply_markup: { inline_keyboard: [[{ text: '🔗 Reconnect', callback_data: 'ui:connect' }]] } }
                 );
                 setReconnectPrompt(user.telegram_id, sent.message_id);
