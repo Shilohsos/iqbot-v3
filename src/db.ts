@@ -2234,6 +2234,18 @@ export function getFundedUserCount(): number {
     return row.cnt;
 }
 
+export function getFundedUserIds(): number[] {
+    return (db.prepare(
+        "SELECT telegram_id FROM users WHERE ssid IS NOT NULL AND ssid != '' AND tier IN ('PRO','MASTER')"
+    ).all() as { telegram_id: number }[]).map(r => r.telegram_id);
+}
+
+export function getNonFundedUserIds(): number[] {
+    return (db.prepare(
+        "SELECT telegram_id FROM users WHERE ssid IS NOT NULL AND ssid != '' AND approval_status = 'approved' AND (tier IS NULL OR tier = 'DEMO')"
+    ).all() as { telegram_id: number }[]).map(r => r.telegram_id);
+}
+
 export interface BroadcastHistoryRow {
     id: number; type: string; category: string | null; content: string;
     created_at: string; last_sent_at: string | null; sent_count: number;

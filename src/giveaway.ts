@@ -151,8 +151,17 @@ export async function participate(giveawayId: number, telegramId: number): Promi
         }
     }
 
-    if (event.criteria_type === 'min_balance' && user.ssid) {
+    if (event.criteria_type === 'min_balance') {
         const minBalance = parseFloat(event.criteria_value ?? '0');
+        if (!user.ssid) {
+            return {
+                success: false,
+                message: `❌ You need to connect your IQ Option account before participating.\n\nTap /connect to get started.`,
+                replyMarkup: {
+                    inline_keyboard: [[{ text: '🔗 Connect Account', callback_data: 'ui:connect' }]],
+                },
+            };
+        }
         try {
             const sdk = await sdkPool.get(telegramId, user.ssid);
             try {
@@ -162,11 +171,11 @@ export async function participate(giveawayId: number, telegramId: number): Promi
                 if (amount < minBalance) {
                     return {
                         success: false,
-                        message: `❌ Insufficient balance. You need at least $${minBalance} in your real account to participate.`,
+                        message: `❌ You need at least $${minBalance} in your real account to participate.\n\nFund your account and try again 👇`,
                         replyMarkup: {
                             inline_keyboard: [[{
                                 text: '💰 Fund Account',
-                                url: process.env.AFFILIATE_LINK ?? 'https://iqbroker.com',
+                                url: 'https://iqoption.com/pwa/payments/deposit?payment_method_id=6786',
                             }]],
                         },
                     };
@@ -175,7 +184,13 @@ export async function participate(giveawayId: number, telegramId: number): Promi
                 sdkPool.release(telegramId);
             }
         } catch {
-            // Balance check failed — allow participation
+            return {
+                success: false,
+                message: `❌ Could not verify your balance. Please try again later or contact admin.`,
+                replyMarkup: {
+                    inline_keyboard: [[{ text: '👾 Contact Admin', url: process.env.ADMIN_CONTACT_LINK ?? 'https://t.me/shiloh_is_10xing' }]],
+                },
+            };
         }
     }
 

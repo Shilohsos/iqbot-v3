@@ -10,6 +10,7 @@ import {
     getUser, saveUser, saveUsername, deleteUser, getAllUsers, getAllUserIds,
     getActiveTraderIds, getInactiveTraderIds, findUsersByUsername,
     getActivatedUserIds, getNonActivatedUserIds,
+    getFundedUserIds, getNonFundedUserIds,
     upsertOnboardingUser, approveUser, setManualApproval, rejectUser, resetUser, getApprovalStats,
     getRecentApprovals, getPendingManualUsers,
     setUserTier, saveUserCurrency, pauseUser, resumeUser,
@@ -272,7 +273,7 @@ type AdminStep =
 
 interface AdminSessionState {
     step: AdminStep;
-    broadcastTarget?: 'active' | 'inactive' | 'activated' | 'nonactivated' | 'all' | 'testuser';
+    broadcastTarget?: 'funded' | 'nonfunded' | 'nonactivated' | 'testuser';
     broadcastLinkUrl?: string;
     manualAddUserId?: number;
     editTraderTelegramId?: number;
@@ -2194,12 +2195,17 @@ bot.action('admin:broadcast', async ctx => {
     await ctx.reply('📢 *Broadcast* — Select target group:', { parse_mode: 'Markdown', reply_markup: broadcastTargetKeyboard() });
 });
 
-bot.action(/^broadcast:(active|inactive|activated|nonactivated|all|testuser)$/, async ctx => {
+bot.action(/^broadcast:(funded|nonfunded|nonactivated|testuser)$/, async ctx => {
     await ctx.answerCbQuery();
-    const target = ctx.match[1] as 'active' | 'inactive' | 'activated' | 'nonactivated' | 'all' | 'testuser';
+    const target = ctx.match[1] as 'funded' | 'nonfunded' | 'nonactivated' | 'testuser';
     adminSessions.set(ctx.chat!.id, { step: 'broadcast_message', broadcastTarget: target });
-    const label = target === 'testuser' ? 'test user (Shara)' : `${target} users`;
-    await ctx.reply(`📝 Send your broadcast message for *${label}*:`, { parse_mode: 'Markdown' });
+    const labelMap: Record<string, string> = {
+        funded: 'Funded users (PRO/MASTER)',
+        nonfunded: 'Non-Funded users (connected, no deposit)',
+        nonactivated: 'Non-Activated users',
+        testuser: 'test user (Shara)',
+    };
+    await ctx.reply(`📝 Send your broadcast message for *${labelMap[target] ?? target}*:`, { parse_mode: 'Markdown' });
 });
 
 // Button type selection
@@ -3656,17 +3662,22 @@ bot.on('text', async ctx => {
                 try {
                     const target = as.broadcastTarget!;
                     let targetIds: number[];
-                    if (target === 'active') targetIds = getActiveTraderIds(5);
-                    else if (target === 'inactive') targetIds = getInactiveTraderIds(5);
-                    else if (target === 'activated') targetIds = getActivatedUserIds();
+                    if (target === 'funded') targetIds = getFundedUserIds();
+                    else if (target === 'nonfunded') targetIds = getNonFundedUserIds();
                     else if (target === 'nonactivated') targetIds = getNonActivatedUserIds();
                     else if (target === 'testuser') {
                         const tid = getTestUserId();
                         targetIds = tid ? [tid] : [];
                     }
-                    else targetIds = getAllUserIds();
+                    else targetIds = [];
 
-                    const targetLabel = target === 'testuser' ? 'test user (Shara)' : `${target} user(s)`;
+                    const segLabelMap: Record<string, string> = {
+                        funded: 'Funded (PRO/MASTER)',
+                        nonfunded: 'Non-Funded (connected, no deposit)',
+                        nonactivated: 'Non-Activated',
+                        testuser: 'test user (Shara)',
+                    };
+                    const targetLabel = segLabelMap[target] ?? `${target} user(s)`;
                     pendingBroadcasts.set(chatId, { message: text, targetIds });
                     adminSessions.set(chatId, { ...as, step: 'broadcast_media' });
                     await ctx.reply(`📎 Send to *${targetIds.length}* ${targetLabel}.\n\nInclude an image or video? Send the file, or type "skip":`, { parse_mode: 'Markdown' });
