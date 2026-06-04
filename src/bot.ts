@@ -64,6 +64,12 @@ import {
     getOnboardingTracking,
     setLastFollowupMsgId,
     getDemoTradeCount,
+    getConnectedNonTraders,
+    getDemoTraders,
+    setReengageMsgId,
+    getReengageTracking,
+    getDailyDemoCount,
+    incrementDailyDemoCount,
 } from './db.js';
 import { friendlyError } from './errors.js';
 import { logger } from './logger.js';
@@ -962,37 +968,56 @@ async function runMartingale(
             sentMessages.push(winReply.message_id);
             scheduleCleanup();
             if (balanceType === 'demo') {
-                const demoCount = getDemoTradeCount(ctx.from!.id);
-                if (demoCount === 0) {
-                    const name = ctx.from?.first_name ?? 'there';
-                    await ctx.reply(
-                        `🎉 Congratulations ${name}! You just won your first trade.\n\n` +
-                        `This is just the beginning — you're now trading with the 10x Special Bot 💜`
-                    );
-                    await ctx.reply(
-                        `Use the commands below to make use of your 10x bot 👇\n\n` +
-                        `/start — Main menu\n` +
-                        `/help — Contact admin\n` +
-                        `/connect — Reconnect your IQ Option account\n` +
-                        `/balance — Check your balances\n` +
-                        `/tiers — View your account tier`
-                    );
-                    await sendStartMenu(ctx);
-                } else {
-                    await showDemoUpsell(ctx, sentMessages);
-                    await checkFundingSequence(ctx.from!.id, async (msg, button, templateKey) => {
-                        const fundMedia = getSequenceMedia(templateKey);
-                        const btnMarkup = { inline_keyboard: [[{ text: button.text, url: button.url }]] };
-                        if (fundMedia?.file_id) {
-                            if (fundMedia.media_type === 'video') {
-                                await ctx.replyWithVideo(fundMedia.file_id, { caption: msg, reply_markup: btnMarkup });
+                const prevDailyCount = getDailyDemoCount(ctx.from!.id);
+                if (prevDailyCount === 0) {
+                    await sendFirstTradeCongrats(ctx);
+                }
+                const newDailyCount = incrementDailyDemoCount(ctx.from!.id);
+                const remaining = Math.max(0, 10 - newDailyCount);
+
+                if (prevDailyCount > 0) {
+                    const counterMsg = remaining > 0
+                        ? `📊 Trade ${newDailyCount}/10 — ${remaining} demo trades remaining today`
+                        : `📊 Trade 10/10 — Demo limit reached for today`;
+                    await ctx.reply(counterMsg).catch(() => {});
+                }
+
+                if (newDailyCount === 2 || newDailyCount === 5 || newDailyCount === 10) {
+                    setTimeout(async () => {
+                        try {
+                            const fundKeys = [
+                                'funding_win_screenshot', 'funding_lifestyle_video', 'funding_testimonial',
+                                'funding_payout_proof', 'funding_lifestyle_photo', 'funding_user_result',
+                                'funding_user_result_video',
+                            ];
+                            const key = fundKeys[Math.floor(Math.random() * fundKeys.length)];
+                            const t = getTemplateByKey(key);
+                            if (!t) return;
+                            const promo = ['10xfirst', '10xsecond'][Math.floor(Math.random() * 2)];
+                            const msg = t.message.replace(/10xfirst|10xsecond/g, promo);
+                            const btnMarkup = t.button_text && t.button_url
+                                ? { inline_keyboard: [[{ text: t.button_text, url: t.button_url }]] }
+                                : { inline_keyboard: [[{ text: '💰 Fund Account', url: 'https://iqoption.com/pwa/payments/deposit?payment_method_id=6786' }]] };
+                            const media = getSequenceMedia(key);
+                            if (media?.file_id) {
+                                if (media.media_type === 'video') {
+                                    await ctx.replyWithVideo(media.file_id, { caption: msg, reply_markup: btnMarkup });
+                                } else {
+                                    await ctx.replyWithPhoto(media.file_id, { caption: msg, reply_markup: btnMarkup });
+                                }
                             } else {
-                                await ctx.replyWithPhoto(fundMedia.file_id, { caption: msg, reply_markup: btnMarkup });
+                                await ctx.reply(msg, { reply_markup: btnMarkup });
                             }
-                        } else {
-                            await ctx.reply(msg, { reply_markup: btnMarkup });
-                        }
-                    }).catch(() => {});
+                        } catch {}
+                    }, 5 * 60_000);
+                }
+
+                if (prevDailyCount > 0 && newDailyCount < 10) {
+                    await showDemoUpsell(ctx, sentMessages);
+                }
+
+                if (newDailyCount >= 10) {
+                    await showDemoLimitReached(ctx);
                 }
             }
             return;
@@ -1052,7 +1077,7 @@ async function runMartingale(
         if (promoText) sentMessages.push(promoText.message_id);
     }
     if (balanceType === 'demo') {
-        if (getDemoTradeCount(ctx.from!.id) > 0) await showDemoUpsell(ctx, sentMessages);
+        if (getDailyDemoCount(ctx.from!.id) > 0) await showDemoUpsell(ctx, sentMessages);
     }
     } finally {
         const prev = activeTradeSessions.get(userId) ?? 0;
@@ -1081,6 +1106,39 @@ async function showDemoUpsell(ctx: Context, messageIds: number[]): Promise<void>
         { reply_markup: demoUpsellKeyboard() }
     ).catch(() => undefined);
     if (t2) messageIds.push(t2.message_id);
+}
+
+async function sendFirstTradeCongrats(ctx: Context): Promise<void> {
+    const name = ctx.from?.first_name ?? 'there';
+    await ctx.reply(
+        `🎉 Congratulations ${name}! You just won your first trade.\n\n` +
+        `This is just the beginning — you're now trading with the 10x Special Bot 💜`
+    );
+    await ctx.reply(
+        `Use the commands below to make use of your 10x bot 👇\n\n` +
+        `/start — Main menu\n` +
+        `/help — Contact admin\n` +
+        `/connect — Reconnect your IQ Option account\n` +
+        `/balance — Check your balances\n` +
+        `/tiers — View your account tier`
+    );
+    await sendStartMenu(ctx);
+}
+
+async function showDemoLimitReached(ctx: Context): Promise<void> {
+    await ctx.reply(
+        `🎯 Demo limit reached for today.\n\n` +
+        `You've used all 10 demo trades. To keep winning:\n\n` +
+        `👉 Fund your IQ Option account and go LIVE\n` +
+        `👉 Live trades = real profits you can withdraw\n\n` +
+        `⚡ Or wait until tomorrow for a fresh 10 demo trades.`,
+        { reply_markup: {
+            inline_keyboard: [
+                [{ text: '💰 Fund Account', url: 'https://iqoption.com/pwa/payments/deposit?payment_method_id=6786' }],
+                [{ text: '📊 Check Balance', callback_data: 'ui:balance' }],
+            ],
+        }}
+    );
 }
 
 // ─── /start ───────────────────────────────────────────────────────────────────
@@ -1329,6 +1387,26 @@ bot.action(/^pair:(.+)$/, async ctx => {
     if (!amount || !timeframe) { await ctx.reply('❌ Session error — start over.'); return; }
 
     const isAdmin = ctx.from!.id === getAdminId();
+
+    // Block demo trades at daily limit (non-admin only)
+    if (!isAdmin && mode === 'demo') {
+        const dailyCount = getDailyDemoCount(ctx.from!.id);
+        if (dailyCount >= 10) {
+            await ctx.answerCbQuery('🎯 Demo limit reached. Fund to go live or wait until tomorrow.', { show_alert: true });
+            await ctx.reply(
+                `🎯 You've used all 10 demo trades for today.\n\n` +
+                `Fund your account to go live and keep trading 👇`,
+                { reply_markup: {
+                    inline_keyboard: [
+                        [{ text: '💰 Fund Account', url: 'https://iqoption.com/pwa/payments/deposit?payment_method_id=6786' }],
+                        [{ text: '📊 Check Balance', callback_data: 'ui:balance' }],
+                    ],
+                }}
+            );
+            return;
+        }
+    }
+
     const ssid = isAdmin ? getAdminSsid() : getSsidForUser(ctx.from!.id);
     if (!ssid) {
         await ctx.reply(isAdmin
@@ -4624,31 +4702,27 @@ backgroundIntervals.push(setInterval(async () => {
     }
 }, 60 * 60_000));
 
-// ─── Re-engagement loop (6h cadence for stuck onboarding users) ─────────────
+// ─── Re-engagement loop (1h cadence, 3 segments) ──────────────────────────────
 
 backgroundIntervals.push(setInterval(async () => {
     if (getConfig('features_paused') === '1') return;
     try {
-        const stuck = getStuckOnboardingUsers(6);
-        for (const user of stuck) {
+        // Segment 1: Non-activated users → onboarding re-engagement templates
+        const nonActivated = getStuckOnboardingUsers(1);
+        for (const user of nonActivated) {
             try {
                 const key = getReengageTemplateKey(user.onboarding_state ?? 'entry_branch_sent');
                 const t = getTemplateByKey(key);
                 if (!t) continue;
                 const msg = resolveUsernameTemplate(t.message, user.username ?? 'there');
                 const chatId = user.telegram_id;
-
-                // Auto-delete previous follow-up message
-                const tracking = getOnboardingTracking(chatId);
-                if (tracking?.last_followup_msg_id) {
-                    try { await bot.telegram.deleteMessage(chatId, tracking.last_followup_msg_id); } catch {}
+                const tracking = getReengageTracking(chatId);
+                if (tracking?.last_msg_id) {
+                    try { await bot.telegram.deleteMessage(chatId, tracking.last_msg_id); } catch {}
                 }
-
-                // Send with media if available (strip 'reengage_' prefix to match sequence_media keys)
                 const mediaKey = key.replace(/^reengage_/, '');
                 const media = getSequenceMedia(mediaKey);
                 let sentMsgId: number;
-
                 if (media?.file_id) {
                     if (media.media_type === 'video') {
                         const sent = await bot.telegram.sendVideo(chatId, media.file_id, { caption: msg });
@@ -4661,16 +4735,94 @@ backgroundIntervals.push(setInterval(async () => {
                     const sent = await bot.telegram.sendMessage(chatId, msg);
                     sentMsgId = sent.message_id;
                 }
-
-                setLastFollowupMsgId(chatId, sentMsgId);
+                setReengageMsgId(chatId, sentMsgId, 'non_activated');
                 touchOnboardingActivity(chatId);
-                await new Promise(r => setTimeout(r, 200));
             } catch {}
+            await new Promise(r => setTimeout(r, 200));
+        }
+
+        // Segment 2: Connected but never traded → re-engagement templates
+        const idleConnected = getConnectedNonTraders(1);
+        for (const user of idleConnected) {
+            try {
+                const reengageKeys = [
+                    'reengage_entry_stuck', 'reengage_video_stuck', 'reengage_userid_stuck',
+                    'reengage_email_stuck', 'reengage_password_stuck', 'reengage_never_traded',
+                ];
+                const key = reengageKeys[Math.floor(Math.random() * reengageKeys.length)];
+                const t = getTemplateByKey(key);
+                if (!t) continue;
+                const msg = resolveUsernameTemplate(t.message, user.username ?? 'there');
+                const chatId = user.telegram_id;
+                const tracking = getReengageTracking(chatId);
+                if (tracking?.last_msg_id) {
+                    try { await bot.telegram.deleteMessage(chatId, tracking.last_msg_id); } catch {}
+                }
+                const mediaKey = key.replace(/^reengage_/, '');
+                const media = getSequenceMedia(mediaKey);
+                let sentMsgId: number;
+                if (media?.file_id) {
+                    if (media.media_type === 'video') {
+                        const sent = await bot.telegram.sendVideo(chatId, media.file_id, { caption: msg });
+                        sentMsgId = sent.message_id;
+                    } else {
+                        const sent = await bot.telegram.sendPhoto(chatId, media.file_id, { caption: msg });
+                        sentMsgId = sent.message_id;
+                    }
+                } else {
+                    const sent = await bot.telegram.sendMessage(chatId, msg);
+                    sentMsgId = sent.message_id;
+                }
+                setReengageMsgId(chatId, sentMsgId, 'idle_connected');
+            } catch {}
+            await new Promise(r => setTimeout(r, 200));
+        }
+
+        // Segment 3: Has traded demo → funding sequence
+        const traders = getDemoTraders();
+        for (const user of traders) {
+            try {
+                const fundKeys = [
+                    'funding_win_screenshot', 'funding_lifestyle_video', 'funding_testimonial',
+                    'funding_payout_proof', 'funding_lifestyle_photo', 'funding_user_result',
+                    'funding_user_result_video',
+                ];
+                const key = fundKeys[Math.floor(Math.random() * fundKeys.length)];
+                const t = getTemplateByKey(key);
+                if (!t) continue;
+                const promo = ['10xfirst', '10xsecond'][Math.floor(Math.random() * 2)];
+                let msg = t.message.replace(/10xfirst|10xsecond/g, promo);
+                msg = resolveUsernameTemplate(msg, user.username ?? 'there');
+                const chatId = user.telegram_id;
+                const tracking = getReengageTracking(chatId);
+                if (tracking?.last_msg_id) {
+                    try { await bot.telegram.deleteMessage(chatId, tracking.last_msg_id); } catch {}
+                }
+                const btnMarkup = t.button_text && t.button_url
+                    ? { inline_keyboard: [[{ text: t.button_text, url: t.button_url }]] }
+                    : { inline_keyboard: [[{ text: '💰 Fund Account', url: 'https://iqoption.com/pwa/payments/deposit?payment_method_id=6786' }]] };
+                const media = getSequenceMedia(key);
+                let sentMsgId: number;
+                if (media?.file_id) {
+                    if (media.media_type === 'video') {
+                        const sent = await bot.telegram.sendVideo(chatId, media.file_id, { caption: msg, reply_markup: btnMarkup });
+                        sentMsgId = sent.message_id;
+                    } else {
+                        const sent = await bot.telegram.sendPhoto(chatId, media.file_id, { caption: msg, reply_markup: btnMarkup });
+                        sentMsgId = sent.message_id;
+                    }
+                } else {
+                    const sent = await bot.telegram.sendMessage(chatId, msg, { reply_markup: btnMarkup });
+                    sentMsgId = sent.message_id;
+                }
+                setReengageMsgId(chatId, sentMsgId, 'funding');
+            } catch {}
+            await new Promise(r => setTimeout(r, 200));
         }
     } catch (err) {
         logger.error('bot', `re-engagement loop error: ${err instanceof Error ? err.message : err}`);
     }
-}, 6 * 60 * 60_000));
+}, 1 * 60 * 60_000));
 
 // ─── Keepalive ────────────────────────────────────────────────────────────────
 
