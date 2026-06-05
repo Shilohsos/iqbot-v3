@@ -1,9 +1,8 @@
 import { Telegraf } from 'telegraf';
 import { insertFunnelEvent, getRecentlyApprovedUsers, userHasActivity } from './db.js';
-import { onboardKeyboard } from './ui/user.js';
+import { sendNewOnboardingViaTelegram } from './onboarding.js';
 
 const CHANNEL_ID    = parseInt(process.env.CHANNEL_ID ?? '-1002766084283', 10);
-const ASSETS_DIR    = process.env.ASSETS_DIR ?? '/root/iqbot-v3/assets';
 const META_TRACK_URL = process.env.META_TRACK_URL ?? 'http://localhost:8766/track';
 
 export function setupChannelHandlers(bot: Telegraf): void {
@@ -51,32 +50,9 @@ export function setupChannelHandlers(bot: Telegraf): void {
     });
 }
 
-/**
- * Send the same onboarding flow that /start triggers for new/unconnected users.
- * This is the full funnel experience — brand intro → account connection choice.
- */
 async function sendOnboarding(telegram: Telegraf['telegram'], userId: number): Promise<void> {
     try {
-        // L1 — Welcome brand intro
-        try { await telegram.sendPhoto(userId, { source: `${ASSETS_DIR}/L1.png` }); } catch {}
-        await telegram.sendMessage(userId,
-            `I'm 10x Special Bot.\n\n` +
-            `The smartest semi auto-trading bot for IQ Option OTC pairs.\n\n` +
-            `I scan markets. I read signals. I place trades.\n` +
-            `You sit back and watch the wins land.`
-        );
-
-        // L3 — Link Your Account
-        try { await telegram.sendPhoto(userId, { source: `${ASSETS_DIR}/L3.png` }); } catch {}
-        await telegram.sendMessage(userId,
-            `Connect your IQ Option account.\n\n` +
-            `Free signup · 60 seconds · Linked instantly.\n` +
-            `Bot trades on your account. Money stays yours.\n\n` +
-            `Pick what fits 👇`,
-            { reply_markup: onboardKeyboard() }
-        );
-
-        console.log(`[channel] onboarding sent to ${userId}`);
+        await sendNewOnboardingViaTelegram(telegram, userId, 'there');
         insertFunnelEvent('channel_welcome_sent', JSON.stringify({ telegram_id: userId }));
     } catch (err) {
         console.error(`[channel] failed to send onboarding to ${userId}:`, err instanceof Error ? err.message : err);

@@ -3,6 +3,7 @@
  * States are persisted in users.onboarding_state.
  */
 import type { Context } from 'telegraf';
+import type { Telegraf } from 'telegraf';
 import {
     getTemplateByKey, setOnboardingState, touchOnboardingActivity,
     getRandomTemplate, type TemplateRecord,
@@ -251,4 +252,57 @@ const REENGAGE_MAP: Record<string, string> = {
 
 export function getReengageTemplateKey(state: string): string {
     return REENGAGE_MAP[state] ?? 'reengage_entry_stuck';
+}
+
+// ─── Channel onboarding (no Context) ─────────────────────────────────────────
+
+/**
+ * Send the template-based onboarding flow using a bare Telegram object.
+ * Used by the channel join handler which has no Context.
+ */
+export async function sendNewOnboardingViaTelegram(
+    telegram: Telegraf['telegram'],
+    userId: number,
+    firstName: string,
+): Promise<void> {
+    if (getConfig('features_paused') === '1') return;
+
+    const sendTemplateTelegram = async (key: string, extraKeyboard?: { inline_keyboard: Btn[][] }) => {
+        const t = getTemplateByKey(key);
+        if (!t) return;
+        const msg = resolveUsername(t.message, firstName);
+        const markup = extraKeyboard ?? (
+            t.button_text && t.button_url
+                ? makeKeyboard([[{ text: t.button_text, url: t.button_url }]])
+                : undefined
+        );
+        const seq = getSequenceMedia(key);
+        const mediaFileId = seq?.file_id;
+        const mediaType   = seq?.media_type ?? 'photo';
+        if (mediaFileId && mediaType === 'video') {
+            await telegram.sendVideo(userId, mediaFileId, { caption: msg, ...(markup ? { reply_markup: markup } : {}) });
+        } else if (mediaFileId) {
+            await telegram.sendPhoto(userId, mediaFileId, { caption: msg, ...(markup ? { reply_markup: markup } : {}) });
+        } else {
+            await telegram.sendMessage(userId, msg, markup ? { reply_markup: markup } : {});
+        }
+    };
+
+    setOnboardingState(userId, 'entry');
+
+    await sendTemplateTelegram('entry_welcome_1');
+    await delay(5_000);
+
+    await sendTemplateTelegram('entry_welcome_2');
+    await delay(5_000);
+
+    setOnboardingState(userId, 'entry_branch_sent');
+    const t3 = getTemplateByKey('entry_branch_question');
+    const branchMsg = t3 ? resolveUsername(t3.message, firstName) : 'Are you new to trading?';
+    await telegram.sendMessage(userId, branchMsg, {
+        reply_markup: makeKeyboard([[
+            { text: "I'm new to trading",   callback_data: 'onboard:new' },
+            { text: 'I have traded before', callback_data: 'onboard:experienced' },
+        ]]),
+    });
 }
