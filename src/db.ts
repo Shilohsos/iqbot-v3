@@ -131,6 +131,8 @@ try {
     const otCols = (db.prepare("PRAGMA table_info(onboarding_tracking)").all() as { name: string }[]).map(r => r.name);
     if (!otCols.includes('last_followup_msg_id'))
         db.exec('ALTER TABLE onboarding_tracking ADD COLUMN last_followup_msg_id INTEGER');
+    if (!otCols.includes('user_id_fail_count'))
+        db.exec('ALTER TABLE onboarding_tracking ADD COLUMN user_id_fail_count INTEGER NOT NULL DEFAULT 0');
 } catch {}
 
 // Clean [link] placeholders from follow-up templates (idempotent)
@@ -2214,6 +2216,30 @@ export function setLastFollowupMsgId(telegramId: number, messageId: number): voi
         VALUES (?, ?)
         ON CONFLICT(telegram_id) DO UPDATE SET last_followup_msg_id = ?
     `).run(telegramId, messageId, messageId);
+}
+
+export function getUserIdFailCount(telegramId: number): number {
+    const row = db.prepare('SELECT user_id_fail_count FROM onboarding_tracking WHERE telegram_id = ?').get(telegramId) as { user_id_fail_count: number } | undefined;
+    return row?.user_id_fail_count ?? 0;
+}
+
+export function incrementUserIdFailCount(telegramId: number): number {
+    db.prepare(`
+        INSERT INTO onboarding_tracking (telegram_id, user_id_fail_count, last_activity_at)
+        VALUES (?, 1, datetime('now'))
+        ON CONFLICT(telegram_id) DO UPDATE SET
+            user_id_fail_count = user_id_fail_count + 1,
+            last_activity_at = datetime('now')
+    `).run(telegramId);
+    return getUserIdFailCount(telegramId);
+}
+
+export function resetUserIdFailCount(telegramId: number): void {
+    db.prepare(`
+        INSERT INTO onboarding_tracking (telegram_id, user_id_fail_count)
+        VALUES (?, 0)
+        ON CONFLICT(telegram_id) DO UPDATE SET user_id_fail_count = 0
+    `).run(telegramId);
 }
 
 /** Users stuck in an onboarding state for longer than `hours`. */

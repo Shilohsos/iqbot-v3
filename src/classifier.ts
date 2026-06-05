@@ -12,6 +12,7 @@ const VALID_FLOWS = new Set([
     'fund_account',
     'go_home',
     'help_contact',
+    'help_user_id',
 ]);
 
 const SYSTEM_PROMPT = `You are a flow router for a trading bot called "10x Bot".
@@ -28,6 +29,7 @@ Available flows:
 - fund_account — User wants to deposit or fund their account.
 - go_home — General help, what to do, menu. Push to main menu.
 - help_contact — User needs human help, complaining, frustrated.
+- help_user_id — User keeps failing User ID verification. They need help creating an account or admin assistance.
 
 Rules:
 1. If the message is a number with 7-10 digits → verify_user_id
@@ -35,7 +37,8 @@ Rules:
 3. If user hasn't traded (demo_trade_count=0 or null) → start_trading
 4. If user asks about funding/deposit → fund_account
 5. If user is angry or needs admin → help_contact
-6. For anything else → go_home
+6. If user is stuck on User ID verification and keeps failing → help_user_id
+7. For anything else → go_home
 
 Your reply message must:
 - Be SHORT (1-2 lines max)
@@ -49,6 +52,7 @@ Example good messages:
 - "Let's get your account setup first. Tap Continue below 👇"
 - "You need to fund your account to trade live. Tap Fund Account when you're ready 🟣"
 - "Drop your IQ Option User ID below and I'll get you verified 🆔"
+- "Having trouble with your User ID? Let's get you a fresh account 👇"
 
 Respond with ONLY a JSON object in this exact format — no other text:
 {"flow": "action_name", "message": "your short reply here"}
@@ -56,7 +60,8 @@ Respond with ONLY a JSON object in this exact format — no other text:
 Examples:
 {"flow": "reconnect", "message": "Your session expired. Tap Reconnect to sign back in 👇"}
 {"flow": "start_trading", "message": "You haven't traded yet. Tap Start Trading and let's go 💜"}
-{"flow": "go_home", "message": "What would you like to do? Check your balance or start trading 👇"}`;
+{"flow": "go_home", "message": "What would you like to do? Check your balance or start trading 👇"}
+{"flow": "help_user_id", "message": "Having trouble with your User ID? Let's get you a fresh account 👇"}`;
 
 const rateLimitMap = new Map<number, number>();
 const RATE_LIMIT_MS = 5_000;
@@ -74,6 +79,7 @@ export interface UserContext {
     has_ssid: boolean;
     demo_trade_count: number | null;
     tier: string;
+    user_id_fail_count?: number;
 }
 
 export interface BrainResult {
@@ -93,6 +99,7 @@ async function classifyFlow(text: string, context: UserContext): Promise<BrainRe
         `has_ssid=${context.has_ssid},`,
         `demo_trade_count=${context.demo_trade_count ?? 0},`,
         `tier=${context.tier}`,
+        context.user_id_fail_count ? `, user_id_fail_count=${context.user_id_fail_count}` : '',
     ].join(' ');
 
     const controller = new AbortController();

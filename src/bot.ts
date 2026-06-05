@@ -73,6 +73,7 @@ import {
     getDailyDemoCount,
     incrementDailyDemoCount,
     cycleReengageVariant,
+    getUserIdFailCount, incrementUserIdFailCount, resetUserIdFailCount,
 } from './db.js';
 import { friendlyError } from './errors.js';
 import { logger } from './logger.js';
@@ -136,6 +137,7 @@ const FLOW_BUTTONS: Record<string, { text: string; action: string | { url: strin
     fund_account:         { text: '💰 Fund Account',  action: { url: 'https://iqoption.com/pwa/payments/deposit' } },
     go_home:              { text: '🏠 Menu',           action: 'ui:start' },
     help_contact:         { text: '👤 Contact Admin', action: { url: process.env.ADMIN_CONTACT_LINK ?? 'https://t.me/shiloh_is_10xing' } },
+    help_user_id:         { text: '🆕 Create Account', action: { url: process.env.AFFILIATE_LINK ?? 'https://iqbroker.com/lp/regframe-01-light-nosocials/?aff=749367&aff_model=revenue' } },
 };
 
 // Resolve assets dir from env, else from the source layout (src/.. -> assets).
@@ -3677,6 +3679,52 @@ bot.on('video', async ctx => {
     await ctx.reply('📹 Video received! Include a link button?', { reply_markup: broadcastLinkKeyboard() });
 });
 
+// ─── User ID brain route (repeated failures) ──────────────────────────────────
+
+async function handleUserIdBrainRoute(ctx: Context, telegramId: number, lastInput: string, failCount: number): Promise<void> {
+    const brainCtx: UserContext = {
+        onboarding_state: 'awaiting_user_id',
+        ssid_valid: null,
+        has_ssid: false,
+        demo_trade_count: null,
+        tier: 'DEMO',
+        user_id_fail_count: failCount,
+    };
+    try {
+        // Bypass the SSID pre-check by calling classifyFlow directly — user has no SSID by definition here
+        const brainResult = await getBrainFlow(telegramId, lastInput, brainCtx).catch(
+            () => ({ flow: 'help_contact', message: '', shouldReply: true })
+        );
+        if (brainResult.shouldReply && brainResult.flow) {
+            const btn = FLOW_BUTTONS[brainResult.flow] ?? FLOW_BUTTONS.help_contact;
+            const replyText = brainResult.message || 'Having trouble? Contact admin for help 👇💜';
+            const replyMarkup = typeof btn.action === 'string'
+                ? { inline_keyboard: [[{ text: btn.text, callback_data: btn.action }]] }
+                : { inline_keyboard: [[{ text: btn.text, url: btn.action.url }]] };
+            await ctx.reply(replyText, { reply_markup: replyMarkup });
+        } else {
+            await ctx.reply(
+                "Still having trouble with your User ID? Let's get you sorted 💜\n\n👇 You can:",
+                {
+                    reply_markup: {
+                        inline_keyboard: [
+                            [{ text: '🆕 Create a new account', url: AFFILIATE_LINK }],
+                            [{ text: '👤 Contact Admin', url: ADMIN_CONTACT_LINK }],
+                            [{ text: '🔄 Try again', callback_data: 'ui:connect' }],
+                        ],
+                    },
+                }
+            );
+        }
+    } catch {
+        await ctx.reply(
+            'Having trouble connecting? Contact admin for help 👇💜',
+            { reply_markup: { inline_keyboard: [[{ text: '👤 Contact Admin', url: ADMIN_CONTACT_LINK }]] } }
+        );
+    }
+    setOnboardingState(telegramId, 'awaiting_user_id');
+}
+
 // ─── Text handler (all wizards) ───────────────────────────────────────────────
 
 bot.on('text', async ctx => {
@@ -4170,15 +4218,26 @@ bot.on('text', async ctx => {
         try {
             const result = await withTimeout(checkAffiliate(iqUserId), 15_000, 'affiliate').catch(() => ({ found: false, data: null }));
             if (result.found) {
+                resetUserIdFailCount(ctx.from!.id);
                 approveUser(ctx.from!.id, result.data ? JSON.stringify(result.data) : undefined);
                 await handleUserIdVerified(ctx, ctx.from!.id);
             } else {
-                await handleUserIdFailed(ctx, ctx.from!.id, 1);
-                setOnboardingState(ctx.from!.id, 'awaiting_user_id');
+                const failCount = incrementUserIdFailCount(ctx.from!.id);
+                if (failCount < 2) {
+                    await handleUserIdFailed(ctx, ctx.from!.id, failCount);
+                    setOnboardingState(ctx.from!.id, 'awaiting_user_id');
+                } else {
+                    await handleUserIdBrainRoute(ctx, ctx.from!.id, text, failCount);
+                }
             }
         } catch {
-            await handleUserIdFailed(ctx, ctx.from!.id, 1);
-            setOnboardingState(ctx.from!.id, 'awaiting_user_id');
+            const failCount = incrementUserIdFailCount(ctx.from!.id);
+            if (failCount < 2) {
+                await handleUserIdFailed(ctx, ctx.from!.id, failCount);
+                setOnboardingState(ctx.from!.id, 'awaiting_user_id');
+            } else {
+                await handleUserIdBrainRoute(ctx, ctx.from!.id, text, failCount);
+            }
         }
         return;
     }
