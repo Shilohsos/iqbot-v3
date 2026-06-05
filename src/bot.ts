@@ -4397,8 +4397,19 @@ bot.on('text', async ctx => {
     // ── LLM brain — all users ────────────────────────────────────────────────
     const user = getUser(ctx.from!.id);
     const state = user?.onboarding_state;
-    const brainWiz = wizardSessions.get(chatId);
+    let brainWiz = wizardSessions.get(chatId);
     const isActivated = user?.ssid_valid === 1 && !!user?.ssid;
+
+    // Clear stale wizard sessions so brain can respond to text messages
+    if (brainWiz && brainWiz.step !== 'custom_amount') {
+        wizardSessions.delete(chatId);
+        brainWiz = undefined;
+    }
+    // Non-numeric text to custom_amount step means user isn't entering an amount
+    if (brainWiz && brainWiz.step === 'custom_amount' && isNaN(parseFloat(text))) {
+        wizardSessions.delete(chatId);
+        brainWiz = undefined;
+    }
 
     if (!isActivated) {
         const count = (nonActivatedResponseCount.get(ctx.from!.id) ?? 0) + 1;
