@@ -1197,7 +1197,18 @@ bot.action(/^mode:(demo|live)$/, async ctx => {
     const chatId = ctx.chat!.id;
     const state = wizardSessions.get(chatId);
     if (!state || state.step !== 'mode') return;
-    state.mode = ctx.match[1] as 'demo' | 'live';
+    const mode = ctx.match[1] as 'demo' | 'live';
+
+    if (mode === 'demo') {
+        const todayCount = getDailyDemoCount(ctx.from!.id);
+        if (todayCount >= 10) {
+            wizardSessions.delete(chatId);
+            await showDemoLimitReached(ctx);
+            return;
+        }
+    }
+
+    state.mode = mode;
     state.step = 'amount';
     await ctx.reply('Enter amount', { reply_markup: amountKeyboard() });
 });
