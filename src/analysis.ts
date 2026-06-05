@@ -56,22 +56,27 @@ async function runAnalysis(sdk: ClientSdk, pair: string, timeframeSec: number, t
         const macdBull = macd > macdSignal;
         const bollBull = lastClose > mid && lastClose < upper;
 
-        const votes      = [rsiBull, emaBull, macdBull, bollBull].filter(Boolean).length;
-        const confidence = votes / 4 * 100;
-        const direction: 'call' | 'put' = confidence >= 75 ? 'call' : 'put';
+        const bullVotes   = [rsiBull, emaBull, macdBull, bollBull].filter(Boolean).length;
+        const bearVotes   = 4 - bullVotes;
+        const confidence  = Math.max(bullVotes, bearVotes) / 4 * 100;
+        const direction: 'call' | 'put' = bullVotes >= 2 ? 'call' : 'put';
         const signals = [
             `RSI ${rsi.toFixed(1)} ${rsiBull ? '▲' : '▼'}`,
             `EMA ${emaBull ? '▲' : '▼'}`,
             `MACD ${macdBull ? '▲' : '▼'}`,
             `BB ${bollBull ? '▲' : '▼'}`,
         ].join(' | ');
-        return { direction, confidence, reason: `${direction === 'call' ? 'BULLISH' : 'BEARISH'} (${votes}/4) | ${signals}` };
+        const directionLabel = bullVotes >= 2 ? 'BULLISH' : bearVotes >= 2 ? 'BEARISH' : 'NEUTRAL';
+        return { direction, confidence, reason: `${directionLabel} (${Math.max(bullVotes, bearVotes)}/4) | ${signals}` };
     }
 
-    const bullishScore = (rsi > 50 ? 50 : 0) + (ema9 > ema21 ? 50 : 0);
-    const direction: 'call' | 'put' = bullishScore >= 50 ? 'call' : 'put';
-    const reason = `${bullishScore >= 50 ? 'BULLISH' : 'BEARISH'} (+${bullishScore}%) | RSI ${rsi.toFixed(1)}, ${ema9 > ema21 ? 'EMA9 > EMA21' : 'EMA9 < EMA21'}`;
-    return { direction, confidence: bullishScore, reason };
+    const bullScore  = (rsi > 50 ? 50 : 0) + (ema9 > ema21 ? 50 : 0);
+    const bearScore  = 100 - bullScore;
+    const confidence = Math.max(bullScore, bearScore);
+    const direction: 'call' | 'put' = bullScore >= 50 ? 'call' : 'put';
+    const label = bullScore >= 50 ? 'BULLISH' : 'BEARISH';
+    const reason = `${label} (${Math.round(confidence)}%) | RSI ${rsi.toFixed(1)}, ${ema9 > ema21 ? 'EMA9 > EMA21' : 'EMA9 < EMA21'}`;
+    return { direction, confidence, reason };
 }
 
 function computeMACD(closes: number[], fast: number, slow: number, signal: number): { macd: number; signal: number } {

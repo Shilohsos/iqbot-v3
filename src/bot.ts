@@ -1483,7 +1483,10 @@ bot.action(/^pair:(.+)$/, async ctx => {
         const mgSettings = getUserMartingaleSettings(ctx.from!.id);
         const martingaleRounds = mgSettings.enabled ? mgSettings.maxRounds : 1;
         logger.trade('executing', pair, ctx.from!.id, `$${amount} ${tfLabel(timeframe)} ${mode}`);
-        const tradePromise = runMartingale(ctx, ssid, pair, analysis.direction, amount, timeframe, (mode ?? 'live') as 'demo' | 'live', martingaleRounds, preTradeMessageIds, sdk);
+        const tradePromise = runMartingale(ctx, ssid, pair, analysis.direction, amount, timeframe, (mode ?? 'live') as 'demo' | 'live', martingaleRounds, preTradeMessageIds, sdk)
+            .catch(err => {
+                logger.error('trade', `Unhandled trade error: ${err instanceof Error ? err.message : String(err)}`);
+            });
         tradeStarted = true;
         if (isAdmin) {
             tradePromise.finally(() => sdk.shutdown().catch(() => {}));

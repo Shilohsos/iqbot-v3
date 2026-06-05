@@ -96,12 +96,11 @@ export async function executeTradeWithSdk(sdk: ClientSdk, trade: TradeRequest): 
 
         return tradeResult;
     } catch (err: unknown) {
-        // SDK's p-timeout throws TimeoutError — convert to a safe ERROR result
-        // so callers never see an unhandled rejection.
         if (isTimeoutError(err)) {
             return errorResult(trade, 'IQ Option timed out');
         }
-        throw err;
+        const msg = err instanceof Error ? err.message : String(err);
+        return errorResult(trade, msg);
     }
 }
 
