@@ -23,7 +23,7 @@ export function setupChannelHandlers(bot: Telegraf): void {
             console.log(`[channel] auto-approved user ${userId}`);
             insertFunnelEvent('channel_join_approved', JSON.stringify({ telegram_id: userId }));
 
-            // Fire Meta CompleteRegistration — tells Meta this ad click became a channel join
+            // Fire Meta CompleteRegistration
             const lang: string = (req.from as any)?.language_code ?? '';
             const eventId = `cr_${userId}_${Date.now()}`;
             fetch(META_TRACK_URL, {
@@ -41,21 +41,6 @@ export function setupChannelHandlers(bot: Telegraf): void {
             }).catch((err: unknown) => {
                 console.error(`[meta] failed to send join event for ${userId}:`, err);
             });
-
-            // Send simple welcome with Start Bot button
-            const botUsername = process.env.BOT_USERNAME ?? 'Shiloh10xbot';
-            await ctx.telegram.sendMessage(userId,
-                'Welcome to 10x Special Bot 💜\n\n' +
-                'Tap the button below to start and connect your IQ Option account.',
-                {
-                    reply_markup: {
-                        inline_keyboard: [[
-                            { text: '🚀 Start Bot', url: `https://t.me/${botUsername}?start` },
-                        ]],
-                    },
-                }
-            );
-            insertFunnelEvent('channel_welcome_sent', JSON.stringify({ telegram_id: userId }));
         } catch (err) {
             console.error(`[channel] failed to approve user ${userId}:`, err instanceof Error ? err.message : err);
         }
