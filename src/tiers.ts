@@ -100,8 +100,8 @@ export async function convertToUsd(amount: number, currency: string, sdk: Client
         rateCache.set(currency, { rate, expires: Date.now() + 3_600_000 });
         return amount * rate;
     } catch {
-        logger.warn('tiers', `currency conversion failed for ${currency}, treating as USD`);
-        return amount;
+        logger.warn('tiers', `currency conversion failed for ${currency}, returning 0 to prevent false promotion`);
+        return 0;
     }
 }
 

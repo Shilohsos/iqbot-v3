@@ -26,10 +26,10 @@ export async function analyzePair(ssid: string, pair: string, timeframeSec: numb
 }
 
 async function runAnalysis(sdk: ClientSdk, pair: string, timeframeSec: number, tier: string): Promise<AnalysisResult> {
-    const turboOptions = await sdk.turboOptions();
+    const blitzOptions = await sdk.blitzOptions();
     const normTicker = (s: string) => s.toUpperCase().replace(/^front\./i, '').replace(/[-/\s]/g, '');
     const normalizedInput = normTicker(pair);
-    const active = turboOptions.getActives().find(a =>
+    const active = blitzOptions.getActives().find(a =>
         normTicker(a.ticker) === normalizedInput ||
         normTicker(a.localizationKey) === normalizedInput
     );

@@ -65,22 +65,36 @@ async function classifyIntent(text: string, imageUrl?: string): Promise<string> 
     if (imageUrl) userContent.push({ type: 'image_url', image_url: { url: imageUrl } });
     userContent.push({ type: 'text', text });
 
-    const resp = await fetch(OPENROUTER_URL, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${OPENROUTER_API_KEY}`,
-        },
-        body: JSON.stringify({
-            model: OPENROUTER_MODEL,
-            messages: [
-                { role: 'system', content: SYSTEM_PROMPT },
-                { role: 'user', content: userContent },
-            ],
-            max_tokens: 20,
-            temperature: 0,
-        }),
-    });
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15_000);
+    let resp: Response;
+    try {
+        resp = await fetch(OPENROUTER_URL, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+            },
+            body: JSON.stringify({
+                model: OPENROUTER_MODEL,
+                messages: [
+                    { role: 'system', content: SYSTEM_PROMPT },
+                    { role: 'user', content: userContent },
+                ],
+                max_tokens: 20,
+                temperature: 0,
+            }),
+            signal: controller.signal,
+        });
+    } catch (err) {
+        if (err instanceof Error && err.name === 'AbortError') {
+            console.warn('[classifier] OpenRouter request timed out after 15s');
+            return 'unrecognized';
+        }
+        throw err;
+    } finally {
+        clearTimeout(timeoutId);
+    }
 
     if (!resp.ok) throw new Error(`OpenRouter ${resp.status}`);
     const data = await resp.json() as { choices: Array<{ message: { content: string } }> };

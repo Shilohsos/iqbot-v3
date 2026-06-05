@@ -529,6 +529,10 @@ const insertStmt = db.prepare(`
 `);
 
 export function insertTrade(t: TradeRecord): void {
+    if (t.telegram_id != null) {
+        db.prepare(`INSERT OR IGNORE INTO users (telegram_id, created_at, last_used) VALUES (?, datetime('now'), datetime('now'))`)
+            .run(t.telegram_id);
+    }
     insertStmt.run({
         telegram_id: t.telegram_id ?? null,
         pair: t.pair,
