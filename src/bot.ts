@@ -68,6 +68,7 @@ import {
     getDailyDemoCount,
     incrementDailyDemoCount,
     getUserIdFailCount, incrementUserIdFailCount, resetUserIdFailCount,
+    db,
 } from './db.js';
 import { friendlyError } from './errors.js';
 import { logger } from './logger.js';
@@ -1988,7 +1989,17 @@ bot.command('admin', async ctx => {
         return;
     }
 
-    await ctx.reply('Commands: /admin users | /admin approve <id> | /admin reject <id> | /admin stats');
+    if (sub === 'migrate_states') {
+        const result = db.prepare(`
+            UPDATE users
+            SET onboarding_state = 'awaiting_user_id'
+            WHERE onboarding_state IN ('entry', 'entry_branch_sent', 'new_user_watch_video', 'returning_user_ask_account')
+        `).run();
+        await ctx.reply(`✅ Migrated ${result.changes} users to awaiting_user_id state.`);
+        return;
+    }
+
+    await ctx.reply('Commands: /admin users | /admin approve <id> | /admin reject <id> | /admin stats | /admin migrate_states');
 });
 
 // ─── Admin back ───────────────────────────────────────────────────────────────
