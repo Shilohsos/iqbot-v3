@@ -4193,11 +4193,35 @@ bot.on('text', async ctx => {
 
     if (onboardingState === 'awaiting_user_id') {
         touchOnboardingActivity(ctx.from!.id);
-        const iqUserId = parseInt(text, 10);
-        if (isNaN(iqUserId) || String(iqUserId).length < 5) {
-            await ctx.reply('Please enter a valid IQ Option User ID (numeric).');
+
+        // If it doesn't look like a User ID, let the brain handle it
+        if (!/^\d{5,}$/.test(text.trim())) {
+            const brainUser = getUser(ctx.from!.id);
+            const brainIsActivated = brainUser?.ssid_valid === 1 && !!brainUser?.ssid;
+            const brainCtx: UserContext = {
+                onboarding_state: 'awaiting_user_id',
+                ssid_valid: brainUser?.ssid_valid ?? null,
+                has_ssid: !!brainUser?.ssid,
+                demo_trade_count: brainUser ? getDemoTradeCount(brainUser.telegram_id) : null,
+                tier: brainUser?.tier ?? 'DEMO',
+                is_activated: brainIsActivated,
+                user_id_fail_count: getUserIdFailCount(ctx.from!.id),
+            };
+            const brainResult = await getBrainFlow(ctx.from!.id, text, brainCtx).catch(
+                () => ({ flow: 'help_contact', message: '', shouldReply: true })
+            );
+            if (brainResult.shouldReply && brainResult.flow && brainResult.flow !== 'flow_sleep' && brainResult.flow !== 'flow_done') {
+                const btn = FLOW_BUTTONS[brainResult.flow] ?? FLOW_BUTTONS.help_contact;
+                const replyText = brainResult.message || btn.text;
+                const replyMarkup = typeof btn.action === 'string'
+                    ? { inline_keyboard: [[{ text: btn.text, callback_data: btn.action }]] }
+                    : { inline_keyboard: [[{ text: btn.text, url: btn.action.url }]] };
+                await ctx.reply(replyText, { reply_markup: replyMarkup });
+            }
             return;
         }
+
+        const iqUserId = parseInt(text, 10);
         upsertOnboardingUser(ctx.from!.id, iqUserId);
         try {
             const result = await withTimeout(checkAffiliate(iqUserId), 15_000, 'affiliate').catch(() => ({ found: false, data: null }));
