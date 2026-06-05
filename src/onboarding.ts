@@ -8,7 +8,7 @@ import {
     getTemplateByKey, setOnboardingState, touchOnboardingActivity,
     getRandomTemplate, type TemplateRecord,
     getOnboardingTracking, setLastFundingAt, incrementDemoTradeCount, getDemoTradeCount,
-    getSequenceMedia, getConfig,
+    getSequenceMedia, getConfig, getUser,
 } from './db.js';
 import { resolveUsername, applyPidgin } from './pidgin.js';
 
@@ -252,6 +252,58 @@ const REENGAGE_MAP: Record<string, string> = {
 
 export function getReengageTemplateKey(state: string): string {
     return REENGAGE_MAP[state] ?? 'reengage_entry_stuck';
+}
+
+/**
+ * Send a contextual resume prompt when user clicks /start mid-onboarding.
+ * Uses the original step templates so the user knows exactly what to send.
+ */
+export async function resumeOnboarding(ctx: Context, telegramId: number): Promise<void> {
+    const state = getUser(telegramId)?.onboarding_state ?? 'entry';
+
+    if (state === 'awaiting_user_id') {
+        await sendTemplate(ctx, 'after_video_account');
+        return;
+    }
+    if (state === 'awaiting_email') {
+        await sendTemplate(ctx, 'verify_success');
+        return;
+    }
+    if (state === 'awaiting_password') {
+        await sendTemplate(ctx, 'awaiting_password');
+        return;
+    }
+    if (state === 'entry_branch_sent') {
+        await sendTemplate(ctx, 'entry_branch_question', makeKeyboard([[
+            { text: "I'm new to trading",   callback_data: 'onboard:new' },
+            { text: 'I have traded before', callback_data: 'onboard:experienced' },
+        ]]));
+        return;
+    }
+    if (state === 'new_user_watch_video') {
+        await sendTemplate(ctx, 'new_trader_video', makeKeyboard([[
+            { text: "✅ I've watched it", callback_data: 'onboard:watched_video' },
+        ]]));
+        return;
+    }
+    if (state === 'returning_user_ask_account') {
+        await sendTemplate(ctx, 'experienced_branch', makeKeyboard([[
+            { text: '✅ I have one',      callback_data: 'onboard:have_account' },
+            { text: '🆕 Need a new one', callback_data: 'onboard:need_account' },
+        ]]));
+        return;
+    }
+
+    // Fallback — re-engagement template for any other state
+    const reengageKey = getReengageTemplateKey(state);
+    if (getTemplateByKey(reengageKey)) {
+        await sendTemplate(ctx, reengageKey);
+        return;
+    }
+
+    // Last resort — always respond
+    const name = ctx.from?.first_name ?? ctx.from?.username ?? 'there';
+    await ctx.reply(`@${name} you're still in the setup process! Check the messages above and continue where you left off 👇`);
 }
 
 // ─── Channel onboarding (no Context) ─────────────────────────────────────────

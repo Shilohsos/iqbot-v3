@@ -115,6 +115,7 @@ import {
     handleExperiencedTrader, handleHaveAccount, handleNeedAccount,
     handleUserIdVerified, handleUserIdFailed, handleEmailCollected,
     handleConnected, checkFundingSequence, getReengageTemplateKey,
+    resumeOnboarding,
 } from './onboarding.js';
 import { adminAnalyze, type AdminAnalysisResult } from './admin-analysis.js';
 import { existsSync } from 'node:fs';
@@ -808,7 +809,10 @@ async function startOnboarding(ctx: Context): Promise<void> {
     const telegramId = ctx.from!.id;
     const user = getUser(telegramId);
     // If user already has an onboarding state in progress, don't restart from scratch
-    if (user?.onboarding_state && user.onboarding_state !== 'entry') return;
+    if (user?.onboarding_state && user.onboarding_state !== 'entry') {
+        await resumeOnboarding(ctx, telegramId);
+        return;
+    }
     await startNewOnboarding(ctx, telegramId);
 }
 
