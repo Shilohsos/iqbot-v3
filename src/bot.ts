@@ -64,6 +64,7 @@ import {
     getStuckOnboardingUsers,
     getOnboardingTracking,
     setLastFollowupMsgId,
+    setLastFundingAt,
     getDemoTradeCount,
     getConnectedNonTraders,
     getDemoTraders,
@@ -949,6 +950,13 @@ async function runMartingale(
         await syncLog();
 
         // Update session stats on any settled trade
+        // Capture pre-increment demo count before settling, then increment for all settled trades
+        let demoPrevCount = 0;
+        if (balanceType === 'demo' && (result.status === 'WIN' || result.status === 'LOSS' || result.status === 'TIE')) {
+            demoPrevCount = getDailyDemoCount(ctx.from!.id);
+            incrementDailyDemoCount(ctx.from!.id);
+        }
+
         if (result.status === 'WIN' || result.status === 'LOSS' || result.status === 'TIE') {
             addUserSessionStats(ctx.from!.id, 1, roundPnl);
             giveawayRecordTrade(ctx.from!.id, round > 1);
@@ -969,14 +977,13 @@ async function runMartingale(
             sentMessages.push(winReply.message_id);
             scheduleCleanup();
             if (balanceType === 'demo') {
-                const prevDailyCount = getDailyDemoCount(ctx.from!.id);
-                if (prevDailyCount === 0) {
+                if (demoPrevCount === 0) {
                     await sendFirstTradeCongrats(ctx);
                 }
-                const newDailyCount = incrementDailyDemoCount(ctx.from!.id);
+                const newDailyCount = getDailyDemoCount(ctx.from!.id);
                 const remaining = Math.max(0, 10 - newDailyCount);
 
-                if (prevDailyCount > 0) {
+                if (demoPrevCount > 0) {
                     const counterMsg = remaining > 0
                         ? `📊 Trade ${newDailyCount}/10 — ${remaining} demo trades remaining today`
                         : `📊 Trade 10/10 — Demo limit reached for today`;
@@ -997,7 +1004,7 @@ async function runMartingale(
                     }
                 }).catch(() => {});
 
-                if (prevDailyCount > 0 && newDailyCount < 10) {
+                if (demoPrevCount > 0 && newDailyCount < 10) {
                     await showDemoUpsell(ctx, sentMessages);
                 }
 
@@ -1497,7 +1504,7 @@ bot.action(/^pair:(.+)$/, async ctx => {
         const l9 = await ctx.replyWithPhoto(ASSET(signalImg)).catch(() => undefined);
         if (l9) preTradeMessageIds.push(l9.message_id);
         const opportunityMsg = await ctx.reply(
-            `OPPORTUNITY FOUND\nConfidence: 78% · Bot is ready to execute.\n\n${dirStr}\n\n` +
+            `OPPORTUNITY FOUND\nConfidence: ${Math.round(analysis.confidence)}% · Bot is ready to execute.\n\n${dirStr}\n\n` +
             `🔷 Trading pair: ${pair}\n🔷 Amount: $${amount.toFixed(2)} USD\n` +
             `🔷 Expiration: ${tfLabel(timeframe)}\n🔷 Strategy: High-Profit ⚡`
         ).catch(() => undefined);
@@ -2813,6 +2820,24 @@ bot.action(/^giveaway:participate:(\d+)$/, async ctx => {
     });
 });
 
+bot.action(/^giveaway_activate:(\d+)$/, async ctx => {
+    await ctx.answerCbQuery('⏳ Activating…');
+    const giveawayId = parseInt(ctx.match[1], 10);
+    const event = getGiveawayEvent(giveawayId);
+    if (!event) {
+        await ctx.reply('❌ Giveaway not found.', { reply_markup: adminBackKeyboard() });
+        return;
+    }
+    if (event.status !== 'pending') {
+        await ctx.reply('❌ This giveaway is not in pending status.', { reply_markup: adminBackKeyboard() });
+        return;
+    }
+    if (event.event_type === 'giveaway') await activateGiveaway(giveawayId);
+    else if (event.event_type === 'promo_code') await activatePromoCode(giveawayId);
+    else if (event.event_type === 'marathon') await activateMarathon(giveawayId);
+    await ctx.reply(`✅ ${event.event_type} #${giveawayId} activated!`, { reply_markup: adminBackKeyboard() });
+});
+
 // Promo code schedule handler
 bot.action(/^promo_schedule:(now|\d+)$/, async ctx => {
     await ctx.answerCbQuery('⏳ Creating promo code…');
@@ -3204,7 +3229,9 @@ bot.action('admin:golive', async ctx => {
         `I'm trading live with 10x AI 💜\n\n` +
         `👇 Tap below to join`;
 
-    const LIVE_MSG_PENDING = LIVE_MSG_APPROVED;
+    const LIVE_MSG_PENDING =
+        `🟣 *10x Shiloh is LIVE right now!*\n\nI'm trading live with 10x AI 💜\n\n` +
+        `⏳ Your account is still being reviewed — but you can still watch the live session!\n\n👇 Tap below to join`;
 
     const LIVE_BTN = { inline_keyboard: [[{ text: '🔴 Join Live', url: 'https://t.me/+rPvBi_BnG5s5Zjg0' }]] };
 
@@ -4714,17 +4741,20 @@ backgroundIntervals.push(setInterval(async () => {
                 }
                 const mediaKey = key.replace(/^reengage_/, '');
                 const media = getSequenceMedia(mediaKey);
+                const s1BtnMarkup = t.button_text && t.button_url
+                    ? { inline_keyboard: [[{ text: t.button_text, url: t.button_url }]] }
+                    : undefined;
                 let sentMsgId: number;
                 if (media?.file_id) {
                     if (media.media_type === 'video') {
-                        const sent = await bot.telegram.sendVideo(chatId, media.file_id, { caption: msg });
+                        const sent = await bot.telegram.sendVideo(chatId, media.file_id, { caption: msg, ...(s1BtnMarkup ? { reply_markup: s1BtnMarkup } : {}) });
                         sentMsgId = sent.message_id;
                     } else {
-                        const sent = await bot.telegram.sendPhoto(chatId, media.file_id, { caption: msg });
+                        const sent = await bot.telegram.sendPhoto(chatId, media.file_id, { caption: msg, ...(s1BtnMarkup ? { reply_markup: s1BtnMarkup } : {}) });
                         sentMsgId = sent.message_id;
                     }
                 } else {
-                    const sent = await bot.telegram.sendMessage(chatId, msg);
+                    const sent = await bot.telegram.sendMessage(chatId, msg, s1BtnMarkup ? { reply_markup: s1BtnMarkup } : {});
                     sentMsgId = sent.message_id;
                 }
                 setReengageMsgId(chatId, sentMsgId, 'non_activated');
@@ -4737,11 +4767,7 @@ backgroundIntervals.push(setInterval(async () => {
         const idleConnected = getConnectedNonTraders(1);
         for (const user of idleConnected) {
             try {
-                const reengageKeys = [
-                    'reengage_entry_stuck', 'reengage_video_stuck', 'reengage_userid_stuck',
-                    'reengage_email_stuck', 'reengage_password_stuck', 'reengage_never_traded',
-                ];
-                const key = reengageKeys[Math.floor(Math.random() * reengageKeys.length)];
+                const key = 'reengage_never_traded';
                 const t = getTemplateByKey(key);
                 if (!t) continue;
                 const msg = resolveUsernameTemplate(t.message, user.username ?? 'there');
@@ -4752,17 +4778,20 @@ backgroundIntervals.push(setInterval(async () => {
                 }
                 const mediaKey = key.replace(/^reengage_/, '');
                 const media = getSequenceMedia(mediaKey);
+                const s2BtnMarkup = t.button_text && t.button_url
+                    ? { inline_keyboard: [[{ text: t.button_text, url: t.button_url }]] }
+                    : undefined;
                 let sentMsgId: number;
                 if (media?.file_id) {
                     if (media.media_type === 'video') {
-                        const sent = await bot.telegram.sendVideo(chatId, media.file_id, { caption: msg });
+                        const sent = await bot.telegram.sendVideo(chatId, media.file_id, { caption: msg, ...(s2BtnMarkup ? { reply_markup: s2BtnMarkup } : {}) });
                         sentMsgId = sent.message_id;
                     } else {
-                        const sent = await bot.telegram.sendPhoto(chatId, media.file_id, { caption: msg });
+                        const sent = await bot.telegram.sendPhoto(chatId, media.file_id, { caption: msg, ...(s2BtnMarkup ? { reply_markup: s2BtnMarkup } : {}) });
                         sentMsgId = sent.message_id;
                     }
                 } else {
-                    const sent = await bot.telegram.sendMessage(chatId, msg);
+                    const sent = await bot.telegram.sendMessage(chatId, msg, s2BtnMarkup ? { reply_markup: s2BtnMarkup } : {});
                     sentMsgId = sent.message_id;
                 }
                 setReengageMsgId(chatId, sentMsgId, 'idle_connected');
@@ -4790,6 +4819,11 @@ backgroundIntervals.push(setInterval(async () => {
                 if (tracking?.last_msg_id) {
                     try { await bot.telegram.deleteMessage(chatId, tracking.last_msg_id); } catch {}
                 }
+                const fundingTracking = getOnboardingTracking(chatId);
+                if (fundingTracking?.last_funding_at) {
+                    const hoursAgo = (Date.now() - new Date(fundingTracking.last_funding_at).getTime()) / 3_600_000;
+                    if (hoursAgo < 6) continue;
+                }
                 const btnMarkup = t.button_text && t.button_url
                     ? { inline_keyboard: [[{ text: t.button_text, url: t.button_url }]] }
                     : { inline_keyboard: [[{ text: '💰 Fund Account', url: 'https://iqoption.com/pwa/payments/deposit?payment_method_id=6786' }]] };
@@ -4808,6 +4842,7 @@ backgroundIntervals.push(setInterval(async () => {
                     sentMsgId = sent.message_id;
                 }
                 setReengageMsgId(chatId, sentMsgId, 'funding');
+                setLastFundingAt(chatId);
             } catch {}
             await new Promise(r => setTimeout(r, 200));
         }
