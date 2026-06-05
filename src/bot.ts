@@ -698,12 +698,16 @@ async function sendStartMenu(ctx: Context): Promise<void> {
 
     if (!user || user.approval_status === 'pending' || user.approval_status === 'manual') {
         setOnboardingState(ctx.from!.id, 'awaiting_user_id');
+        const img1 = getSequenceMedia('entry_welcome_1');
+        if (img1) await ctx.replyWithPhoto(img1.file_id).catch(() => {});
         await ctx.reply(
             "I'm 10x Special Bot 💜\n\n" +
             "The smartest semi auto-trading bot for IQ Option OTC pairs.\n\n" +
             "I scan markets. I read signals. I place trades.\n" +
             "You sit back and watch the wins land."
         );
+        const img2 = getSequenceMedia('entry_welcome_2');
+        if (img2) await ctx.replyWithPhoto(img2.file_id).catch(() => {});
         await ctx.reply(
             "Connect your IQ Option account.\n\n" +
             "Free signup · 60 seconds · Linked instantly.\n" +
