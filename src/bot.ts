@@ -1589,6 +1589,16 @@ bot.action('ui:connect', async ctx => {
 bot.action('ui:trade', async ctx => {
     await ctx.answerCbQuery();
     if (!await requireApproval(ctx)) return;
+
+    const user = getUser(ctx.from!.id);
+    if (user?.ssid && user.ssid_valid === 0) {
+        await ctx.reply(
+            '🔌 Your IQ Option session expired. Reconnect to continue trading 👇',
+            { reply_markup: { inline_keyboard: [[{ text: '🔗 Reconnect', callback_data: 'ui:connect' }]] } }
+        );
+        return;
+    }
+
     const state: WizardState = { step: 'mode' };
     try { const m = await ctx.replyWithPhoto(ASSET('L4.png')); state.lastImageMsgId = m.message_id; } catch {}
     wizardSessions.set(ctx.chat!.id, state);
@@ -1824,7 +1834,8 @@ bot.action('ui:giveaways', async ctx => {
 // ─── Legacy commands (keep for power users) ───────────────────────────────────
 
 bot.command('trade', async ctx => {
-    if (ctx.from!.id === getAdminId()) {
+    const telegramId = ctx.from!.id;
+    if (telegramId === getAdminId()) {
         const ssid = getAdminSsid();
         if (!ssid) {
             await ctx.reply(
@@ -1838,6 +1849,16 @@ bot.command('trade', async ctx => {
         return;
     }
     if (!await requireApproval(ctx)) return;
+
+    const user = getUser(telegramId);
+    if (user?.ssid && user.ssid_valid === 0) {
+        await ctx.reply(
+            '🔌 Your IQ Option session expired. Reconnect to continue trading 👇',
+            { reply_markup: { inline_keyboard: [[{ text: '🔗 Reconnect', callback_data: 'ui:connect' }]] } }
+        );
+        return;
+    }
+
     const state: WizardState = { step: 'mode' };
     try { const m = await ctx.replyWithPhoto(ASSET('L4.png')); state.lastImageMsgId = m.message_id; } catch {}
     wizardSessions.set(ctx.chat.id, state);
