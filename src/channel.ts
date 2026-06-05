@@ -1,6 +1,5 @@
 import { Telegraf } from 'telegraf';
-import { insertFunnelEvent, getRecentlyApprovedUsers, userHasActivity } from './db.js';
-import { sendNewOnboardingViaTelegram } from './onboarding.js';
+import { insertFunnelEvent } from './db.js';
 
 const CHANNEL_ID    = parseInt(process.env.CHANNEL_ID ?? '-1002766084283', 10);
 const META_TRACK_URL = process.env.META_TRACK_URL ?? 'http://localhost:8766/track';
@@ -43,66 +42,22 @@ export function setupChannelHandlers(bot: Telegraf): void {
                 console.error(`[meta] failed to send join event for ${userId}:`, err);
             });
 
-            await sendOnboarding(ctx.telegram, userId);
+            // Send simple welcome with Start Bot button
+            const botUsername = process.env.BOT_USERNAME ?? 'Shiloh10xbot';
+            await ctx.telegram.sendMessage(userId,
+                'Welcome to 10x Special Bot 💜\n\n' +
+                'Tap the button below to start and connect your IQ Option account.',
+                {
+                    reply_markup: {
+                        inline_keyboard: [[
+                            { text: '🚀 Start Bot', url: `https://t.me/${botUsername}?start` },
+                        ]],
+                    },
+                }
+            );
+            insertFunnelEvent('channel_welcome_sent', JSON.stringify({ telegram_id: userId }));
         } catch (err) {
             console.error(`[channel] failed to approve user ${userId}:`, err instanceof Error ? err.message : err);
         }
     });
-}
-
-async function sendOnboarding(telegram: Telegraf['telegram'], userId: number): Promise<void> {
-    try {
-        await sendNewOnboardingViaTelegram(telegram, userId, 'there');
-        insertFunnelEvent('channel_welcome_sent', JSON.stringify({ telegram_id: userId }));
-    } catch (err) {
-        console.error(`[channel] failed to send onboarding to ${userId}:`, err instanceof Error ? err.message : err);
-    }
-}
-
-export function startWelcomeFollowUp(bot: Telegraf): void {
-    const sentFollowUps = new Set<number>();
-
-    setInterval(async () => {
-        try {
-            const pending = getRecentlyApprovedUsers(20);
-            for (const user of pending) {
-                if (sentFollowUps.has(user.telegram_id)) continue;
-                if (userHasActivity(user.telegram_id)) {
-                    sentFollowUps.add(user.telegram_id);
-                    continue;
-                }
-                try {
-                    await bot.telegram.sendMessage(
-                        user.telegram_id,
-                        `👋 *Still there?*\n\nWe noticed you haven't started trading yet.\n\n` +
-                        `The bot is online and signals are firing right now.\n\n` +
-                        `Tap below to begin 👇`,
-                        {
-                            parse_mode: 'Markdown',
-                            reply_markup: {
-                                inline_keyboard: [[
-                                    { text: '🔗 Connect IQ Option', callback_data: 'ui:connect' },
-                                    { text: '👤 Contact Admin', url: process.env.ADMIN_CONTACT_LINK ?? 'https://t.me/shiloh_is_10xing' },
-                                ]],
-                            },
-                        }
-                    );
-                    sentFollowUps.add(user.telegram_id);
-                    insertFunnelEvent('channel_followup_sent', JSON.stringify({ telegram_id: user.telegram_id }));
-                } catch {
-                    // User may have blocked the bot
-                    sentFollowUps.add(user.telegram_id);
-                }
-            }
-            // Keep set bounded; drop the oldest half rather than clearing
-            // entirely, so users we've already messaged don't get spammed again.
-            if (sentFollowUps.size > 10_000) {
-                const keep = Array.from(sentFollowUps).slice(5_000);
-                sentFollowUps.clear();
-                for (const id of keep) sentFollowUps.add(id);
-            }
-        } catch (err) {
-            console.error('[channel] follow-up error:', err instanceof Error ? err.message : err);
-        }
-    }, 5 * 60 * 1000);
 }

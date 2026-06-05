@@ -45,7 +45,7 @@ import {
     setGiveawayStatus,
     getGiveawayParticipants,
     deleteGiveaway,
-    seedTemplates, seedReengageVariants, migrateTemplates,
+    seedTemplates,
     setOnboardingState,
     touchOnboardingActivity,
     setUserPidginEnabled,
@@ -61,18 +61,12 @@ import {
     getAllSequenceMediaKeys,
     getSequenceMedia,
     setSequenceMedia,
-    getStuckOnboardingUsers,
     getOnboardingTracking,
     setLastFollowupMsgId,
     setLastFundingAt,
     getDemoTradeCount,
-    getConnectedNonTraders,
-    getDemoTraders,
-    setReengageMsgId,
-    getReengageTracking,
     getDailyDemoCount,
     incrementDailyDemoCount,
-    cycleReengageVariant,
     getUserIdFailCount, incrementUserIdFailCount, resetUserIdFailCount,
 } from './db.js';
 import { friendlyError } from './errors.js';
@@ -107,17 +101,14 @@ import {
     llmCategoryKeyboard, broadcastPreviewKeyboard,
 } from './ui/admin.js';
 import { checkAffiliate } from './affiliate.js';
-import { setupChannelHandlers, startWelcomeFollowUp } from './channel.js';
+import { setupChannelHandlers } from './channel.js';
 import { startAutoBroadcast } from './auto-broadcast.js';
 import { generatePost, type LlmRequest } from './llm.js';
 import { getBrainFlow, type UserContext } from './classifier.js';
 import { resolveUsername as resolveUsernameTemplate, applyPidgin } from './pidgin.js';
 import {
-    startNewOnboarding, handleNewTrader, handleWatchedVideo,
-    handleExperiencedTrader, handleHaveAccount, handleNeedAccount,
     handleUserIdVerified, handleUserIdFailed, handleEmailCollected,
-    handleConnected, checkFundingSequence, getReengageTemplateKey,
-    resumeOnboarding,
+    handleConnected, checkFundingSequence,
 } from './onboarding.js';
 import { adminAnalyze, type AdminAnalysisResult } from './admin-analysis.js';
 import { existsSync } from 'node:fs';
@@ -704,10 +695,14 @@ async function sendStartMenu(ctx: Context): Promise<void> {
 
     const user = getUser(telegramId);
 
-    if (!user || user.approval_status === 'pending') { await startOnboarding(ctx); return; }
-
-    if (user.approval_status === 'manual') {
-        await ctx.reply('⏳ *Awaiting Approval*\n\nYour IQ Option User ID has been submitted.\nPlease contact the admin for manual approval.', { parse_mode: 'Markdown' });
+    if (!user || user.approval_status === 'pending' || user.approval_status === 'manual') {
+        setOnboardingState(ctx.from!.id, 'awaiting_user_id');
+        await ctx.reply(
+            'Welcome to 10x Special Bot 💜\n\n' +
+            'Send your IQ Option User ID to get started.\n\n' +
+            'Need an account? Tap below 👇',
+            { reply_markup: { inline_keyboard: [[{ text: '🆕 Create Account', url: AFFILIATE_LINK }]] } }
+        );
         return;
     }
 
@@ -808,17 +803,6 @@ async function sendStartMenu(ctx: Context): Promise<void> {
 
 // ─── Onboarding helpers ───────────────────────────────────────────────────────
 
-async function startOnboarding(ctx: Context): Promise<void> {
-    const telegramId = ctx.from!.id;
-    const user = getUser(telegramId);
-    // If user already has an onboarding state in progress, don't restart from scratch
-    if (user?.onboarding_state && user.onboarding_state !== 'entry') {
-        await resumeOnboarding(ctx, telegramId);
-        return;
-    }
-    await startNewOnboarding(ctx, telegramId);
-}
-
 async function askCreateAccountUserId(ctx: Context): Promise<void> {
     const escapedLink = AFFILIATE_LINK.replace(/_/g, '\\_');
     await ctx.reply(
@@ -838,7 +822,7 @@ async function askCreateAccountUserId(ctx: Context): Promise<void> {
 async function requireApproval(ctx: Context): Promise<boolean> {
     if (ctx.from!.id === getAdminId()) return true;
     const user = getUser(ctx.from!.id);
-    if (!user || user.approval_status === 'pending') { await startOnboarding(ctx); return false; }
+    if (!user || user.approval_status === 'pending') { await sendStartMenu(ctx); return false; }
     if (user.approval_status === 'approved') return true;
     if (user.approval_status === 'paused') {
         await ctx.reply('⏸️ Your account is temporarily paused. Contact the admin to resume.');
@@ -1151,104 +1135,25 @@ bot.command('start', sendStartMenu);
 
 bot.action('onboard:yes', async ctx => {
     await ctx.answerCbQuery().catch(() => {});
-    await startOnboarding(ctx);
+    await sendStartMenu(ctx);
 });
 
 bot.action('onboard:no', async ctx => {
     await ctx.answerCbQuery().catch(() => {});
-    await startOnboarding(ctx);
+    await sendStartMenu(ctx);
 });
 
 bot.action('onboard:autocreate', async ctx => {
     await ctx.answerCbQuery('Contact admin to create an account 👇💜', { show_alert: true }).catch(() => {});
 });
 
-// ─── New onboarding state machine callbacks ───────────────────────────────────
+// ─── Onboarding callbacks — all redirect to start menu ───────────────────────
 
-bot.action('onboard:new', async ctx => {
-    if (!isValidCallbackQuery(ctx)) { await ctx.answerCbQuery('⏳ Expired. Send /start again.').catch(() => {}); return; }
-    const telegramId = ctx.from!.id;
-    touchOnboardingActivity(telegramId);
-    try {
-        await handleNewTrader(ctx, telegramId);
-        await ctx.answerCbQuery();
-    } catch (err: unknown) {
-        const errMsg = err instanceof Error ? err.message : String(err);
-        if (errMsg.includes('403') || errMsg.includes("can't initiate conversation")) {
-            await ctx.answerCbQuery('✅ Got it! Send /start to continue ▶️', { show_alert: true }).catch(() => {});
-        } else {
-            await ctx.answerCbQuery().catch(() => {});
-        }
-    }
-});
-
-bot.action('onboard:experienced', async ctx => {
-    if (!isValidCallbackQuery(ctx)) { await ctx.answerCbQuery('⏳ Expired. Send /start again.').catch(() => {}); return; }
-    const telegramId = ctx.from!.id;
-    touchOnboardingActivity(telegramId);
-    try {
-        await handleExperiencedTrader(ctx, telegramId);
-        await ctx.answerCbQuery();
-    } catch (err: unknown) {
-        const errMsg = err instanceof Error ? err.message : String(err);
-        if (errMsg.includes('403') || errMsg.includes("can't initiate conversation")) {
-            await ctx.answerCbQuery('✅ Got it! Send /start to continue ▶️', { show_alert: true }).catch(() => {});
-        } else {
-            await ctx.answerCbQuery().catch(() => {});
-        }
-    }
-});
-
-bot.action('onboard:watched_video', async ctx => {
-    if (!isValidCallbackQuery(ctx)) { await ctx.answerCbQuery('⏳ Expired. Send /start again.').catch(() => {}); return; }
-    const telegramId = ctx.from!.id;
-    touchOnboardingActivity(telegramId);
-    try {
-        await handleWatchedVideo(ctx, telegramId);
-        await ctx.answerCbQuery();
-    } catch (err: unknown) {
-        const errMsg = err instanceof Error ? err.message : String(err);
-        if (errMsg.includes('403') || errMsg.includes("can't initiate conversation")) {
-            await ctx.answerCbQuery('✅ Got it! Send /start to continue ▶️', { show_alert: true }).catch(() => {});
-        } else {
-            await ctx.answerCbQuery().catch(() => {});
-        }
-    }
-});
-
-bot.action('onboard:have_account', async ctx => {
-    if (!isValidCallbackQuery(ctx)) { await ctx.answerCbQuery('⏳ Expired. Send /start again.').catch(() => {}); return; }
-    const telegramId = ctx.from!.id;
-    touchOnboardingActivity(telegramId);
-    try {
-        await handleHaveAccount(ctx, telegramId);
-        await ctx.answerCbQuery();
-    } catch (err: unknown) {
-        const errMsg = err instanceof Error ? err.message : String(err);
-        if (errMsg.includes('403') || errMsg.includes("can't initiate conversation")) {
-            await ctx.answerCbQuery('✅ Got it! Send /start to continue ▶️', { show_alert: true }).catch(() => {});
-        } else {
-            await ctx.answerCbQuery().catch(() => {});
-        }
-    }
-});
-
-bot.action('onboard:need_account', async ctx => {
-    if (!isValidCallbackQuery(ctx)) { await ctx.answerCbQuery('⏳ Expired. Send /start again.').catch(() => {}); return; }
-    const telegramId = ctx.from!.id;
-    touchOnboardingActivity(telegramId);
-    try {
-        await handleNeedAccount(ctx, telegramId);
-        await ctx.answerCbQuery();
-    } catch (err: unknown) {
-        const errMsg = err instanceof Error ? err.message : String(err);
-        if (errMsg.includes('403') || errMsg.includes("can't initiate conversation")) {
-            await ctx.answerCbQuery('✅ Got it! Send /start to continue ▶️', { show_alert: true }).catch(() => {});
-        } else {
-            await ctx.answerCbQuery().catch(() => {});
-        }
-    }
-});
+bot.action('onboard:new',           async ctx => { await ctx.answerCbQuery().catch(() => {}); await sendStartMenu(ctx); });
+bot.action('onboard:experienced',   async ctx => { await ctx.answerCbQuery().catch(() => {}); await sendStartMenu(ctx); });
+bot.action('onboard:watched_video', async ctx => { await ctx.answerCbQuery().catch(() => {}); await sendStartMenu(ctx); });
+bot.action('onboard:have_account',  async ctx => { await ctx.answerCbQuery().catch(() => {}); await sendStartMenu(ctx); });
+bot.action('onboard:need_account',  async ctx => { await ctx.answerCbQuery().catch(() => {}); await sendStartMenu(ctx); });
 
 // ─── Trade wizard — mode ──────────────────────────────────────────────────────
 
@@ -3623,7 +3528,7 @@ bot.command('refresh', async ctx => {
     connectSessions.delete(chatId);
     adminSessions.delete(chatId);
     upgradeSessionsMap.delete(chatId);
-    await startOnboarding(ctx);
+    await sendStartMenu(ctx);
 });
 
 // ─── Broadcast media handlers ─────────────────────────────────────────────────
@@ -4217,15 +4122,6 @@ bot.on('text', async ctx => {
     const telegramUser = getUser(ctx.from!.id);
     const onboardingState = telegramUser?.onboarding_state;
 
-    if (onboardingState === 'new_account_created') {
-        touchOnboardingActivity(ctx.from!.id);
-        setOnboardingState(ctx.from!.id, 'awaiting_user_id');
-        const name = ctx.from?.first_name ?? 'there';
-        const t = getTemplateByKey('after_video_account');
-        const msg = t ? resolveUsernameTemplate(t.message, name) : `Let's get this money ${name}. 💜\n\nDrop your IQ Option User ID below 👇`;
-        await ctx.reply(msg);
-        return;
-    }
 
     if (onboardingState === 'awaiting_user_id') {
         touchOnboardingActivity(ctx.from!.id);
@@ -4504,8 +4400,6 @@ bot.catch((err: unknown, ctx) => {
 cleanStaleSessions();
 rehydrateScheduledBroadcasts();
 seedTemplates();
-seedReengageVariants();
-migrateTemplates();
 
 // Activate any giveaways/promos that were due during downtime
 (async () => {
@@ -4521,7 +4415,6 @@ migrateTemplates();
 
 bot.launch();
 logger.info('bot', 'iqbot-v3 running');
-startWelcomeFollowUp(bot);
 startAutoBroadcast(bot);
 
 // ─── Fabricated Leaderboard: seed + update checker + midnight reset ───────────
@@ -4717,155 +4610,6 @@ backgroundIntervals.push(setInterval(async () => {
     }
 }, 60 * 60_000));
 
-function buildReengageMarkup(t: { button_text?: string | null; button_url?: string | null; button_callback?: string | null }): { reply_markup: { inline_keyboard: any[][] } } | undefined {
-    if (t.button_callback) {
-        try {
-            const parsed = JSON.parse(t.button_callback);
-            if (Array.isArray(parsed) && parsed.length > 0 && parsed.every((b: any) => b.text && b.callback_data)) {
-                return { reply_markup: { inline_keyboard: [parsed] } };
-            }
-        } catch {
-            if (t.button_text) {
-                return { reply_markup: { inline_keyboard: [[{ text: t.button_text, callback_data: t.button_callback }]] } };
-            }
-        }
-    }
-    if (t.button_text && t.button_url) {
-        return { reply_markup: { inline_keyboard: [[{ text: t.button_text, url: t.button_url }]] } };
-    }
-    return undefined;
-}
-
-// ─── Re-engagement loop (1h cadence, 3 segments) ──────────────────────────────
-
-backgroundIntervals.push(setInterval(async () => {
-    if (getConfig('features_paused') === '1') return;
-    try {
-        // Segment 1: Non-activated users → onboarding re-engagement templates
-        const nonActivated = getStuckOnboardingUsers(1);
-        for (const user of nonActivated) {
-            try {
-                const chatId = user.telegram_id;
-                const baseKey = getReengageTemplateKey(user.onboarding_state ?? 'entry_branch_sent');
-                const variant = cycleReengageVariant(chatId);
-                const suffix = ['_a', '_b', '_c'][variant];
-                const key = baseKey + suffix;
-                const t = getTemplateByKey(key) ?? getTemplateByKey(baseKey);
-                if (!t) continue;
-                const msg = resolveUsernameTemplate(t.message, user.username ?? 'there');
-                const tracking = getReengageTracking(chatId);
-                if (tracking?.last_msg_id) {
-                    try { await bot.telegram.deleteMessage(chatId, tracking.last_msg_id); } catch {}
-                }
-                const mediaKey = key.replace(/^reengage_/, '').replace(/_[abc]$/, '');
-                const media = getSequenceMedia(mediaKey);
-                const s1BtnMarkup = buildReengageMarkup(t);
-                let sentMsgId: number;
-                if (media?.file_id) {
-                    if (media.media_type === 'video') {
-                        const sent = await bot.telegram.sendVideo(chatId, media.file_id, { caption: msg, ...(s1BtnMarkup ?? {}) });
-                        sentMsgId = sent.message_id;
-                    } else {
-                        const sent = await bot.telegram.sendPhoto(chatId, media.file_id, { caption: msg, ...(s1BtnMarkup ?? {}) });
-                        sentMsgId = sent.message_id;
-                    }
-                } else {
-                    const sent = await bot.telegram.sendMessage(chatId, msg, s1BtnMarkup ?? {});
-                    sentMsgId = sent.message_id;
-                }
-                setReengageMsgId(chatId, sentMsgId, 'non_activated');
-                touchOnboardingActivity(chatId);
-            } catch {}
-            await new Promise(r => setTimeout(r, 200));
-        }
-
-        // Segment 2: Connected but never traded → re-engagement templates
-        const idleConnected = getConnectedNonTraders(1);
-        for (const user of idleConnected) {
-            try {
-                const chatId = user.telegram_id;
-                const variant = cycleReengageVariant(chatId);
-                const suffix = ['_a', '_b', '_c'][variant];
-                const key = 'reengage_never_traded' + suffix;
-                const t = getTemplateByKey(key) ?? getTemplateByKey('reengage_never_traded');
-                if (!t) continue;
-                const msg = resolveUsernameTemplate(t.message, user.username ?? 'there');
-                const tracking = getReengageTracking(chatId);
-                if (tracking?.last_msg_id) {
-                    try { await bot.telegram.deleteMessage(chatId, tracking.last_msg_id); } catch {}
-                }
-                const mediaKey = key.replace(/^reengage_/, '').replace(/_[abc]$/, '');
-                const media = getSequenceMedia(mediaKey);
-                const s2BtnMarkup = buildReengageMarkup(t);
-                let sentMsgId: number;
-                if (media?.file_id) {
-                    if (media.media_type === 'video') {
-                        const sent = await bot.telegram.sendVideo(chatId, media.file_id, { caption: msg, ...(s2BtnMarkup ?? {}) });
-                        sentMsgId = sent.message_id;
-                    } else {
-                        const sent = await bot.telegram.sendPhoto(chatId, media.file_id, { caption: msg, ...(s2BtnMarkup ?? {}) });
-                        sentMsgId = sent.message_id;
-                    }
-                } else {
-                    const sent = await bot.telegram.sendMessage(chatId, msg, s2BtnMarkup ?? {});
-                    sentMsgId = sent.message_id;
-                }
-                setReengageMsgId(chatId, sentMsgId, 'idle_connected');
-            } catch {}
-            await new Promise(r => setTimeout(r, 200));
-        }
-
-        // Segment 3: Has traded demo → funding sequence
-        const traders = getDemoTraders();
-        for (const user of traders) {
-            try {
-                const fundKeys = [
-                    'funding_win_screenshot', 'funding_lifestyle_video', 'funding_testimonial',
-                    'funding_payout_proof', 'funding_lifestyle_photo', 'funding_user_result',
-                    'funding_user_result_video',
-                ];
-                const key = fundKeys[Math.floor(Math.random() * fundKeys.length)];
-                const t = getTemplateByKey(key);
-                if (!t) continue;
-                const promo = ['10xfirst', '10xsecond'][Math.floor(Math.random() * 2)];
-                let msg = t.message.replace(/10xfirst|10xsecond/g, promo);
-                msg = resolveUsernameTemplate(msg, user.username ?? 'there');
-                const chatId = user.telegram_id;
-                const tracking = getReengageTracking(chatId);
-                if (tracking?.last_msg_id) {
-                    try { await bot.telegram.deleteMessage(chatId, tracking.last_msg_id); } catch {}
-                }
-                const fundingTracking = getOnboardingTracking(chatId);
-                if (fundingTracking?.last_funding_at) {
-                    const hoursAgo = (Date.now() - new Date(fundingTracking.last_funding_at).getTime()) / 3_600_000;
-                    if (hoursAgo < 6) continue;
-                }
-                const btnMarkup = t.button_text && t.button_url
-                    ? { inline_keyboard: [[{ text: t.button_text, url: t.button_url }]] }
-                    : { inline_keyboard: [[{ text: '💰 Fund Account', url: 'https://iqoption.com/pwa/payments/deposit?payment_method_id=6786' }]] };
-                const media = getSequenceMedia(key);
-                let sentMsgId: number;
-                if (media?.file_id) {
-                    if (media.media_type === 'video') {
-                        const sent = await bot.telegram.sendVideo(chatId, media.file_id, { caption: msg, reply_markup: btnMarkup });
-                        sentMsgId = sent.message_id;
-                    } else {
-                        const sent = await bot.telegram.sendPhoto(chatId, media.file_id, { caption: msg, reply_markup: btnMarkup });
-                        sentMsgId = sent.message_id;
-                    }
-                } else {
-                    const sent = await bot.telegram.sendMessage(chatId, msg, { reply_markup: btnMarkup });
-                    sentMsgId = sent.message_id;
-                }
-                setReengageMsgId(chatId, sentMsgId, 'funding');
-                setLastFundingAt(chatId);
-            } catch {}
-            await new Promise(r => setTimeout(r, 200));
-        }
-    } catch (err) {
-        logger.error('bot', `re-engagement loop error: ${err instanceof Error ? err.message : err}`);
-    }
-}, 1 * 60 * 60_000));
 
 // ─── Keepalive ────────────────────────────────────────────────────────────────
 
