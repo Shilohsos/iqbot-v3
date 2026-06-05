@@ -127,15 +127,30 @@ const AFFILIATE_LINK   = process.env.AFFILIATE_LINK   ?? 'https://iqbroker.com/l
 const ADMIN_CONTACT_LINK = process.env.ADMIN_CONTACT_LINK ?? 'https://t.me/shiloh_is_10xing';
 
 const FLOW_BUTTONS: Record<string, { text: string; action: string | { url: string } }> = {
-    start_trading:        { text: '🚀 Start Trading', action: 'ui:trade' },
-    reconnect:            { text: '🔗 Reconnect',     action: 'ui:connect' },
-    continue_onboarding:  { text: '▶️ Continue',      action: 'ui:start' },
-    verify_user_id:       { text: '👤 Contact Admin', action: { url: process.env.ADMIN_CONTACT_LINK ?? 'https://t.me/shiloh_is_10xing' } },
-    fund_account:         { text: '💰 Fund Account',  action: { url: 'https://iqoption.com/pwa/payments/deposit' } },
-    go_home:              { text: '🏠 Menu',           action: 'ui:start' },
-    help_contact:         { text: '👤 Contact Admin', action: { url: process.env.ADMIN_CONTACT_LINK ?? 'https://t.me/shiloh_is_10xing' } },
+    start_trading:        { text: '🚀 Start Trading',  action: 'ui:trade' },
+    reconnect:            { text: '🔗 Reconnect',      action: 'ui:connect' },
+    continue_onboarding:  { text: '▶️ Continue',       action: 'ui:start' },
+    verify_user_id:       { text: '👤 Contact Admin',  action: { url: process.env.ADMIN_CONTACT_LINK ?? 'https://t.me/shiloh_is_10xing' } },
+    fund_account:         { text: '💰 Fund Account',   action: { url: 'https://iqoption.com/pwa/payments/deposit' } },
+    go_home:              { text: '🏠 Menu',            action: 'ui:start' },
+    help_contact:         { text: '👤 Contact Admin',  action: { url: process.env.ADMIN_CONTACT_LINK ?? 'https://t.me/shiloh_is_10xing' } },
     help_user_id:         { text: '🆕 Create Account', action: { url: process.env.AFFILIATE_LINK ?? 'https://iqbroker.com/lp/regframe-01-light-nosocials/?aff=749367&aff_model=revenue' } },
+    link_account:         { text: '🔗 Connect Account', action: 'ui:connect' },
+    create_account:       { text: '🆕 Create Account', action: { url: process.env.AFFILIATE_LINK ?? 'https://iqbroker.com/lp/regframe-01-light-nosocials/?aff=749367&aff_model=revenue' } },
 };
+
+type UserSegment = 'non_activated' | 'non_funded' | 'funded';
+
+function getUserSegment(telegramId: number): UserSegment {
+    const user = getUser(telegramId);
+    if (!user) return 'non_activated';
+    if (user.tier === 'PRO' || user.tier === 'MASTER') return 'funded';
+    if (user.ssid_valid === 1 && user.ssid && user.ssid !== '') return 'non_funded';
+    return 'non_activated';
+}
+
+const nonActivatedResponseCount = new Map<number, number>();
+const MAX_NON_ACTIVATED_RESPONSES = 3;
 
 // Resolve assets dir from env, else from the source layout (src/.. -> assets).
 // Warn loudly at startup if the directory doesn't exist so image sends don't
@@ -1139,6 +1154,15 @@ async function showDemoLimitReached(ctx: Context): Promise<void> {
 
 bot.command('start', sendStartMenu);
 
+bot.command('refresh', async ctx => {
+    const telegramId = ctx.from!.id;
+    clearUserSsid(telegramId);
+    setSsidValid(telegramId, 0);
+    resetUser(telegramId);
+    setOnboardingState(telegramId, '');
+    await ctx.reply('🔄 Reset complete\\.\n\nUse /start to begin again\\.', { parse_mode: 'MarkdownV2' });
+});
+
 // ─── Account connection choice ────────────────────────────────────────────────
 
 // ─── Old callback stubs — redirect cached keyboards to new onboarding ─────────
@@ -1588,21 +1612,19 @@ bot.action('ui:stats', async ctx => {
 bot.action('ui:upgrade', async ctx => {
     await ctx.answerCbQuery();
     connectSessions.delete(ctx.chat!.id);
-    const tier = normalizeTier(getUser(ctx.from!.id)?.tier);
-    const nextTier = tier === 'DEMO' ? 'PRO' : 'MASTER';
-    const cost = nextTier === 'PRO' ? '$10' : '$50';
     const fundUrl = process.env.FUNDING_URL ?? 'https://iqoption.com/pwa/payments/deposit';
     await ctx.reply(
-        `💡 *Upgrade Your Tier*\n\n` +
-        `Fund your account with at least *${cost}* to automatically unlock *${nextTier}* tier\\.\n\n` +
-        `You'll be upgraded instantly once your balance reaches this threshold\\.`,
+        `💡 *Tiers & Upgrade*\n\n` +
+        `🧪 *DEMO* — Practice mode\\. Max 10 trades\\/day\\.\n` +
+        `⚡ *PRO* — Live trading \\- Fund *\\$10\\+* into IQ Option\\.\n` +
+        `👑 *MASTER* — Live trading \\- Fund *\\$50\\+* into IQ Option\\.\n\n` +
+        `Your tier upgrades automatically once your balance hits the threshold\\.`,
         {
-            parse_mode: 'Markdown',
+            parse_mode: 'MarkdownV2',
             reply_markup: {
                 inline_keyboard: [
                     [{ text: '💰 Fund Account', url: fundUrl }],
-                    [{ text: '🔓 Upgrade with Token', callback_data: 'ui:upgrade_token' }],
-                    [{ text: '👤 Contact Admin', url: ADMIN_CONTACT_LINK }],
+                    [{ text: '🔑 Enter Token', callback_data: 'ui:upgrade_token' }],
                     [{ text: '🔙 Back', callback_data: 'ui:start' }],
                 ],
             },
@@ -1694,11 +1716,21 @@ bot.action('ui:help', async ctx => {
     await ctx.answerCbQuery();
     await ctx.reply(
         `❓ *Help & FAQ*\n\n` +
-        `*How does the bot work?*\nAnalyzes OTC pairs and places trades via Smart Recovery.\n\n` +
-        `*What is Smart Recovery?*\nIf a trade loses, the next bet doubles to recover the loss. Up to 6 rounds.\n\n` +
-        `*Demo vs Live?*\nDemo uses practice balance. Live uses your real account balance.\n\n` +
-        `*How to withdraw?*\nAll funds stay in your IQ Option account — withdraw directly from there.`,
-        { parse_mode: 'Markdown', reply_markup: backKeyboard() }
+        `*📹 How to trade with 10x Bot*\\\n` +
+        `[Watch video](https://youtu.be/b0s1lnZgqAI?si=bGWHTnsA7qIujtMc)\n\n` +
+        `*📹 How to fund & withdraw*\\\n` +
+        `[Watch video](https://youtu.be/b0s1lnZgqAI?si=bGWHTnsA7qIujtMc)\n\n` +
+        `*Q: What is Smart Recovery?*\\\n` +
+        `If a trade loses, the bot doubles the next stake to recover the loss\\. Up to 6 rounds\\.\n\n` +
+        `*Q: Demo vs Live?*\\\n` +
+        `Demo uses practice balance\\. Live uses your real IQ Option balance\\.\n\n` +
+        `*Q: How do I withdraw?*\\\n` +
+        `All funds stay in your IQ Option account — withdraw directly from there\\.\n\n` +
+        `*Q: Why is my session expired?*\\\n` +
+        `IQ Option sessions expire after inactivity\\. Use /connect to reconnect\\.\n\n` +
+        `*Q: How do I upgrade my tier?*\\\n` +
+        `Deposit \\$10\\+ for PRO or \\$50\\+ for MASTER\\. Your tier upgrades automatically\\.`,
+        { parse_mode: 'MarkdownV2', reply_markup: backKeyboard() }
     );
 });
 
@@ -3627,6 +3659,7 @@ async function handleUserIdBrainRoute(ctx: Context, telegramId: number, lastInpu
         demo_trade_count: null,
         tier: 'DEMO',
         user_id_fail_count: failCount,
+        is_activated: false,
     };
     try {
         // Bypass the SSID pre-check by calling classifyFlow directly — user has no SSID by definition here
@@ -4163,20 +4196,40 @@ bot.on('text', async ctx => {
                 await handleUserIdVerified(ctx, ctx.from!.id);
             } else {
                 const failCount = incrementUserIdFailCount(ctx.from!.id);
-                if (failCount < 2) {
+                const adminId = getAdminId();
+                if (adminId) {
+                    bot.telegram.sendMessage(adminId,
+                        `⚠️ *User ID verification failed*\n\nUser: ${ctx.from!.id} (@${ctx.from!.username ?? 'no username'})\nAttempt: ${failCount}\nLast input: \`${text}\``,
+                        { parse_mode: 'Markdown' }
+                    ).catch(() => {});
+                }
+                if (failCount >= 3) {
+                    await ctx.reply(
+                        '❌ *Couldn\'t verify your User ID*\\.\n\nContact admin for manual verification 👇\nThey\'ll help you get set up\\.',
+                        { parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: '👤 Contact Admin', url: ADMIN_CONTACT_LINK }]] } }
+                    );
+                } else {
                     await handleUserIdFailed(ctx, ctx.from!.id, failCount);
                     setOnboardingState(ctx.from!.id, 'awaiting_user_id');
-                } else {
-                    await handleUserIdBrainRoute(ctx, ctx.from!.id, text, failCount);
                 }
             }
         } catch {
             const failCount = incrementUserIdFailCount(ctx.from!.id);
-            if (failCount < 2) {
+            const adminId = getAdminId();
+            if (adminId) {
+                bot.telegram.sendMessage(adminId,
+                    `⚠️ *User ID verification failed*\n\nUser: ${ctx.from!.id} (@${ctx.from!.username ?? 'no username'})\nAttempt: ${failCount}\nLast input: \`${text}\``,
+                    { parse_mode: 'Markdown' }
+                ).catch(() => {});
+            }
+            if (failCount >= 3) {
+                await ctx.reply(
+                    '❌ *Couldn\'t verify your User ID*\\.\n\nContact admin for manual verification 👇\nThey\'ll help you get set up\\.',
+                    { parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: '👤 Contact Admin', url: ADMIN_CONTACT_LINK }]] } }
+                );
+            } else {
                 await handleUserIdFailed(ctx, ctx.from!.id, failCount);
                 setOnboardingState(ctx.from!.id, 'awaiting_user_id');
-            } else {
-                await handleUserIdBrainRoute(ctx, ctx.from!.id, text, failCount);
             }
         }
         return;
@@ -4330,23 +4383,34 @@ bot.on('text', async ctx => {
         return;
     }
 
-    // ── LLM brain — only for connected users ─────────────────────────────────
+    // ── LLM brain — all users ────────────────────────────────────────────────
     const user = getUser(ctx.from!.id);
     const state = user?.onboarding_state;
-    const isSetupState = state && ['entry', 'awaiting_user_id', 'awaiting_email', 'awaiting_password', 'new_account_created'].includes(state);
     const brainWiz = wizardSessions.get(chatId);
+    const isActivated = user?.ssid_valid === 1 && !!user?.ssid;
 
-    if (!isSetupState && !brainWiz) {
+    if (!isActivated) {
+        const count = (nonActivatedResponseCount.get(ctx.from!.id) ?? 0) + 1;
+        nonActivatedResponseCount.set(ctx.from!.id, count);
+        if (count > MAX_NON_ACTIVATED_RESPONSES) return;
+    }
+
+    if (!brainWiz) {
         const brainCtx: UserContext = {
             onboarding_state: state ?? null,
             ssid_valid: user?.ssid_valid ?? null,
             has_ssid: !!user?.ssid,
             demo_trade_count: user ? getDemoTradeCount(user.telegram_id) : null,
             tier: user?.tier ?? 'DEMO',
+            is_activated: isActivated,
         };
-        const brainResult = await getBrainFlow(ctx.from!.id, text, brainCtx).catch(() => ({ flow: 'go_home', message: '', shouldReply: true }));
-        if (brainResult.shouldReply) {
-            const btn = FLOW_BUTTONS[brainResult.flow] ?? FLOW_BUTTONS.go_home;
+        const brainResult = await getBrainFlow(ctx.from!.id, text, brainCtx).catch(
+            () => ({ flow: 'go_home', message: '', shouldReply: false })
+        );
+        if (brainResult.flow === 'flow_sleep' || brainResult.flow === 'flow_done') return;
+        if (brainResult.shouldReply && brainResult.flow) {
+            if (!isActivated && !['link_account', 'verify_user_id', 'create_account'].includes(brainResult.flow)) return;
+            const btn = FLOW_BUTTONS[brainResult.flow] ?? FLOW_BUTTONS.help_contact;
             const replyText = brainResult.message || btn.text;
             const replyMarkup = typeof btn.action === 'string'
                 ? { inline_keyboard: [[{ text: btn.text, callback_data: btn.action }]] }
@@ -4462,6 +4526,10 @@ async function fireFundingCycle(bot: Telegraf): Promise<void> {
     for (const { telegram_id } of users) {
         try {
             const cycle = getFundingCycle(telegram_id);
+            if (getUserSegment(telegram_id) !== 'non_funded') {
+                upsertFundingCycle(telegram_id, cycle?.last_sent_at ?? null, cycle?.last_msg_id ?? null, isoNow(7 * 24 * 3_600_000));
+                continue;
+            }
             if (cycle?.next_run_at && new Date(cycle.next_run_at).getTime() > now) continue;
 
             const lastTrade = getLastTradeTime(telegram_id);
@@ -4578,6 +4646,10 @@ async function fireReconnectCycle(bot: Telegraf): Promise<void> {
     for (const { telegram_id, state } of unique) {
         try {
             const cycle = getReconnectCycle(telegram_id);
+            if (getUserSegment(telegram_id) !== 'non_activated') {
+                upsertReconnectCycle(telegram_id, cycle?.last_state ?? null, cycle?.last_msg_id ?? null, isoNow(7 * 24 * 3_600_000));
+                continue;
+            }
             if (cycle?.next_run_at && new Date(cycle.next_run_at).getTime() > now) continue;
 
             const msg = getReconnectMessage(state);

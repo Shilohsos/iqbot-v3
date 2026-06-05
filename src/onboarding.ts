@@ -94,5 +94,13 @@ export async function handleConnected(ctx: Context, telegramId: number, balanceT
     await ctx.reply(msg, {
         reply_markup: makeKeyboard([[{ text: 'Take a trade 👾', callback_data: 'ui:trade' }]]),
     });
+    await ctx.reply(
+        `Here are your commands:\n\n` +
+        `/start — Open main menu\n` +
+        `/refresh — Reset everything and start over\n` +
+        `/connect — Reconnect your IQ Option account\n\n` +
+        `Tap the menu button below to begin 👇`,
+        { reply_markup: makeKeyboard([[{ text: '🏠 Menu', callback_data: 'ui:start' }]]) }
+    );
 }
 

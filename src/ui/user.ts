@@ -8,10 +8,7 @@ export function startKeyboard(tier?: string): IKMarkup {
     const cfg = getTierConfig(tier);
     const rows: Btn[][] = [
         [{ text: 'Take a trade 👾', callback_data: 'ui:trade' }],
-        [
-            { text: 'History 📆',  callback_data: 'ui:history' },
-            { text: 'Stats 📈',    callback_data: 'ui:stats' },
-        ],
+        [{ text: 'History 📆', callback_data: 'ui:history' }],
         cfg.canViewLeaderboard
             ? [
                 { text: 'Upgrade 💡',     callback_data: 'ui:upgrade' },

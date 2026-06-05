@@ -13,55 +13,45 @@ const VALID_FLOWS = new Set([
     'go_home',
     'help_contact',
     'help_user_id',
+    'link_account',
+    'create_account',
+    'flow_sleep',
+    'flow_done',
 ]);
 
 const SYSTEM_PROMPT = `You are a flow router for a trading bot called "10x Bot".
 
-A user has sent a message. Your job is to decide which flow to push them into AND write a short, contextual reply telling them what to do next.
+A user has sent a casual message outside the button-based flow. Your job is to decide if they need help and what to do.
 
-You receive their message AND their current state in the bot.
+You receive: their message, their current state, and their connection status.
 
-Available flows:
-- start_trading — User wants to trade or hasn't started yet. Push to trading.
-- reconnect — User's session is expired or they can't connect. Push to reconnect.
-- continue_onboarding — User is in the middle of setting up. Push to continue.
-- verify_user_id — User sent what looks like a numeric User ID (7-10 digits).
-- fund_account — User wants to deposit or fund their account.
-- go_home — General help, what to do, menu. Push to main menu.
-- help_contact — User needs human help, complaining, frustrated.
-- help_user_id — User keeps failing User ID verification. They need help creating an account or admin assistance.
+RULES:
 
-Rules:
-1. If the message is a number with 7-10 digits → verify_user_id
-2. If user is in an onboarding state (entry, awaiting_email, etc.) → continue_onboarding
-3. If user hasn't traded (demo_trade_count=0 or null) → start_trading
-4. If user asks about funding/deposit → fund_account
-5. If user is angry or needs admin → help_contact
-6. If user is stuck on User ID verification and keeps failing → help_user_id
-7. For anything else → go_home
+1. CHECK if the user's current flow is still active and the message looks like a mistake (accidental text, gibberish, off-topic). If so → flow_sleep (no response needed, user is fine).
 
-Your reply message must:
-- Be SHORT (1-2 lines max)
-- BRIEFLY explain what the user should do next — one clear instruction
-- Feel like a real person, not a robot
-- Use the user's language/energy level from their message
+2. If the user IS connected (ssid_valid=1, has_ssid=true, is_activated=true):
+   - Check if their SSID is working. If expired → prompt reconnect.
+   - Check if their current flow is broken (wrong state, stuck). If broken → prompt restart that flow.
+   - Check if they made a client error (wrong amount, wrong pair). If so → correct them gently.
+   - If all clear but they need help → route to appropriate flow.
+   - Available flows: start_trading, reconnect, fund_account, go_home, help_contact, help_user_id.
 
-Example good messages:
-- "Your session expired. Tap Reconnect and enter your email/password to get back in 👇"
-- "You haven't started trading yet. Hit Start Trading and let's make moves 💜"
-- "Let's get your account setup first. Tap Continue below 👇"
-- "You need to fund your account to trade live. Tap Fund Account when you're ready 🟣"
-- "Drop your IQ Option User ID below and I'll get you verified 🆔"
-- "Having trouble with your User ID? Let's get you a fresh account 👇"
+3. If the user is NOT connected (is_activated=false, no SSID or ssid_valid=0):
+   - Only route to: link_account (prompt to connect IQ Option), verify_user_id (send User ID), create_account (affiliate link).
+   - Do not respond to off-topic messages.
 
-Respond with ONLY a JSON object in this exact format — no other text:
-{"flow": "action_name", "message": "your short reply here"}
+4. If the user just sent a greeting, thanks, or casual chat → flow_sleep (no response).
+
+Respond with ONLY a JSON object:
+{"flow": "flow_name", "message": "your reply", "shouldReply": true}
+
+Use shouldReply: false with flow_sleep to silently ignore. Use flow_done to stop further responses after the non-activated limit.
 
 Examples:
-{"flow": "reconnect", "message": "Your session expired. Tap Reconnect to sign back in 👇"}
-{"flow": "start_trading", "message": "You haven't traded yet. Tap Start Trading and let's go 💜"}
-{"flow": "go_home", "message": "What would you like to do? Check your balance or start trading 👇"}
-{"flow": "help_user_id", "message": "Having trouble with your User ID? Let's get you a fresh account 👇"}`;
+{"flow": "reconnect", "message": "Your session expired. Tap Reconnect to sign back in 👇", "shouldReply": true}
+{"flow": "start_trading", "message": "You haven't traded yet. Tap Start Trading and let's go 💜", "shouldReply": true}
+{"flow": "link_account", "message": "Connect your IQ Option account first. Tap the button below 👇", "shouldReply": true}
+{"flow": "flow_sleep", "message": "", "shouldReply": false}`;
 
 const rateLimitMap = new Map<number, number>();
 const RATE_LIMIT_MS = 5_000;
@@ -80,6 +70,8 @@ export interface UserContext {
     demo_trade_count: number | null;
     tier: string;
     user_id_fail_count?: number;
+    brain_response_count?: number;
+    is_activated: boolean;
 }
 
 export interface BrainResult {
@@ -98,7 +90,8 @@ async function classifyFlow(text: string, context: UserContext): Promise<BrainRe
         `ssid_valid=${context.ssid_valid ?? 'null'},`,
         `has_ssid=${context.has_ssid},`,
         `demo_trade_count=${context.demo_trade_count ?? 0},`,
-        `tier=${context.tier}`,
+        `tier=${context.tier},`,
+        `is_activated=${context.is_activated}`,
         context.user_id_fail_count ? `, user_id_fail_count=${context.user_id_fail_count}` : '',
     ].join(' ');
 
@@ -129,11 +122,12 @@ async function classifyFlow(text: string, context: UserContext): Promise<BrainRe
         const raw = (data.choices[0]?.message?.content ?? '').trim();
 
         try {
-            const parsed = JSON.parse(raw) as { flow?: string; message?: string };
+            const parsed = JSON.parse(raw) as { flow?: string; message?: string; shouldReply?: boolean };
             const flow = (parsed.flow ?? '').trim().toLowerCase();
             const message = (parsed.message ?? '').trim();
-            if (VALID_FLOWS.has(flow) && message) {
-                return { flow, message, shouldReply: true };
+            const shouldReply = parsed.shouldReply !== false;
+            if (VALID_FLOWS.has(flow)) {
+                return { flow, message, shouldReply };
             }
         } catch {
             // JSON parse failed — fall through to go_home
