@@ -8,7 +8,7 @@ import {
     getTemplateByKey, setOnboardingState, touchOnboardingActivity,
     getRandomTemplate, type TemplateRecord,
     getOnboardingTracking, setLastFundingAt, incrementDemoTradeCount, getDemoTradeCount,
-    getSequenceMedia, getConfig, getUser,
+    getSequenceMedia, getConfig, getUser, db,
 } from './db.js';
 import { resolveUsername, applyPidgin } from './pidgin.js';
 
@@ -78,6 +78,13 @@ function delay(ms: number): Promise<void> {
 /** Triggered by /start for new users or users without an SSID. */
 export async function startNewOnboarding(ctx: Context, telegramId: number): Promise<void> {
     if (getConfig('features_paused') === '1') return;
+    db.prepare(`
+        INSERT INTO users (telegram_id, approval_status, created_at)
+        VALUES (?, 'pending', datetime('now'))
+        ON CONFLICT(telegram_id) DO UPDATE SET
+            approval_status = COALESCE(approval_status, 'pending'),
+            created_at = COALESCE(created_at, datetime('now'))
+    `).run(telegramId);
     setOnboardingState(telegramId, 'entry');
     const name = firstName(ctx);
 
@@ -318,6 +325,13 @@ export async function sendNewOnboardingViaTelegram(
     firstName: string,
 ): Promise<void> {
     if (getConfig('features_paused') === '1') return;
+    db.prepare(`
+        INSERT INTO users (telegram_id, approval_status, created_at)
+        VALUES (?, 'pending', datetime('now'))
+        ON CONFLICT(telegram_id) DO UPDATE SET
+            approval_status = COALESCE(approval_status, 'pending'),
+            created_at = COALESCE(created_at, datetime('now'))
+    `).run(userId);
 
     const sendTemplateTelegram = async (key: string, extraKeyboard?: { inline_keyboard: Btn[][] }) => {
         const t = getTemplateByKey(key);
