@@ -71,6 +71,9 @@ import {
     db,
     getFundingCycle, upsertFundingCycle, getFundingCycleDueUsers,
     getDemoUsersWithTrades, getLastTradeTime,
+    getReconnectCycle, upsertReconnectCycle, getReconnectCycleDueUsers,
+    getSsidExpiredUsers, getUserIdRejectedUsers, getLoginFailedUsers,
+    getAbandonedOnboardingUsers, getNeverConnectedUsers,
 } from './db.js';
 import { friendlyError } from './errors.js';
 import { logger } from './logger.js';
@@ -4522,11 +4525,116 @@ function startFundingLoop(bot: Telegraf): void {
     setInterval(() => { fireFundingCycle(bot); }, 60_000);
 }
 
+// ─── Unified reconnect flow (1h cadence, DB-persistent) ──────────────────────
+
+type ReconnectState = 'ssid_expired' | 'user_id_rejected' | 'login_failed' | 'onboarding_abandoned' | 'never_connected';
+type ReconnectBtn = { text: string; callback_data: string } | { text: string; url: string };
+
+function getReconnectMessage(state: ReconnectState): { text: string; button: ReconnectBtn } | null {
+    switch (state) {
+        case 'ssid_expired':
+            return {
+                text: '🟣 *Your session expired*\n\nNo panic. Just reconnect.\n\n1️⃣ Tap 🔗 Reconnect below\n2️⃣ Enter your email and password\n3️⃣ Back to winning 💜',
+                button: { text: '🔗 Reconnect', callback_data: 'ui:connect' },
+            };
+        case 'user_id_rejected':
+            return {
+                text: '🟣 *We couldn\'t verify that User ID*\n\n✅ Make sure it\'s the number under your profile name in IQ Option\n✅ Copy and paste it — no spaces, no dashes\n\nTry again 👇',
+                button: { text: '📝 Send User ID', callback_data: 'ui:start' },
+            };
+        case 'login_failed':
+            return {
+                text: '🟣 *Login didn\'t go through*\n\nDouble-check your IQ Option email and password.\n\n1️⃣ Tap 🔗 Connect below\n2️⃣ Enter the correct email and password\n3️⃣ We\'ll handle the rest',
+                button: { text: '🔗 Connect', callback_data: 'ui:connect' },
+            };
+        case 'onboarding_abandoned':
+            return {
+                text: '🟣 *You didn\'t finish setting up*\n\nYour account is waiting. Takes 60 seconds.\n\n1️⃣ Tap ▶️ Continue below\n2️⃣ Pick up where you stopped',
+                button: { text: '▶️ Continue', callback_data: 'ui:start' },
+            };
+        case 'never_connected':
+            return {
+                text: '🟣 *You\'re approved but not connected*\n\nLink your IQ Option account to start trading with 10x Bot 💜\n\n1️⃣ Tap 🔗 Connect below\n2️⃣ Enter your IQ Option email and password\n3️⃣ Let the bot work',
+                button: { text: '🔗 Connect', callback_data: 'ui:connect' },
+            };
+        default:
+            return null;
+    }
+}
+
+async function fireReconnectCycle(bot: Telegraf): Promise<void> {
+    if (getConfig('features_paused') === '1') return;
+    const now = Date.now();
+    const all: Array<{ telegram_id: number; state: ReconnectState }> = [
+        ...getSsidExpiredUsers().map(u => ({ telegram_id: u.telegram_id, state: 'ssid_expired' as ReconnectState })),
+        ...getUserIdRejectedUsers().map(u => ({ telegram_id: u.telegram_id, state: 'user_id_rejected' as ReconnectState })),
+        ...getLoginFailedUsers().map(u => ({ telegram_id: u.telegram_id, state: 'login_failed' as ReconnectState })),
+        ...getAbandonedOnboardingUsers().map(u => ({ telegram_id: u.telegram_id, state: 'onboarding_abandoned' as ReconnectState })),
+        ...getNeverConnectedUsers().map(u => ({ telegram_id: u.telegram_id, state: 'never_connected' as ReconnectState })),
+    ];
+    const seen = new Set<number>();
+    const unique = all.filter(u => { if (seen.has(u.telegram_id)) return false; seen.add(u.telegram_id); return true; });
+
+    for (const { telegram_id, state } of unique) {
+        try {
+            const cycle = getReconnectCycle(telegram_id);
+            if (cycle?.next_run_at && new Date(cycle.next_run_at).getTime() > now) continue;
+
+            const msg = getReconnectMessage(state);
+            if (!msg) continue;
+
+            if (cycle?.last_msg_id) {
+                bot.telegram.deleteMessage(telegram_id, cycle.last_msg_id).catch(() => {});
+            }
+
+            const sent = await bot.telegram.sendMessage(telegram_id, msg.text, {
+                reply_markup: { inline_keyboard: [[msg.button]] },
+                parse_mode: 'Markdown',
+            }).catch(() => undefined);
+
+            if (sent) {
+                upsertReconnectCycle(telegram_id, state, sent.message_id, isoNow(3_600_000));
+            }
+        } catch (err) {
+            console.error(`[reconnect] error for ${telegram_id}:`, err instanceof Error ? err.message : err);
+        }
+    }
+}
+
+function seedReconnectCycle(): void {
+    const all = [
+        ...getSsidExpiredUsers(),
+        ...getUserIdRejectedUsers(),
+        ...getLoginFailedUsers(),
+        ...getAbandonedOnboardingUsers(),
+        ...getNeverConnectedUsers(),
+    ];
+    const seen = new Set<number>();
+    for (const { telegram_id } of all) {
+        if (seen.has(telegram_id)) continue;
+        seen.add(telegram_id);
+        if (!getReconnectCycle(telegram_id)) {
+            upsertReconnectCycle(telegram_id, null, null, isoNow(300_000));
+        }
+    }
+}
+
+function startReconnectLoop(bot: Telegraf): void {
+    const dueNow = getReconnectCycleDueUsers();
+    if (dueNow.length > 0) {
+        console.log(`[reconnect] startup: ${dueNow.length} users due`);
+        fireReconnectCycle(bot);
+    }
+    setInterval(() => { fireReconnectCycle(bot); }, 60_000);
+}
+
 bot.launch();
 logger.info('bot', 'iqbot-v3 running');
 startAutoBroadcast(bot);
 seedFundingCycle();
 startFundingLoop(bot);
+seedReconnectCycle();
+startReconnectLoop(bot);
 
 // ─── Fabricated Leaderboard: seed + update checker + midnight reset ───────────
 
@@ -4692,34 +4800,6 @@ backgroundIntervals.push(setInterval(async () => {
     }
 }, 60 * 60_000));
 
-// ─── Reconnect-prompt loop (hourly tick, 6h cadence per user) ───────────────────
-// Users whose SSID is known-expired (and couldn't be auto-reconnected) get a
-// reconnect prompt. The first one stays; each follow-up deletes the previous so
-// only one is ever visible.
-backgroundIntervals.push(setInterval(async () => {
-    try {
-        const due = getUsersDueForReconnectPrompt(6);
-        for (const user of due) {
-            try {
-                if (user.reconnect_prompt_msg_id) {
-                    try { await bot.telegram.deleteMessage(user.telegram_id, user.reconnect_prompt_msg_id); } catch {}
-                }
-                const sent = await bot.telegram.sendMessage(
-                    user.telegram_id,
-                    '🔐 Your session expired.\n\nReconnect in 3 steps:\n1️⃣ Tap the 🔗 Reconnect button below\n2️⃣ Enter your IQ Option email and password\n3️⃣ Get back to trading instantly',
-                    { reply_markup: { inline_keyboard: [[{ text: '🔗 Reconnect', callback_data: 'ui:connect' }]] } }
-                );
-                setReconnectPrompt(user.telegram_id, sent.message_id);
-            } catch {
-                // user blocked the bot — stamp the attempt so we back off 6h
-                setReconnectPrompt(user.telegram_id, null);
-            }
-            await new Promise(r => setTimeout(r, 100));
-        }
-    } catch (err) {
-        logger.error('bot', `reconnect-prompt loop error: ${err instanceof Error ? err.message : err}`);
-    }
-}, 60 * 60_000));
 
 
 // ─── Keepalive ────────────────────────────────────────────────────────────────

@@ -185,6 +185,15 @@ db.exec(`
 `);
 
 db.exec(`
+  CREATE TABLE IF NOT EXISTS reconnect_cycle (
+    telegram_id   INTEGER PRIMARY KEY,
+    last_state    TEXT,
+    last_msg_id   INTEGER,
+    next_run_at   TEXT
+  )
+`);
+
+db.exec(`
   CREATE TABLE IF NOT EXISTS onboarding_tracking (
     telegram_id       INTEGER PRIMARY KEY,
     entry_sent_at     TEXT,
@@ -2246,6 +2255,67 @@ export function getDemoUsersWithTrades(): Array<{ telegram_id: number }> {
 export function getLastTradeTime(telegramId: number): Date | null {
     const row = db.prepare(`SELECT MAX(created_at) AS last_at FROM trades WHERE telegram_id = ?`).get(telegramId) as { last_at: string | null } | undefined;
     return row?.last_at ? new Date(row.last_at) : null;
+}
+
+// ─── Reconnect cycle ──────────────────────────────────────────────────────────
+
+export function getReconnectCycle(telegramId: number): { last_state: string | null; last_msg_id: number | null; next_run_at: string | null } | undefined {
+    return db.prepare('SELECT last_state, last_msg_id, next_run_at FROM reconnect_cycle WHERE telegram_id = ?').get(telegramId) as any;
+}
+
+export function upsertReconnectCycle(telegramId: number, last_state: string | null, last_msg_id: number | null, next_run_at: string): void {
+    db.prepare(`
+        INSERT INTO reconnect_cycle (telegram_id, last_state, last_msg_id, next_run_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(telegram_id) DO UPDATE SET
+            last_state  = excluded.last_state,
+            last_msg_id = excluded.last_msg_id,
+            next_run_at = excluded.next_run_at
+    `).run(telegramId, last_state, last_msg_id, next_run_at);
+}
+
+export function getReconnectCycleDueUsers(): Array<{ telegram_id: number }> {
+    return db.prepare(`SELECT telegram_id FROM reconnect_cycle WHERE next_run_at IS NOT NULL AND next_run_at <= datetime('now')`).all() as any;
+}
+
+export function getSsidExpiredUsers(): Array<{ telegram_id: number }> {
+    return db.prepare(`SELECT telegram_id FROM users WHERE ssid_valid = 0 AND ssid IS NOT NULL AND ssid != '' AND approval_status = 'approved'`).all() as any;
+}
+
+export function getUserIdRejectedUsers(): Array<{ telegram_id: number }> {
+    return db.prepare(`
+        SELECT u.telegram_id FROM users u
+        JOIN onboarding_tracking ot ON ot.telegram_id = u.telegram_id
+        WHERE ot.user_id_fail_count >= 3 AND u.onboarding_state = 'awaiting_user_id'
+    `).all() as any;
+}
+
+export function getLoginFailedUsers(): Array<{ telegram_id: number }> {
+    return db.prepare(`
+        SELECT u.telegram_id FROM users u
+        LEFT JOIN onboarding_tracking ot ON ot.telegram_id = u.telegram_id
+        WHERE u.onboarding_state = 'awaiting_password'
+        AND (ot.last_activity_at IS NULL OR ot.last_activity_at < datetime('now', '-1 hour'))
+    `).all() as any;
+}
+
+export function getAbandonedOnboardingUsers(): Array<{ telegram_id: number }> {
+    return db.prepare(`
+        SELECT u.telegram_id FROM users u
+        LEFT JOIN onboarding_tracking ot ON ot.telegram_id = u.telegram_id
+        WHERE u.onboarding_state IN ('awaiting_user_id', 'awaiting_email', 'awaiting_password')
+        AND (ot.last_activity_at IS NULL OR ot.last_activity_at < datetime('now', '-6 hours'))
+    `).all() as any;
+}
+
+export function getNeverConnectedUsers(): Array<{ telegram_id: number }> {
+    return db.prepare(`
+        SELECT telegram_id FROM users
+        WHERE approval_status = 'approved'
+        AND (ssid IS NULL OR ssid = '')
+        AND (onboarding_state IS NULL OR onboarding_state = '')
+        AND last_used > datetime('now', '-30 days')
+    `).all() as any;
 }
 
 /** Users stuck in an onboarding state for longer than `hours`. */
