@@ -365,10 +365,10 @@ export async function sendNewOnboardingViaTelegram(
     setOnboardingState(userId, 'entry_branch_sent');
     const t3 = getTemplateByKey('entry_branch_question');
     const branchMsg = t3 ? resolveUsername(t3.message, firstName) : 'Are you new to trading?';
+    const botUsername = process.env.BOT_USERNAME ?? 'Shiloh10xbot';
     await telegram.sendMessage(userId, branchMsg, {
-        reply_markup: makeKeyboard([[
-            { text: "I'm new to trading",   callback_data: 'onboard:new' },
-            { text: 'I have traded before', callback_data: 'onboard:experienced' },
-        ]]),
+        reply_markup: { inline_keyboard: [[
+            { text: '🚀 Start Bot', url: `https://t.me/${botUsername}?start=onboard` },
+        ]] },
     });
 }
