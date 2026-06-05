@@ -84,6 +84,18 @@ export function normalizeTier(tier: string | null | undefined): 'DEMO' | 'PRO' |
 
 const rateCache = new Map<string, { rate: number; expires: number }>();
 
+// Fallback rates for currencies the SDK may not support
+// Approximate — fine for tier promotion thresholds; updated periodically
+const FALLBACK_RATES: Record<string, number> = {
+    NGN: 0.00067,   // ~₦1,500 = $1
+    KES: 0.0077,    // ~KES 130 = $1
+    GHS: 0.069,     // ~GHS 14.5 = $1
+    ZAR: 0.054,     // ~ZAR 18.5 = $1
+    INR: 0.012,     // ~INR 83 = $1
+    IDR: 0.000062,  // ~IDR 16,000 = $1
+    BRL: 0.19,      // ~BRL 5.3 = $1
+};
+
 export async function convertToUsd(amount: number, currency: string, sdk: ClientSdk): Promise<number> {
     if (currency === 'USD') return amount;
 
@@ -96,13 +108,22 @@ export async function convertToUsd(amount: number, currency: string, sdk: Client
         const currencies = await sdk.currencies();
         const c = await currencies.getCurrency(currency);
         const rate = c.rateUsd;
-        if (!rate || rate <= 0) return amount;
-        rateCache.set(currency, { rate, expires: Date.now() + 3_600_000 });
-        return amount * rate;
+        if (rate && rate > 0) {
+            rateCache.set(currency, { rate, expires: Date.now() + 3_600_000 });
+            return amount * rate;
+        }
     } catch {
-        logger.warn('tiers', `currency conversion failed for ${currency}, returning 0 to prevent false promotion`);
-        return 0;
+        logger.warn('tiers', `currency conversion via SDK failed for ${currency}, trying fallback`);
     }
+
+    const fallbackRate = FALLBACK_RATES[currency.toUpperCase()];
+    if (fallbackRate && fallbackRate > 0) {
+        logger.info('tiers', `using fallback rate for ${currency}: ${fallbackRate}`);
+        return amount * fallbackRate;
+    }
+
+    logger.warn('tiers', `no conversion rate available for ${currency}, returning 0`);
+    return 0;
 }
 
 export function autoPromoteTier(telegramId: number, realBalance: number, currentTier: string): string | null {
