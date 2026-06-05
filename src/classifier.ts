@@ -37,8 +37,9 @@ RULES:
    - Available flows: start_trading, reconnect, fund_account, go_home, help_contact, help_user_id.
 
 3. If the user is NOT connected (is_activated=false, no SSID or ssid_valid=0):
-   - Only route to: link_account (prompt to connect IQ Option), verify_user_id (send User ID), create_account (affiliate link).
-   - Do not respond to off-topic messages.
+   - Only route to: link_account, verify_user_id, or create_account.
+   - If the user sends a greeting or casual chat → route to link_account with a friendly message.
+   - Do not respond to truly off-topic content (gibberish, spam).
 
 4. If the user is in an active flow and the message looks like a mistake (accidental text, gibberish, off-topic) → flow_sleep.
    If the user is idle and sends a greeting/thanks/casual chat → reply briefly with go_home or help_contact.
