@@ -39,7 +39,8 @@ const VALID_FLOWS = new Set([
 
 const SYSTEM_PROMPT = `You are a flow router for a trading bot called "10x Bot".
 
-A user has sent a message. Your job is to decide which flow to push them into.
+A user has sent a message. Your job is to decide which flow to push them into AND write a short, contextual reply telling them what to do next.
+
 You receive their message AND their current state in the bot.
 
 Available flows:
@@ -60,7 +61,26 @@ Rules:
 6. If user is angry or needs admin → help_contact
 7. For anything else → go_home
 
-Respond with ONLY the flow name in lowercase. Nothing else.`;
+Your reply message must:
+- Be SHORT (1-2 lines max)
+- BRIEFLY explain what the user should do next — one clear instruction
+- Feel like a real person, not a robot
+- Use the user's language/energy level from their message
+
+Example good messages:
+- "Your session expired. Tap Reconnect and enter your email/password to get back in 👇"
+- "You haven't started trading yet. Hit Start Trading and let's make moves 💜"
+- "Let's get your account setup first. Tap Continue below 👇"
+- "You need to fund your account to trade live. Tap Fund Account when you're ready 🟣"
+- "Drop your IQ Option User ID below and I'll get you verified 🆔"
+
+Respond with ONLY a JSON object in this exact format — no other text:
+{"flow": "action_name", "message": "your short reply here"}
+
+Examples:
+{"flow": "reconnect", "message": "Your session expired. Tap Reconnect to sign back in 👇"}
+{"flow": "start_trading", "message": "You haven't traded yet. Tap Start Trading and let's go 💜"}
+{"flow": "go_home", "message": "What would you like to do? Check your balance or start trading 👇"}`;
 
 const rateLimitMap = new Map<number, number>();
 const RATE_LIMIT_MS = 5_000;
@@ -107,23 +127,35 @@ async function classifyFlow(text: string, context: UserContext): Promise<string>
                     { role: 'system', content: SYSTEM_PROMPT },
                     { role: 'user', content: `Message: "${text}"\n\n${contextStr}` },
                 ],
-                max_tokens: 20,
-                temperature: 0,
+                max_tokens: 150,
+                temperature: 0.3,
             }),
             signal: controller.signal,
         });
 
         if (!resp.ok) throw new Error(`DeepSeek ${resp.status}`);
         const data = await resp.json() as { choices: Array<{ message: { content: string } }> };
-        const raw = (data.choices[0]?.message?.content ?? '').trim().toLowerCase();
-        return VALID_FLOWS.has(raw) ? raw : 'go_home';
+        const raw = (data.choices[0]?.message?.content ?? '').trim();
+
+        // Parse JSON response: {"flow": "...", "message": "..."}
+        try {
+            const parsed = JSON.parse(raw);
+            const flow = (parsed.flow ?? '').trim().toLowerCase();
+            const message = (parsed.message ?? '').trim();
+            if (VALID_FLOWS.has(flow) && message) {
+                return { flow, message };
+            }
+        } catch {
+            // JSON parse failed — fall through to go_home
+        }
+        return { flow: 'go_home', message: '' };
     } catch (err) {
         if (err instanceof Error && err.name === 'AbortError') {
             console.warn('[brain] DeepSeek request timed out');
-            return 'go_home';
+            return { flow: 'go_home', message: '' };
         }
         console.warn('[brain] error:', err instanceof Error ? err.message : err);
-        return 'go_home';
+        return { flow: 'go_home', message: '' };
     } finally {
         clearTimeout(timeoutId);
     }
@@ -131,6 +163,7 @@ async function classifyFlow(text: string, context: UserContext): Promise<string>
 
 export interface BrainResult {
     flow: string;
+    message: string;
     shouldReply: boolean;
 }
 
@@ -139,53 +172,29 @@ export async function getBrainFlow(
     text: string,
     context: UserContext,
 ): Promise<BrainResult> {
-    if (getConfig('features_paused') === '1') return { flow: 'go_home', shouldReply: false };
-    if (!checkRateLimit(userId)) return { flow: 'go_home', shouldReply: false };
+    if (getConfig('features_paused') === '1') return { flow: 'go_home', message: '', shouldReply: false };
+    if (!checkRateLimit(userId)) return { flow: 'go_home', message: '', shouldReply: false };
 
-    const flow = await classifyFlow(text, context);
-
-    // Always reply with a push-to-flow message
-    return { flow, shouldReply: true };
+    return await classifyFlow(text, context);
 }
 ```
 
 ### 2. Add flow action mapping in `src/bot.ts`
 
-Add a constant mapping flow actions to pre-written messages and buttons. Place near the top of bot.ts where other UI constants are:
+Add a constant mapping flow actions to buttons only (messages come from DeepSeek now). Place near the top of bot.ts where other UI constants are:
 
 ```typescript
-const FLOW_ACTIONS: Record<string, {
-    message: string;
-    button: { text: string; action: string | { url: string } };
+const FLOW_BUTTONS: Record<string, {
+    text: string;
+    action: string | { url: string };
 }> = {
-    start_trading: {
-        message: 'Welcome back! Ready to trade? Tap below 👇',
-        button: { text: '🚀 Start Trading', action: 'ui:trade' },
-    },
-    reconnect: {
-        message: 'Your session expired. Reconnect in seconds 👇',
-        button: { text: '🔗 Reconnect', action: 'ui:connect' },
-    },
-    continue_onboarding: {
-        message: "You're almost there! Let's finish setting up 👇",
-        button: { text: '▶️ Continue', action: 'ui:start' },
-    },
-    verify_user_id: {
-        message: 'Drop your IQ Option User ID below to get verified 🆔',
-        button: { text: '👤 Contact Admin', action: { url: process.env.ADMIN_CONTACT_LINK ?? 'https://t.me/shiloh_is_10xing' } },
-    },
-    fund_account: {
-        message: 'Fund your account and start trading live! 🚀',
-        button: { text: '💰 Fund Account', action: { url: 'https://iqoption.com/pwa/payments/deposit' } },
-    },
-    go_home: {
-        message: 'What would you like to do? 👇',
-        button: { text: '🏠 Menu', action: 'ui:start' },
-    },
-    help_contact: {
-        message: 'Need help? The admin is ready for you 👇',
-        button: { text: '👤 Contact Admin', action: { url: process.env.ADMIN_CONTACT_LINK ?? 'https://t.me/shiloh_is_10xing' } },
-    },
+    start_trading:    { text: '🚀 Start Trading',    action: 'ui:trade' },
+    reconnect:        { text: '🔗 Reconnect',        action: 'ui:connect' },
+    continue_onboarding: { text: '▶️ Continue',     action: 'ui:start' },
+    verify_user_id:   { text: '👤 Contact Admin',    action: { url: process.env.ADMIN_CONTACT_LINK ?? 'https://t.me/shiloh_is_10xing' } },
+    fund_account:     { text: '💰 Fund Account',     action: { url: 'https://iqoption.com/pwa/payments/deposit' } },
+    go_home:          { text: '🏠 Menu',              action: 'ui:start' },
+    help_contact:     { text: '👤 Contact Admin',    action: { url: process.env.ADMIN_CONTACT_LINK ?? 'https://t.me/shiloh_is_10xing' } },
 };
 ```
 
@@ -232,20 +241,20 @@ if (!brainWiz) {
         demo_trade_count: user ? getDemoTradeCount(user.telegram_id) : null,
         tier: user?.tier ?? 'DEMO',
     };
-    const brainFlow = await getBrainFlow(ctx.from!.id, text, context).catch(() => ({ flow: 'go_home', shouldReply: true }));
+    const brainFlow = await getBrainFlow(ctx.from!.id, text, context).catch(() => ({ flow: 'go_home', message: '', shouldReply: true }));
     if (brainFlow.shouldReply && brainFlow.flow) {
-        const flowDef = FLOW_ACTIONS[brainFlow.flow] ?? FLOW_ACTIONS.go_home;
-        const name = ctx.from?.first_name ?? ctx.from?.username ?? 'there';
-        const msg = flowDef.message.replace('@username', `@${name}`);
+        const btn = FLOW_BUTTONS[brainFlow.flow] ?? FLOW_BUTTONS.go_home;
+        // Use DeepSeek's contextual message if available, fall back to static
+        const replyText = brainFlow.message || btn.text;
         let replyMarkup: { inline_keyboard: Array<Array<{ text: string; callback_data?: string; url?: string }>> } | undefined;
         
-        if (typeof flowDef.button.action === 'string') {
-            replyMarkup = { inline_keyboard: [[{ text: flowDef.button.text, callback_data: flowDef.button.action }]] };
+        if (typeof btn.action === 'string') {
+            replyMarkup = { inline_keyboard: [[{ text: btn.text, callback_data: btn.action }]] };
         } else {
-            replyMarkup = { inline_keyboard: [[{ text: flowDef.button.text, url: flowDef.button.action.url }]] };
+            replyMarkup = { inline_keyboard: [[{ text: btn.text, url: btn.action.url }]] };
         }
         
-        await ctx.reply(msg, { reply_markup: replyMarkup });
+        await ctx.reply(replyText, { reply_markup: replyMarkup });
     }
     return;
 }
@@ -269,10 +278,10 @@ Also ensure `getDemoTradeCount` is imported from `./db.js` (add if missing).
 ## Verification
 
 1. `npx tsc --noEmit` — must pass with zero errors
-2. Send "hello" to the bot → should respond with "Welcome back! Ready to trade?" + [🚀 Start Trading] button
-3. Send a 9-digit number → should respond with "Drop your IQ Option User ID below" + [👤 Contact Admin] button
-4. Send "I can't connect" with expired SSID → should respond with "Your session expired" + [🔗 Reconnect] button
-5. No conversational responses — every brain response has a button pushing to a flow
+2. Send "hello" to the bot → DeepSeek responds with contextual message + [🚀 Start Trading] button
+3. Send a 9-digit number → DeepSeek detects User ID pattern + [👤 Contact Admin] button
+4. Send "I can't connect" with expired SSID → DeepSeek responds about session + [🔗 Reconnect] button
+5. DeepSeek's message is always contextual (tells user what to do next) — every response has a button pushing to a flow
 6. Bot should not crash or hang on DeepSeek API timeout (10s fallback to go_home)
 
 ## Migration
