@@ -305,6 +305,32 @@ export function seedReengageVariants(): void {
     if (updated > 0) console.log(`[db] updated ${updated} re-engagement templates with callback buttons`);
 }
 
+/** Idempotent: apply template content updates for existing DBs that already skipped seedTemplates(). */
+export function migrateTemplates(): void {
+    const AFFILIATE = process.env.AFFILIATE_LINK ?? 'https://iqbroker.com/lp/regframe-01-light-nosocials/?aff=749367&aff_model=revenue';
+
+    // experienced_need_new: new message + Create Account button + correct state
+    db.prepare(`
+        UPDATE templates SET
+            message = ?,
+            button_text = '🆕 Create Account',
+            button_url = ?,
+            state = 'new_account_created'
+        WHERE key = 'experienced_need_new'
+          AND (message NOT LIKE '%I''ll wait right here%')
+    `).run('No problem @username. 💜\n\nTap the button below to create your free IQ Option account. I\'ll wait right here 👇', AFFILIATE);
+
+    // verify_fail_2: new message + Create Account button
+    db.prepare(`
+        UPDATE templates SET
+            message = ?,
+            button_text = '🆕 Create Account',
+            button_url = ?
+        WHERE key = 'verify_fail_2'
+          AND (message NOT LIKE '%Did you create your account%')
+    `).run('Still not matching @username. Did you create your account through the link we provided?\n\n1️⃣ Tap the Create Account button below\n2️⃣ Use the same email you signed up with\n3️⃣ Send your new User ID here 👇', AFFILIATE);
+}
+
 // ─── Section 10 tables ────────────────────────────────────────────────────────
 
 db.exec(`

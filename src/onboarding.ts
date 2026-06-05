@@ -146,7 +146,7 @@ export async function handleHaveAccount(ctx: Context, telegramId: number): Promi
 
 /** Handler for onboard:need_account */
 export async function handleNeedAccount(ctx: Context, telegramId: number): Promise<void> {
-    setOnboardingState(telegramId, 'awaiting_user_id');
+    setOnboardingState(telegramId, 'new_account_created');
     await sendTemplate(ctx, 'experienced_need_new');
 }
 
@@ -268,6 +268,10 @@ export function getReengageTemplateKey(state: string): string {
 export async function resumeOnboarding(ctx: Context, telegramId: number): Promise<void> {
     const state = getUser(telegramId)?.onboarding_state ?? 'entry';
 
+    if (state === 'new_account_created') {
+        await sendTemplate(ctx, 'experienced_need_new');
+        return;
+    }
     if (state === 'awaiting_user_id') {
         await sendTemplate(ctx, 'after_video_account');
         return;

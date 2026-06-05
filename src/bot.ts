@@ -45,7 +45,7 @@ import {
     setGiveawayStatus,
     getGiveawayParticipants,
     deleteGiveaway,
-    seedTemplates, seedReengageVariants,
+    seedTemplates, seedReengageVariants, migrateTemplates,
     setOnboardingState,
     touchOnboardingActivity,
     setUserPidginEnabled,
@@ -1668,6 +1668,7 @@ bot.action('ui:start', async ctx => { await ctx.answerCbQuery(); await sendStart
 bot.action('ui:connect', async ctx => {
     await ctx.answerCbQuery();
     connectSessions.set(ctx.chat!.id, { step: 'email' });
+    setOnboardingState(ctx.from!.id, 'awaiting_email');
     await ctx.reply('📧 Enter your IQ Option email:');
 });
 
@@ -4279,6 +4280,17 @@ bot.on('text', async ctx => {
     // ── New onboarding state machine text handling ────────────────────────────
     const telegramUser = getUser(ctx.from!.id);
     const onboardingState = telegramUser?.onboarding_state;
+
+    if (onboardingState === 'new_account_created') {
+        touchOnboardingActivity(ctx.from!.id);
+        setOnboardingState(ctx.from!.id, 'awaiting_user_id');
+        const name = ctx.from?.first_name ?? 'there';
+        const t = getTemplateByKey('after_video_account');
+        const msg = t ? resolveUsernameTemplate(t.message, name) : `Let's get this money ${name}. 💜\n\nDrop your IQ Option User ID below 👇`;
+        await ctx.reply(msg);
+        return;
+    }
+
     if (onboardingState === 'awaiting_user_id') {
         touchOnboardingActivity(ctx.from!.id);
         const iqUserId = parseInt(text, 10);
@@ -4316,6 +4328,7 @@ bot.on('text', async ctx => {
 
     if (onboardingState === 'awaiting_email') {
         touchOnboardingActivity(ctx.from!.id);
+        connectSessions.delete(chatId);
         const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text.trim());
         if (!emailOk) { await ctx.reply('That doesn\'t look like a valid email address. Try again 👇'); return; }
         // Store email in session for password step
@@ -4695,6 +4708,7 @@ cleanStaleSessions();
 rehydrateScheduledBroadcasts();
 seedTemplates();
 seedReengageVariants();
+migrateTemplates();
 
 // Activate any giveaways/promos that were due during downtime
 (async () => {
