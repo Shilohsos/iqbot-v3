@@ -1162,16 +1162,25 @@ bot.action('onboard:yes', async ctx => {
         await ctx.answerCbQuery('⏳ This request is no longer valid. Send /start to begin again.').catch(() => {});
         return;
     }
-    await ctx.answerCbQuery();
     const chatId = ctx.chat!.id;
     const existing = onboardSessions.get(chatId) ?? { step: 'user_id' as OnboardStep };
     onboardSessions.set(chatId, { ...existing, step: 'user_id' });
-    await ctx.reply(
-        `🔢 Enter your IQ Option User ID\n\n` +
-        `How to find it:\n` +
-        `Open IQ Option → Profile → copy the numeric User ID 🆔\n\n` +
-        `Then paste that here 👇👾`
-    );
+    try {
+        await ctx.reply(
+            `🔢 Enter your IQ Option User ID\n\n` +
+            `How to find it:\n` +
+            `Open IQ Option → Profile → copy the numeric User ID 🆔\n\n` +
+            `Then paste that here 👇👾`
+        );
+        await ctx.answerCbQuery();
+    } catch (err: unknown) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        if (errMsg.includes('403') || errMsg.includes("can't initiate conversation")) {
+            await ctx.answerCbQuery('✅ Got it! Send /start to continue ▶️', { show_alert: true }).catch(() => {});
+        } else {
+            await ctx.answerCbQuery().catch(() => {});
+        }
+    }
 });
 
 bot.action('onboard:no', async ctx => {
@@ -1179,67 +1188,130 @@ bot.action('onboard:no', async ctx => {
         await ctx.answerCbQuery('⏳ This request is no longer valid. Send /start to begin again.').catch(() => {});
         return;
     }
-    await ctx.answerCbQuery();
     const chatId = ctx.chat!.id;
     const existing = onboardSessions.get(chatId) ?? { step: 'create_user_id' as OnboardStep };
     onboardSessions.set(chatId, { ...existing, step: 'create_user_id' });
-    await askCreateAccountUserId(ctx);
+    try {
+        await askCreateAccountUserId(ctx);
+        await ctx.answerCbQuery();
+    } catch (err: unknown) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        if (errMsg.includes('403') || errMsg.includes("can't initiate conversation")) {
+            await ctx.answerCbQuery('✅ Got it! Send /start to continue ▶️', { show_alert: true }).catch(() => {});
+        } else {
+            await ctx.answerCbQuery().catch(() => {});
+        }
+    }
 });
 
 bot.action('onboard:autocreate', async ctx => {
-    await ctx.answerCbQuery();
     const chatId = ctx.chat!.id;
     const existing = onboardSessions.get(chatId) ?? { step: 'auto_create_email' as OnboardStep };
     onboardSessions.set(chatId, { ...existing, step: 'auto_create_email' });
-    await ctx.reply(
-        '🤖 *Account creation*\n\n' +
-        'Send us a fresh email address and we\'ll set up an IQ Option account for you. ' +
-        'You\'ll get the login details once it\'s ready.\n\n' +
-        '📧 Enter your email:',
-        { parse_mode: 'Markdown' }
-    );
+    try {
+        await ctx.reply(
+            '🤖 *Account creation*\n\n' +
+            'Send us a fresh email address and we\'ll set up an IQ Option account for you. ' +
+            'You\'ll get the login details once it\'s ready.\n\n' +
+            '📧 Enter your email:',
+            { parse_mode: 'Markdown' }
+        );
+        await ctx.answerCbQuery();
+    } catch (err: unknown) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        if (errMsg.includes('403') || errMsg.includes("can't initiate conversation")) {
+            await ctx.answerCbQuery('✅ Got it! Send /start to continue ▶️', { show_alert: true }).catch(() => {});
+        } else {
+            await ctx.answerCbQuery().catch(() => {});
+        }
+    }
 });
 
 // ─── New onboarding state machine callbacks ───────────────────────────────────
 
 bot.action('onboard:new', async ctx => {
     if (!isValidCallbackQuery(ctx)) { await ctx.answerCbQuery('⏳ Expired. Send /start again.').catch(() => {}); return; }
-    await ctx.answerCbQuery();
     const telegramId = ctx.from!.id;
     touchOnboardingActivity(telegramId);
-    await handleNewTrader(ctx, telegramId);
+    try {
+        await handleNewTrader(ctx, telegramId);
+        await ctx.answerCbQuery();
+    } catch (err: unknown) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        if (errMsg.includes('403') || errMsg.includes("can't initiate conversation")) {
+            await ctx.answerCbQuery('✅ Got it! Send /start to continue ▶️', { show_alert: true }).catch(() => {});
+        } else {
+            await ctx.answerCbQuery().catch(() => {});
+        }
+    }
 });
 
 bot.action('onboard:experienced', async ctx => {
     if (!isValidCallbackQuery(ctx)) { await ctx.answerCbQuery('⏳ Expired. Send /start again.').catch(() => {}); return; }
-    await ctx.answerCbQuery();
     const telegramId = ctx.from!.id;
     touchOnboardingActivity(telegramId);
-    await handleExperiencedTrader(ctx, telegramId);
+    try {
+        await handleExperiencedTrader(ctx, telegramId);
+        await ctx.answerCbQuery();
+    } catch (err: unknown) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        if (errMsg.includes('403') || errMsg.includes("can't initiate conversation")) {
+            await ctx.answerCbQuery('✅ Got it! Send /start to continue ▶️', { show_alert: true }).catch(() => {});
+        } else {
+            await ctx.answerCbQuery().catch(() => {});
+        }
+    }
 });
 
 bot.action('onboard:watched_video', async ctx => {
     if (!isValidCallbackQuery(ctx)) { await ctx.answerCbQuery('⏳ Expired. Send /start again.').catch(() => {}); return; }
-    await ctx.answerCbQuery();
     const telegramId = ctx.from!.id;
     touchOnboardingActivity(telegramId);
-    await handleWatchedVideo(ctx, telegramId);
+    try {
+        await handleWatchedVideo(ctx, telegramId);
+        await ctx.answerCbQuery();
+    } catch (err: unknown) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        if (errMsg.includes('403') || errMsg.includes("can't initiate conversation")) {
+            await ctx.answerCbQuery('✅ Got it! Send /start to continue ▶️', { show_alert: true }).catch(() => {});
+        } else {
+            await ctx.answerCbQuery().catch(() => {});
+        }
+    }
 });
 
 bot.action('onboard:have_account', async ctx => {
     if (!isValidCallbackQuery(ctx)) { await ctx.answerCbQuery('⏳ Expired. Send /start again.').catch(() => {}); return; }
-    await ctx.answerCbQuery();
     const telegramId = ctx.from!.id;
     touchOnboardingActivity(telegramId);
-    await handleHaveAccount(ctx, telegramId);
+    try {
+        await handleHaveAccount(ctx, telegramId);
+        await ctx.answerCbQuery();
+    } catch (err: unknown) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        if (errMsg.includes('403') || errMsg.includes("can't initiate conversation")) {
+            await ctx.answerCbQuery('✅ Got it! Send /start to continue ▶️', { show_alert: true }).catch(() => {});
+        } else {
+            await ctx.answerCbQuery().catch(() => {});
+        }
+    }
 });
 
 bot.action('onboard:need_account', async ctx => {
     if (!isValidCallbackQuery(ctx)) { await ctx.answerCbQuery('⏳ Expired. Send /start again.').catch(() => {}); return; }
-    await ctx.answerCbQuery();
     const telegramId = ctx.from!.id;
     touchOnboardingActivity(telegramId);
-    await handleNeedAccount(ctx, telegramId);
+    try {
+        await handleNeedAccount(ctx, telegramId);
+        await ctx.answerCbQuery();
+    } catch (err: unknown) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        if (errMsg.includes('403') || errMsg.includes("can't initiate conversation")) {
+            await ctx.answerCbQuery('✅ Got it! Send /start to continue ▶️', { show_alert: true }).catch(() => {});
+        } else {
+            await ctx.answerCbQuery().catch(() => {});
+        }
+    }
 });
 
 // ─── Trade wizard — mode ──────────────────────────────────────────────────────
