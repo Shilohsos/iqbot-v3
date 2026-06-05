@@ -88,14 +88,6 @@ export function tfLabel(timeframeSec: number): string {
 }
 
 
-export function hasAccountKeyboard(): IKMarkup {
-    return {
-        inline_keyboard: [
-            [{ text: '✅ I have an IQ Option account', callback_data: 'onboard:yes' }],
-            [{ text: '🆕 Create one free (takes 2 min)', callback_data: 'onboard:no' }],
-        ],
-    };
-}
 
 export function tradeModeKeyboard(): IKMarkup {
     return {

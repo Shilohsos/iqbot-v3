@@ -159,16 +159,5 @@ export async function getBrainFlow(
     if (getConfig('features_paused') === '1') return { flow: 'go_home', message: '', shouldReply: false };
     if (!checkRateLimit(userId)) return { flow: 'go_home', message: '', shouldReply: false };
 
-    // Pre-check: missing or expired SSID → always reconnect before calling DeepSeek
-    if (!context.has_ssid || context.ssid_valid === 0) {
-        return {
-            flow: 'reconnect',
-            message: context.has_ssid
-                ? 'Your IQ Option session expired. Tap Reconnect to sign back in 👇'
-                : 'You need to connect your IQ Option account. Tap Connect to get started 🟣',
-            shouldReply: true,
-        };
-    }
-
     return classifyFlow(text, context);
 }

@@ -91,7 +91,7 @@ import {
     amountKeyboard, timeframeKeyboard, pairKeyboard, tfLabel, OTC_PAIRS,
     tradeModeKeyboard, demoUpsellKeyboard, affiliateFailKeyboard,
 } from './menu.js';
-import { startKeyboard, backKeyboard, onboardKeyboard } from './ui/user.js';
+import { startKeyboard, backKeyboard } from './ui/user.js';
 import {
     getAdminId, adminKeyboard, adminBackKeyboard,
     broadcastTargetKeyboard, broadcastLinkKeyboard, broadcastActionKeyboard, broadcastTimerKeyboard,
@@ -819,16 +819,6 @@ async function startOnboarding(ctx: Context): Promise<void> {
     await startNewOnboarding(ctx, telegramId);
 }
 
-async function askAccountConnection(ctx: Context): Promise<void> {
-    await ctx.reply(
-        `Connect your IQ Option account.\n\n` +
-        `Free signup · 60 seconds · Linked instantly.\n` +
-        `Bot trades on your account. Money stays yours.\n\n` +
-        `Pick what fits 👇`,
-        { reply_markup: onboardKeyboard() }
-    );
-}
-
 async function askCreateAccountUserId(ctx: Context): Promise<void> {
     const escapedLink = AFFILIATE_LINK.replace(/_/g, '\\_');
     await ctx.reply(
@@ -1157,74 +1147,20 @@ bot.command('start', sendStartMenu);
 
 // ─── Account connection choice ────────────────────────────────────────────────
 
+// ─── Old callback stubs — redirect cached keyboards to new onboarding ─────────
+
 bot.action('onboard:yes', async ctx => {
-    if (!isValidCallbackQuery(ctx)) {
-        await ctx.answerCbQuery('⏳ This request is no longer valid. Send /start to begin again.').catch(() => {});
-        return;
-    }
-    const chatId = ctx.chat!.id;
-    const existing = onboardSessions.get(chatId) ?? { step: 'user_id' as OnboardStep };
-    onboardSessions.set(chatId, { ...existing, step: 'user_id' });
-    try {
-        await ctx.reply(
-            `🔢 Enter your IQ Option User ID\n\n` +
-            `How to find it:\n` +
-            `Open IQ Option → Profile → copy the numeric User ID 🆔\n\n` +
-            `Then paste that here 👇👾`
-        );
-        await ctx.answerCbQuery();
-    } catch (err: unknown) {
-        const errMsg = err instanceof Error ? err.message : String(err);
-        if (errMsg.includes('403') || errMsg.includes("can't initiate conversation")) {
-            await ctx.answerCbQuery('✅ Got it! Send /start to continue ▶️', { show_alert: true }).catch(() => {});
-        } else {
-            await ctx.answerCbQuery().catch(() => {});
-        }
-    }
+    await ctx.answerCbQuery().catch(() => {});
+    await startOnboarding(ctx);
 });
 
 bot.action('onboard:no', async ctx => {
-    if (!isValidCallbackQuery(ctx)) {
-        await ctx.answerCbQuery('⏳ This request is no longer valid. Send /start to begin again.').catch(() => {});
-        return;
-    }
-    const chatId = ctx.chat!.id;
-    const existing = onboardSessions.get(chatId) ?? { step: 'create_user_id' as OnboardStep };
-    onboardSessions.set(chatId, { ...existing, step: 'create_user_id' });
-    try {
-        await askCreateAccountUserId(ctx);
-        await ctx.answerCbQuery();
-    } catch (err: unknown) {
-        const errMsg = err instanceof Error ? err.message : String(err);
-        if (errMsg.includes('403') || errMsg.includes("can't initiate conversation")) {
-            await ctx.answerCbQuery('✅ Got it! Send /start to continue ▶️', { show_alert: true }).catch(() => {});
-        } else {
-            await ctx.answerCbQuery().catch(() => {});
-        }
-    }
+    await ctx.answerCbQuery().catch(() => {});
+    await startOnboarding(ctx);
 });
 
 bot.action('onboard:autocreate', async ctx => {
-    const chatId = ctx.chat!.id;
-    const existing = onboardSessions.get(chatId) ?? { step: 'auto_create_email' as OnboardStep };
-    onboardSessions.set(chatId, { ...existing, step: 'auto_create_email' });
-    try {
-        await ctx.reply(
-            '🤖 *Account creation*\n\n' +
-            'Send us a fresh email address and we\'ll set up an IQ Option account for you. ' +
-            'You\'ll get the login details once it\'s ready.\n\n' +
-            '📧 Enter your email:',
-            { parse_mode: 'Markdown' }
-        );
-        await ctx.answerCbQuery();
-    } catch (err: unknown) {
-        const errMsg = err instanceof Error ? err.message : String(err);
-        if (errMsg.includes('403') || errMsg.includes("can't initiate conversation")) {
-            await ctx.answerCbQuery('✅ Got it! Send /start to continue ▶️', { show_alert: true }).catch(() => {});
-        } else {
-            await ctx.answerCbQuery().catch(() => {});
-        }
-    }
+    await ctx.answerCbQuery('Contact admin to create an account 👇💜', { show_alert: true }).catch(() => {});
 });
 
 // ─── New onboarding state machine callbacks ───────────────────────────────────
@@ -4392,145 +4328,6 @@ bot.on('text', async ctx => {
                 setOnboardingState(ctx.from!.id, 'awaiting_email');
                 await ctx.reply('❌ Login failed. Please double-check your email:\n\n📧 Enter your IQ Option email:');
             }
-        }
-        return;
-    }
-
-    // ── Onboarding wizard ────────────────────────────────────────────────────
-    const ob = onboardSessions.get(chatId);
-    if (ob) {
-        if (ob.step === 'user_id' || ob.step === 'create_user_id') {
-            const iqUserId = parseInt(text, 10);
-            if (isNaN(iqUserId) || iqUserId <= 0) { await ctx.reply('Please enter a valid numeric IQ Option User ID.'); return; }
-            await ctx.reply('🔍 Checking your account...');
-            upsertOnboardingUser(ctx.from!.id, iqUserId);
-            if (ob.tier) setUserTier(ctx.from!.id, ob.tier);
-
-            try {
-                const result = await withTimeout(checkAffiliate(iqUserId), 15_000, 'affiliate')
-                    .catch(() => ({ found: false, data: null }));
-                if (result.found) {
-                    approveUser(ctx.from!.id, result.data ? JSON.stringify(result.data) : undefined);
-                    ob.iqUserId = iqUserId;
-                    ob.step = 'connect_email';
-                    onboardSessions.set(chatId, ob);
-                    await ctx.reply('✅ Account verified! You\'re all set.\n\n📧 Enter your IQ Option email:');
-                } else {
-                    setManualApproval(ctx.from!.id);
-                    onboardSessions.delete(chatId);
-                    const failAffLink = process.env.AFFILIATE_LINK ?? 'https://iqbroker.com/lp/regframe-01-light-nosocials/?aff=749367&aff_model=revenue';
-                    const failAdminLink = process.env.ADMIN_CONTACT_LINK ?? 'https://t.me/shiloh_is_10xing';
-                    await ctx.reply(
-                        '⏳ We were not able to confirm your User ID.\n\n' +
-                        'Please consider creating a new account the right way using our link 👇👾\n\n' +
-                        'You can as-well contact admin 👇💜',
-                        { reply_markup: { inline_keyboard: [
-                            [{ text: '🆕 Create free account (takes 2 min)', url: failAffLink }],
-                            [{ text: '🤖 Let us create one for you', callback_data: 'onboard:autocreate' }],
-                            [{ text: '👾 Contact admin', url: failAdminLink }],
-                        ]}}
-                    );
-                    try {
-                        const userTag = ctx.from!.username
-                            ? `@${escapeMd(ctx.from!.username)}`
-                            : `[User](tg://user?id=${ctx.from!.id})`;
-                        await bot.telegram.sendMessage(
-                            getAdminId(),
-                            `🔔 *Manual approval needed*\nTelegram: ${userTag}\nIQ User ID: \`${iqUserId}\`\n\nApprove: /admin approve ${ctx.from!.id}\nReject: /admin reject ${ctx.from!.id}`,
-                            { parse_mode: 'Markdown' }
-                        );
-                    } catch {}
-                }
-            } catch (err: unknown) {
-                console.error('[affiliate check]', err instanceof Error ? err.message : err);
-                setManualApproval(ctx.from!.id);
-                onboardSessions.delete(chatId);
-                await ctx.reply('⏳ Your User ID has been submitted for manual review.\nYou\'ll be notified once the admin approves your account.');
-                try {
-                    const userTag2 = ctx.from!.username
-                        ? `@${escapeMd(ctx.from!.username)}`
-                        : `[User](tg://user?id=${ctx.from!.id})`;
-                    await bot.telegram.sendMessage(
-                        getAdminId(),
-                        `🔔 *Manual approval needed* (auto-check unavailable)\nTelegram: ${userTag2}\nIQ User ID: \`${iqUserId}\`\n\nApprove: /admin approve ${ctx.from!.id}\nReject: /admin reject ${ctx.from!.id}`,
-                        { parse_mode: 'Markdown' }
-                    );
-                } catch {}
-            }
-            return;
-        }
-
-        if (ob.step === 'connect_email') {
-            ob.email = text;
-            ob.step = 'connect_password';
-            onboardSessions.set(chatId, ob);
-            await ctx.reply('🛡️ Your password is safe\n\nWe use the official IQ Option API.\nWe can\'t read or store it.\nYour message auto-deletes from this chat in 10 seconds.');
-            await ctx.reply('🔑 Enter your IQ Option password:');
-            return;
-        }
-
-        if (ob.step === 'auto_create_email') {
-            const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text);
-            if (!emailOk) { await ctx.reply('That doesn\'t look like a valid email. Please try again.'); return; }
-            onboardSessions.delete(chatId);
-            await ctx.reply(
-                '✅ Got it! We\'ve received your email.\n\n' +
-                'Our team will set up your IQ Option account and message you the login details shortly. ' +
-                'This usually takes a few hours during business hours.'
-            );
-            try {
-                const userTag = ctx.from!.username
-                    ? `@${escapeMd(ctx.from!.username)}`
-                    : `[User](tg://user?id=${ctx.from!.id})`;
-                await bot.telegram.sendMessage(
-                    getAdminId(),
-                    `🤖 *Auto-account request*\nTelegram: ${userTag}\nEmail: \`${escapeMd(text)}\`\n\nManually create an IQ Option account, then DM the user the credentials and approve: /admin approve ${ctx.from!.id}`,
-                    { parse_mode: 'Markdown' }
-                );
-            } catch {}
-            console.log(`[auto-create] requested by ${ctx.from!.id}: ${text}`);
-            return;
-        }
-
-        if (ob.step === 'connect_password' && ob.email) {
-            const email = ob.email;
-            try { await ctx.deleteMessage(); } catch {}
-            await ctx.reply('🔐 Logging in...');
-            try {
-                const { ssid, sdk } = await withTimeout(loginAndCaptureSsid(email, text), 10_000, 'login');
-                saveUser({ telegram_id: ctx.from!.id, ssid });
-                let msg = '✅ Connected!\n\n';
-                try {
-                    const all = (await withTimeout(sdk.balances(), 5_000, 'balance')).getBalances();
-                    const demo = all.find(b => b.type === BalanceType.Demo);
-                    const real = all.find(b => b.type === BalanceType.Real);
-                    if (real?.currency) saveUserCurrency(ctx.from!.id, real.currency);
-                    else if (demo?.currency) saveUserCurrency(ctx.from!.id, demo.currency);
-                    if (demo) msg += `🎮 Practice: ${fmtBalance(demo)}\n`;
-                    if (real) msg += `💎 Live: ${fmtBalance(real)}\n`;
-                } finally {
-                    sdk.shutdown().catch(() => {});
-                }
-                onboardSessions.delete(chatId);
-                await ctx.reply(msg, { reply_markup: startKeyboard() });
-            } catch (err: unknown) {
-                console.error('[connect fail]', err instanceof Error ? err.message : err);
-                ob.loginFailCount = (ob.loginFailCount ?? 0) + 1;
-                onboardSessions.set(chatId, ob);
-                if ((ob.loginFailCount ?? 0) >= 2) {
-                    onboardSessions.delete(chatId);
-                    await ctx.reply(
-                        'Seems you\'re having trouble logging into your IQ Options Account 👾😨\n\nNo worries we\'re here to assist you. Contact admin below 👇💜',
-                        { reply_markup: { inline_keyboard: [[{ text: '👾 Contact admin', url: ADMIN_CONTACT_LINK }]] } }
-                    );
-                } else {
-                    ob.step = 'connect_email';
-                    ob.email = undefined;
-                    onboardSessions.set(chatId, ob);
-                    await ctx.reply('Sorry we\'re unable to retrieve your account details 😨\n\nPlease re-check your account email or password and try again 👇\n\n📧 Enter your IQ Option email:');
-                }
-            }
-            return;
         }
         return;
     }

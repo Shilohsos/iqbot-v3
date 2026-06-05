@@ -34,11 +34,4 @@ export function backKeyboard(): IKMarkup {
     };
 }
 
-export function onboardKeyboard(): IKMarkup {
-    return {
-        inline_keyboard: [
-            [{ text: '✅ I have an IQ Option account', callback_data: 'onboard:yes' }],
-            [{ text: '🆕 Create one free (takes 2 min)',  callback_data: 'onboard:no' }],
-        ],
-    };
-}
+
