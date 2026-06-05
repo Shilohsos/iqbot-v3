@@ -756,10 +756,11 @@ export function getUsersWithSsid(): UserRecord[] {
     return db.prepare('SELECT * FROM users WHERE ssid IS NOT NULL').all() as UserRecord[];
 }
 
-/** Broadcast targets: every user except those with a known-expired SSID (ssid_valid = 0). */
+/** Broadcast targets: only funded users (PRO/MASTER with SSID). */
 export function getBroadcastTargetIds(): number[] {
-    return (db.prepare('SELECT telegram_id FROM users WHERE ssid_valid IS NULL OR ssid_valid = 1').all() as { telegram_id: number }[])
-        .map(r => r.telegram_id);
+    return (db.prepare(
+        "SELECT telegram_id FROM users WHERE ssid IS NOT NULL AND ssid != '' AND tier IN ('PRO','MASTER')"
+    ).all() as { telegram_id: number }[]).map(r => r.telegram_id);
 }
 
 /** Expired-SSID users due for a reconnect follow-up (never prompted, or last prompt older than `hours`). */
