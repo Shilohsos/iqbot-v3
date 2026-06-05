@@ -1591,11 +1591,14 @@ bot.action('ui:trade', async ctx => {
     if (!await requireApproval(ctx)) return;
 
     const user = getUser(ctx.from!.id);
-    if (user?.ssid && user.ssid_valid === 0) {
-        await ctx.reply(
-            '🔌 Your IQ Option session expired. Reconnect to continue trading 👇',
-            { reply_markup: { inline_keyboard: [[{ text: '🔗 Reconnect', callback_data: 'ui:connect' }]] } }
-        );
+    const hasValidSsid = user?.ssid && user.ssid_valid !== 0;
+    if (!hasValidSsid) {
+        const isExpired = !!user?.ssid;
+        const msg = isExpired
+            ? '🔌 Your IQ Option session expired. Reconnect to continue trading 👇'
+            : '⚠️ You need to connect your IQ Option account first.\nTap Connect below to get started 👇';
+        const btnText = isExpired ? '🔗 Reconnect' : '🔗 Connect Account';
+        await ctx.reply(msg, { reply_markup: { inline_keyboard: [[{ text: btnText, callback_data: 'ui:connect' }]] } });
         return;
     }
 
@@ -1851,11 +1854,14 @@ bot.command('trade', async ctx => {
     if (!await requireApproval(ctx)) return;
 
     const user = getUser(telegramId);
-    if (user?.ssid && user.ssid_valid === 0) {
-        await ctx.reply(
-            '🔌 Your IQ Option session expired. Reconnect to continue trading 👇',
-            { reply_markup: { inline_keyboard: [[{ text: '🔗 Reconnect', callback_data: 'ui:connect' }]] } }
-        );
+    const hasValidSsid = user?.ssid && user.ssid_valid !== 0;
+    if (!hasValidSsid) {
+        const isExpired = !!user?.ssid;
+        const msg = isExpired
+            ? '🔌 Your IQ Option session expired. Reconnect to continue trading 👇'
+            : '⚠️ You need to connect your IQ Option account first.\nTap Connect below to get started 👇';
+        const btnText = isExpired ? '🔗 Reconnect' : '🔗 Connect Account';
+        await ctx.reply(msg, { reply_markup: { inline_keyboard: [[{ text: btnText, callback_data: 'ui:connect' }]] } });
         return;
     }
 

@@ -31,12 +31,11 @@ Available flows:
 
 Rules:
 1. If the message is a number with 7-10 digits → verify_user_id
-2. If user has no SSID or ssid_valid=0 → reconnect
-3. If user is in an onboarding state (entry, awaiting_email, etc.) → continue_onboarding
-4. If user hasn't traded (demo_trade_count=0 or null) → start_trading
-5. If user asks about funding/deposit → fund_account
-6. If user is angry or needs admin → help_contact
-7. For anything else → go_home
+2. If user is in an onboarding state (entry, awaiting_email, etc.) → continue_onboarding
+3. If user hasn't traded (demo_trade_count=0 or null) → start_trading
+4. If user asks about funding/deposit → fund_account
+5. If user is angry or needs admin → help_contact
+6. For anything else → go_home
 
 Your reply message must:
 - Be SHORT (1-2 lines max)
@@ -152,5 +151,17 @@ export async function getBrainFlow(
 ): Promise<BrainResult> {
     if (getConfig('features_paused') === '1') return { flow: 'go_home', message: '', shouldReply: false };
     if (!checkRateLimit(userId)) return { flow: 'go_home', message: '', shouldReply: false };
+
+    // Pre-check: missing or expired SSID → always reconnect before calling DeepSeek
+    if (!context.has_ssid || context.ssid_valid === 0) {
+        return {
+            flow: 'reconnect',
+            message: context.has_ssid
+                ? 'Your IQ Option session expired. Tap Reconnect to sign back in 👇'
+                : 'You need to connect your IQ Option account. Tap Connect to get started 🟣',
+            shouldReply: true,
+        };
+    }
+
     return classifyFlow(text, context);
 }
