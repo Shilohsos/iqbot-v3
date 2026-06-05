@@ -1448,7 +1448,17 @@ bot.action(/^pair:(.+)$/, async ctx => {
         if (l7MsgId) { try { await ctx.telegram.deleteMessage(chatId, l7MsgId); } catch {} }
         await ctx.telegram.deleteMessage(chatId, progressMsg.message_id).catch(() => {});
         if (await handlePossibleAuthExpiry(err, ctx, isAdmin)) return;
-        await ctx.reply(friendlyError(err, '🔌 Could not connect to IQ Option. Try again.')).catch(() => {});
+        if (!isAdmin && ctx.from?.id) {
+            try { setSsidValid(ctx.from.id, 0); } catch {}
+        }
+        await ctx.reply(
+            '🔌 Could not connect to IQ Option.\n\n' +
+            'Your session may have expired. Reconnect in 3 steps:\n' +
+            '1️⃣ Tap the 🔗 Reconnect button below\n' +
+            '2️⃣ Enter your IQ Option email and password\n' +
+            '3️⃣ Get back to trading instantly',
+            { reply_markup: { inline_keyboard: [[{ text: '🔗 Reconnect', callback_data: 'ui:connect' }]] } }
+        ).catch(() => {});
         return;
     }
 
