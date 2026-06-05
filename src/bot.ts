@@ -4834,6 +4834,25 @@ backgroundIntervals.push(setInterval(async () => {
     }
 }, 60 * 60_000));
 
+function buildReengageMarkup(t: { button_text?: string | null; button_url?: string | null; button_callback?: string | null }): { reply_markup: { inline_keyboard: any[][] } } | undefined {
+    if (t.button_callback) {
+        try {
+            const parsed = JSON.parse(t.button_callback);
+            if (Array.isArray(parsed) && parsed.length > 0 && parsed.every((b: any) => b.text && b.callback_data)) {
+                return { reply_markup: { inline_keyboard: [parsed] } };
+            }
+        } catch {
+            if (t.button_text) {
+                return { reply_markup: { inline_keyboard: [[{ text: t.button_text, callback_data: t.button_callback }]] } };
+            }
+        }
+    }
+    if (t.button_text && t.button_url) {
+        return { reply_markup: { inline_keyboard: [[{ text: t.button_text, url: t.button_url }]] } };
+    }
+    return undefined;
+}
+
 // ─── Re-engagement loop (1h cadence, 3 segments) ──────────────────────────────
 
 backgroundIntervals.push(setInterval(async () => {
@@ -4857,20 +4876,18 @@ backgroundIntervals.push(setInterval(async () => {
                 }
                 const mediaKey = key.replace(/^reengage_/, '').replace(/_[abc]$/, '');
                 const media = getSequenceMedia(mediaKey);
-                const s1BtnMarkup = t.button_text && t.button_url
-                    ? { inline_keyboard: [[{ text: t.button_text, url: t.button_url }]] }
-                    : undefined;
+                const s1BtnMarkup = buildReengageMarkup(t);
                 let sentMsgId: number;
                 if (media?.file_id) {
                     if (media.media_type === 'video') {
-                        const sent = await bot.telegram.sendVideo(chatId, media.file_id, { caption: msg, ...(s1BtnMarkup ? { reply_markup: s1BtnMarkup } : {}) });
+                        const sent = await bot.telegram.sendVideo(chatId, media.file_id, { caption: msg, ...(s1BtnMarkup ?? {}) });
                         sentMsgId = sent.message_id;
                     } else {
-                        const sent = await bot.telegram.sendPhoto(chatId, media.file_id, { caption: msg, ...(s1BtnMarkup ? { reply_markup: s1BtnMarkup } : {}) });
+                        const sent = await bot.telegram.sendPhoto(chatId, media.file_id, { caption: msg, ...(s1BtnMarkup ?? {}) });
                         sentMsgId = sent.message_id;
                     }
                 } else {
-                    const sent = await bot.telegram.sendMessage(chatId, msg, s1BtnMarkup ? { reply_markup: s1BtnMarkup } : {});
+                    const sent = await bot.telegram.sendMessage(chatId, msg, s1BtnMarkup ?? {});
                     sentMsgId = sent.message_id;
                 }
                 setReengageMsgId(chatId, sentMsgId, 'non_activated');
@@ -4896,20 +4913,18 @@ backgroundIntervals.push(setInterval(async () => {
                 }
                 const mediaKey = key.replace(/^reengage_/, '').replace(/_[abc]$/, '');
                 const media = getSequenceMedia(mediaKey);
-                const s2BtnMarkup = t.button_text && t.button_url
-                    ? { inline_keyboard: [[{ text: t.button_text, url: t.button_url }]] }
-                    : undefined;
+                const s2BtnMarkup = buildReengageMarkup(t);
                 let sentMsgId: number;
                 if (media?.file_id) {
                     if (media.media_type === 'video') {
-                        const sent = await bot.telegram.sendVideo(chatId, media.file_id, { caption: msg, ...(s2BtnMarkup ? { reply_markup: s2BtnMarkup } : {}) });
+                        const sent = await bot.telegram.sendVideo(chatId, media.file_id, { caption: msg, ...(s2BtnMarkup ?? {}) });
                         sentMsgId = sent.message_id;
                     } else {
-                        const sent = await bot.telegram.sendPhoto(chatId, media.file_id, { caption: msg, ...(s2BtnMarkup ? { reply_markup: s2BtnMarkup } : {}) });
+                        const sent = await bot.telegram.sendPhoto(chatId, media.file_id, { caption: msg, ...(s2BtnMarkup ?? {}) });
                         sentMsgId = sent.message_id;
                     }
                 } else {
-                    const sent = await bot.telegram.sendMessage(chatId, msg, s2BtnMarkup ? { reply_markup: s2BtnMarkup } : {});
+                    const sent = await bot.telegram.sendMessage(chatId, msg, s2BtnMarkup ?? {});
                     sentMsgId = sent.message_id;
                 }
                 setReengageMsgId(chatId, sentMsgId, 'idle_connected');

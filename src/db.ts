@@ -247,44 +247,62 @@ export function seedTemplates(): void {
     console.log(`[db] templates: ${count} rows after seed`);
 }
 
-/** Idempotent: seeds re-engagement variant templates (_a/_b/_c) using INSERT OR IGNORE. */
+const ENTRY_BRANCH_CB = JSON.stringify([
+    { text: "I'm new to trading",   callback_data: 'onboard:new' },
+    { text: 'I have traded before', callback_data: 'onboard:experienced' },
+]);
+const VIDEO_WATCHED_CB = JSON.stringify([
+    { text: "✅ I've watched it", callback_data: 'onboard:watched_video' },
+]);
+
+/** Idempotent: seeds re-engagement variant templates (_a/_b/_c) using INSERT OR IGNORE + UPDATE for callbacks. */
 export function seedReengageVariants(): void {
     const insert = db.prepare(`
-        INSERT OR IGNORE INTO templates (key, category, state, message, button_text, button_url, auto_delete, delay_sec)
-        VALUES (?, 'reengage', 'reengage', ?, ?, NULL, 1, NULL)
+        INSERT OR IGNORE INTO templates (key, category, state, message, button_text, button_url, button_callback, auto_delete, delay_sec)
+        VALUES (?, 'reengage', 'reengage', ?, ?, NULL, ?, 1, NULL)
     `);
-    const variants: [string, string, string | null][] = [
-        // entry_stuck
-        ['reengage_entry_stuck_a', `{{username}} people are literally printing money with 10x right now.\n\nCheck this out 👆\n\nWhile you're sitting here deciding, someone just cashed out.\n\n👇 You new or you've traded before?`, null],
-        ['reengage_entry_stuck_b', `{{username}} this isn't a maybe thing.\n\nEvery minute you wait, someone else is locking in profits.\n\nThe bot is running. The market is moving. You're just watching.\n\n👇 New or experienced?`, null],
-        ['reengage_entry_stuck_c', `{{username}} real talk — the only difference between you and everyone cashing out...\n\nis one click.\n\nDon't overthink it.\n\n👇 Let's go — new or you've traded before?`, null],
-        // video_stuck
-        ['reengage_video_stuck_a', `{{username}} still haven't watched the video?\n\nReal 10x users don't wait. They stack.\n\n👇 5 minutes and you'll understand everything.`, null],
-        ['reengage_video_stuck_b', `{{username}} skip the video, here's the short version:\n\n10x AI finds high-probability trades.\nYou copy. You profit. Simple.\n\n85% win rate. 5-minute charts. Real results.\n\n👇 Ready? Watch or skip, just start.`, null],
-        ['reengage_video_stuck_c', `{{username}} every single person who watched that video is already trading.\n\nYou're the only one still sitting on the fence.\n\nIt's 5 minutes of your life.\n\n👇 Watch it here.`, null],
-        // userid_stuck
-        ['reengage_userid_stuck_a', `{{username}} while you're holding your User ID...\n\nSomeone else just hit +$2,400 today using 10x.\n\nYour account is 2 minutes away from being in that same leaderboard.\n\nDrop your User ID 👇`, null],
-        ['reengage_userid_stuck_b', `{{username}} this is where it gets real.\n\nWithout your User ID, I can't connect you.\n\nAnd without connecting, you can't trade.\n\nIt takes 10 seconds to find.\n\n👇 1️⃣ Open IQ Option\n2️⃣ Tap profile icon\n3️⃣ Drop the number here`, null],
-        ['reengage_userid_stuck_c', `{{username}} you're literally one number away from making money.\n\nThat User ID you're ignoring?\n\nSomeone else just used theirs to bank $900.\n\n👇 Copy and paste it here:`, null],
-        // email_stuck
-        ['reengage_email_stuck_a', `{{username}} drop that email.\n\nYour account is one step away from being activated.\n\n👇 Enter your IQ Option email:`, null],
-        ['reengage_email_stuck_b', `{{username}} no email = no connection.\n\nNo connection = no trades.\n\nIt's literally the only thing standing between you and the leaderboard.\n\n👇 Type your IQ Option email:`, null],
-        ['reengage_email_stuck_c', `{{username}} quick one — what email did you use for IQ Option?\n\nThat's all I need from you right now.\n\nEverything else is automated after this.\n\n👇 Email:`, null],
-        // password_stuck
-        ['reengage_password_stuck_a', `{{username}} one password away.\n\nYou've done the hard part — just finish the login.\n\n👇 Enter your password:`, null],
-        ['reengage_password_stuck_b', `{{username}} don't stop now.\n\nUser ID ✅\nEmail ✅\nPassword — last step.\n\n30 seconds and you're in.\n\n👇 Enter your password:`, null],
-        ['reengage_password_stuck_c', `{{username}} final step.\n\nType your password and I'll handle the rest.\n\nYour account will be live instantly.\n\n👇 Password:`, null],
-        // never_traded (with Trade Now button)
-        ['reengage_never_traded_a', `{{username}} you're connected but you haven't taken a single trade.\n\nThe bot is ready when you are.\n\n👇 Tap to start:`, '🚀 Trade Now'],
-        ['reengage_never_traded_b', `{{username}} your account is live, funded, and ready.\n\n10x AI is scanning the markets for your next trade right now.\n\nAll you have to do is press start.\n\n👇 Trade now:`, '🚀 Trade Now'],
-        ['reengage_never_traded_c', `{{username}} I've been watching the charts for you.\n\nThere's been 3 high-probability setups in the last hour alone.\n\nDon't let them pass.\n\n👇 One tap:`, '🚀 Trade Now'],
+    const updateCb = db.prepare(`UPDATE templates SET button_callback = ? WHERE key = ? AND (button_callback IS NULL OR button_callback != ?)`);
+
+    // [key, message, button_text, button_callback]
+    const variants: [string, string, string | null, string | null][] = [
+        // entry_stuck — 2-button branch choice
+        ['reengage_entry_stuck_a', `{{username}} people are literally printing money with 10x right now.\n\nCheck this out 👆\n\nWhile you're sitting here deciding, someone just cashed out.\n\n👇 You new or you've traded before?`, null, ENTRY_BRANCH_CB],
+        ['reengage_entry_stuck_b', `{{username}} this isn't a maybe thing.\n\nEvery minute you wait, someone else is locking in profits.\n\nThe bot is running. The market is moving. You're just watching.\n\n👇 New or experienced?`, null, ENTRY_BRANCH_CB],
+        ['reengage_entry_stuck_c', `{{username}} real talk — the only difference between you and everyone cashing out...\n\nis one click.\n\nDon't overthink it.\n\n👇 Let's go — new or you've traded before?`, null, ENTRY_BRANCH_CB],
+        // video_stuck — watched-it button
+        ['reengage_video_stuck_a', `{{username}} still haven't watched the video?\n\nReal 10x users don't wait. They stack.\n\n👇 5 minutes and you'll understand everything.`, null, VIDEO_WATCHED_CB],
+        ['reengage_video_stuck_b', `{{username}} skip the video, here's the short version:\n\n10x AI finds high-probability trades.\nYou copy. You profit. Simple.\n\n85% win rate. 5-minute charts. Real results.\n\n👇 Ready? Watch or skip, just start.`, null, VIDEO_WATCHED_CB],
+        ['reengage_video_stuck_c', `{{username}} every single person who watched that video is already trading.\n\nYou're the only one still sitting on the fence.\n\nIt's 5 minutes of your life.\n\n👇 Watch it here.`, null, VIDEO_WATCHED_CB],
+        // userid_stuck — no button, must type
+        ['reengage_userid_stuck_a', `{{username}} while you're holding your User ID...\n\nSomeone else just hit +$2,400 today using 10x.\n\nYour account is 2 minutes away from being in that same leaderboard.\n\nDrop your User ID 👇`, null, null],
+        ['reengage_userid_stuck_b', `{{username}} this is where it gets real.\n\nWithout your User ID, I can't connect you.\n\nAnd without connecting, you can't trade.\n\nIt takes 10 seconds to find.\n\n👇 1️⃣ Open IQ Option\n2️⃣ Tap profile icon\n3️⃣ Drop the number here`, null, null],
+        ['reengage_userid_stuck_c', `{{username}} you're literally one number away from making money.\n\nThat User ID you're ignoring?\n\nSomeone else just used theirs to bank $900.\n\n👇 Copy and paste it here:`, null, null],
+        // email_stuck — no button, must type
+        ['reengage_email_stuck_a', `{{username}} drop that email.\n\nYour account is one step away from being activated.\n\n👇 Enter your IQ Option email:`, null, null],
+        ['reengage_email_stuck_b', `{{username}} no email = no connection.\n\nNo connection = no trades.\n\nIt's literally the only thing standing between you and the leaderboard.\n\n👇 Type your IQ Option email:`, null, null],
+        ['reengage_email_stuck_c', `{{username}} quick one — what email did you use for IQ Option?\n\nThat's all I need from you right now.\n\nEverything else is automated after this.\n\n👇 Email:`, null, null],
+        // password_stuck — no button, must type
+        ['reengage_password_stuck_a', `{{username}} one password away.\n\nYou've done the hard part — just finish the login.\n\n👇 Enter your password:`, null, null],
+        ['reengage_password_stuck_b', `{{username}} don't stop now.\n\nUser ID ✅\nEmail ✅\nPassword — last step.\n\n30 seconds and you're in.\n\n👇 Enter your password:`, null, null],
+        ['reengage_password_stuck_c', `{{username}} final step.\n\nType your password and I'll handle the rest.\n\nYour account will be live instantly.\n\n👇 Password:`, null, null],
+        // never_traded — Trade Now callback button
+        ['reengage_never_traded_a', `{{username}} you're connected but you haven't taken a single trade.\n\nThe bot is ready when you are.\n\n👇 Tap to start:`, '🚀 Trade Now', 'ui:trade'],
+        ['reengage_never_traded_b', `{{username}} your account is live, funded, and ready.\n\n10x AI is scanning the markets for your next trade right now.\n\nAll you have to do is press start.\n\n👇 Trade now:`, '🚀 Trade Now', 'ui:trade'],
+        ['reengage_never_traded_c', `{{username}} I've been watching the charts for you.\n\nThere's been 3 high-probability setups in the last hour alone.\n\nDon't let them pass.\n\n👇 One tap:`, '🚀 Trade Now', 'ui:trade'],
     ];
     let inserted = 0;
-    for (const [key, message, btnText] of variants) {
-        const result = insert.run(key, message, btnText) as { changes: number };
-        inserted += result.changes;
+    let updated = 0;
+    for (const [key, message, btnText, btnCb] of variants) {
+        const r = insert.run(key, message, btnText, btnCb) as { changes: number };
+        inserted += r.changes;
+        if (r.changes === 0 && btnCb !== null) {
+            // Row already exists — ensure button_callback is set
+            const u = updateCb.run(btnCb, key, btnCb) as { changes: number };
+            updated += u.changes;
+        }
     }
     if (inserted > 0) console.log(`[db] seeded ${inserted} re-engagement variant templates`);
+    if (updated > 0) console.log(`[db] updated ${updated} re-engagement templates with callback buttons`);
 }
 
 // ─── Section 10 tables ────────────────────────────────────────────────────────
@@ -439,6 +457,12 @@ db.exec(`
     const bmCols = (db.prepare('PRAGMA table_info(broadcast_messages)').all() as { name: string }[]).map(c => c.name);
     if (!bmCols.includes('sent_count'))
         db.exec('ALTER TABLE broadcast_messages ADD COLUMN sent_count INTEGER NOT NULL DEFAULT 0');
+}
+
+{
+    const tmplCols = (db.prepare('PRAGMA table_info(templates)').all() as { name: string }[]).map(c => c.name);
+    if (!tmplCols.includes('button_callback'))
+        db.exec('ALTER TABLE templates ADD COLUMN button_callback TEXT');
 }
 
 {
@@ -2122,6 +2146,7 @@ export interface TemplateRecord {
     media_file_id: string | null;
     button_text: string | null;
     button_url: string | null;
+    button_callback: string | null;
     auto_delete: number;
     delay_sec: number | null;
     created_at: string;
