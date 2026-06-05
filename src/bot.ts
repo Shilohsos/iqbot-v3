@@ -696,7 +696,7 @@ async function sendStartMenu(ctx: Context): Promise<void> {
     const user = getUser(telegramId);
 
     if (!user || user.approval_status === 'pending' || user.approval_status === 'manual') {
-        setOnboardingState(ctx.from!.id, 'entry');
+        setOnboardingState(ctx.from!.id, 'awaiting_user_id');
         await ctx.reply(
             "I'm 10x Special Bot 💜\n\n" +
             "The smartest semi auto-trading bot for IQ Option OTC pairs.\n\n" +
@@ -4321,12 +4321,15 @@ bot.on('text', async ctx => {
         return;
     }
 
-    // ── LLM brain — push to flow ──────────────────────────────────────────────
+    // ── LLM brain — only for connected users ─────────────────────────────────
+    const user = getUser(ctx.from!.id);
+    const state = user?.onboarding_state;
+    const isSetupState = state && ['entry', 'awaiting_user_id', 'awaiting_email', 'awaiting_password', 'new_account_created'].includes(state);
     const brainWiz = wizardSessions.get(chatId);
-    if (!brainWiz) {
-        const user = getUser(ctx.from!.id);
+
+    if (!isSetupState && !brainWiz) {
         const brainCtx: UserContext = {
-            onboarding_state: user?.onboarding_state ?? null,
+            onboarding_state: state ?? null,
             ssid_valid: user?.ssid_valid ?? null,
             has_ssid: !!user?.ssid,
             demo_trade_count: user ? getDemoTradeCount(user.telegram_id) : null,
@@ -4344,7 +4347,7 @@ bot.on('text', async ctx => {
         return;
     }
 
-    if (brainWiz.step !== 'custom_amount') return;
+    if (!brainWiz || brainWiz.step !== 'custom_amount') return;
 
     const amount = parseFloat(text);
     if (isNaN(amount) || amount <= 0) { await ctx.reply('Please enter a valid positive number (e.g. 75).'); return; }
