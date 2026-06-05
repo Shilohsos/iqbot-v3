@@ -176,6 +176,15 @@ db.exec(`
 `);
 
 db.exec(`
+  CREATE TABLE IF NOT EXISTS funding_cycle (
+    telegram_id   INTEGER PRIMARY KEY,
+    last_sent_at  TEXT,
+    last_msg_id   INTEGER,
+    next_run_at   TEXT
+  )
+`);
+
+db.exec(`
   CREATE TABLE IF NOT EXISTS onboarding_tracking (
     telegram_id       INTEGER PRIMARY KEY,
     entry_sent_at     TEXT,
@@ -2207,6 +2216,36 @@ export function resetUserIdFailCount(telegramId: number): void {
         VALUES (?, 0)
         ON CONFLICT(telegram_id) DO UPDATE SET user_id_fail_count = 0
     `).run(telegramId);
+}
+
+// ─── Funding cycle ────────────────────────────────────────────────────────────
+
+export function getFundingCycle(telegramId: number): { last_sent_at: string | null; last_msg_id: number | null; next_run_at: string | null } | undefined {
+    return db.prepare('SELECT last_sent_at, last_msg_id, next_run_at FROM funding_cycle WHERE telegram_id = ?').get(telegramId) as any;
+}
+
+export function upsertFundingCycle(telegramId: number, last_sent_at: string | null, last_msg_id: number | null, next_run_at: string): void {
+    db.prepare(`
+        INSERT INTO funding_cycle (telegram_id, last_sent_at, last_msg_id, next_run_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(telegram_id) DO UPDATE SET
+            last_sent_at = excluded.last_sent_at,
+            last_msg_id  = excluded.last_msg_id,
+            next_run_at  = excluded.next_run_at
+    `).run(telegramId, last_sent_at, last_msg_id, next_run_at);
+}
+
+export function getFundingCycleDueUsers(): Array<{ telegram_id: number }> {
+    return db.prepare(`SELECT telegram_id FROM funding_cycle WHERE next_run_at IS NOT NULL AND next_run_at <= datetime('now')`).all() as any;
+}
+
+export function getDemoUsersWithTrades(): Array<{ telegram_id: number }> {
+    return db.prepare(`SELECT telegram_id FROM users WHERE tier NOT IN ('PRO', 'MASTER') AND demo_trade_count > 0 AND ssid_valid = 1`).all() as any;
+}
+
+export function getLastTradeTime(telegramId: number): Date | null {
+    const row = db.prepare(`SELECT MAX(created_at) AS last_at FROM trades WHERE telegram_id = ?`).get(telegramId) as { last_at: string | null } | undefined;
+    return row?.last_at ? new Date(row.last_at) : null;
 }
 
 /** Users stuck in an onboarding state for longer than `hours`. */

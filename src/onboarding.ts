@@ -1,8 +1,7 @@
 import type { Context } from 'telegraf';
 import {
     getTemplateByKey, setOnboardingState, touchOnboardingActivity,
-    getOnboardingTracking, setLastFundingAt, incrementDemoTradeCount,
-    getSequenceMedia, getConfig, type TemplateRecord,
+    getSequenceMedia, type TemplateRecord,
 } from './db.js';
 import { resolveUsername, applyPidgin } from './pidgin.js';
 
@@ -97,40 +96,3 @@ export async function handleConnected(ctx: Context, telegramId: number, balanceT
     });
 }
 
-// ─── Funding sequence ─────────────────────────────────────────────────────────
-
-const FUNDING_TEMPLATES = [
-    'funding_win_screenshot', 'funding_lifestyle_video', 'funding_testimonial',
-    'funding_payout_proof',  'funding_lifestyle_photo', 'funding_user_result',
-    'funding_user_result_video',
-];
-
-const PROMO_CODES = ['10xfirst', '10xsecond'];
-
-/** Call this after each demo trade completes. Sends funding message at 2, 5, 10 trades. */
-export async function checkFundingSequence(
-    telegramId: number,
-    sendFn: (msg: string, button: { text: string; url: string }, templateKey: string) => Promise<void>,
-): Promise<void> {
-    if (getConfig('features_paused') === '1') return;
-    const count = incrementDemoTradeCount(telegramId);
-    if (count !== 2 && count !== 5 && count !== 10 && count % 10 !== 0) return;
-
-    const tracking = getOnboardingTracking(telegramId);
-    if (tracking?.last_funding_at) {
-        const hoursAgo = (Date.now() - new Date(tracking.last_funding_at).getTime()) / 3_600_000;
-        if (hoursAgo < 6) return;
-    }
-
-    const templateKey = FUNDING_TEMPLATES[Math.floor(Math.random() * FUNDING_TEMPLATES.length)];
-    const template = getTemplateByKey(templateKey);
-    if (!template) return;
-
-    const promo = PROMO_CODES[count % 2];
-    const msg = template.message.replace(/10xfirst|10xsecond/g, promo);
-    setLastFundingAt(telegramId);
-    await sendFn(msg, {
-        text: template.button_text ?? '💎 Fund now',
-        url:  template.button_url  ?? 'https://iqoption.com/pwa/payments/deposit',
-    }, templateKey);
-}

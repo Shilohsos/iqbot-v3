@@ -69,6 +69,8 @@ import {
     incrementDailyDemoCount,
     getUserIdFailCount, incrementUserIdFailCount, resetUserIdFailCount,
     db,
+    getFundingCycle, upsertFundingCycle, getFundingCycleDueUsers,
+    getDemoUsersWithTrades, getLastTradeTime,
 } from './db.js';
 import { friendlyError } from './errors.js';
 import { logger } from './logger.js';
@@ -109,7 +111,7 @@ import { getBrainFlow, type UserContext } from './classifier.js';
 import { resolveUsername as resolveUsernameTemplate, applyPidgin } from './pidgin.js';
 import {
     handleUserIdVerified, handleUserIdFailed, handleEmailCollected,
-    handleConnected, checkFundingSequence,
+    handleConnected,
 } from './onboarding.js';
 import { adminAnalyze, type AdminAnalysisResult } from './admin-analysis.js';
 import { existsSync } from 'node:fs';
@@ -1000,20 +1002,6 @@ async function runMartingale(
                         : `📊 Trade 10/10 — Demo limit reached for today`;
                     await ctx.reply(counterMsg).catch(() => {});
                 }
-
-                checkFundingSequence(ctx.from!.id, async (msg, button, templateKey) => {
-                    const fundMedia = getSequenceMedia(templateKey);
-                    const btnMarkup = { inline_keyboard: [[{ text: button.text, url: button.url }]] };
-                    if (fundMedia?.file_id) {
-                        if (fundMedia.media_type === 'video') {
-                            await ctx.replyWithVideo(fundMedia.file_id, { caption: msg, reply_markup: btnMarkup });
-                        } else {
-                            await ctx.replyWithPhoto(fundMedia.file_id, { caption: msg, reply_markup: btnMarkup });
-                        }
-                    } else {
-                        await ctx.reply(msg, { reply_markup: btnMarkup });
-                    }
-                }).catch(() => {});
 
                 if (demoPrevCount > 0 && newDailyCount < 10) {
                     await showDemoUpsell(ctx, sentMessages);
@@ -4449,9 +4437,96 @@ seedTemplates();
     if (due.length > 0) console.log(`[scheduler] startup: activated ${due.length} overdue event(s)`);
 })();
 
+// ─── Funding 3-hour loop ──────────────────────────────────────────────────────
+
+const FUNDING_TEMPLATES = [
+    'funding_win_screenshot', 'funding_lifestyle_video', 'funding_testimonial',
+    'funding_payout_proof', 'funding_lifestyle_photo', 'funding_user_result',
+    'funding_user_result_video',
+];
+const PROMO_CODES = ['10xfirst', '10xsecond'];
+const FUNDING_INTERVAL_MS = 3 * 60 * 60 * 1000;
+const TRADE_COOLDOWN_MS   = 10 * 60 * 1000;
+
+function isoNow(offsetMs = 0): string {
+    return new Date(Date.now() + offsetMs).toISOString().replace('T', ' ').split('.')[0];
+}
+
+async function fireFundingCycle(bot: Telegraf): Promise<void> {
+    if (getConfig('features_paused') === '1') return;
+    const users = getDemoUsersWithTrades();
+    const now = Date.now();
+    for (const { telegram_id } of users) {
+        try {
+            const cycle = getFundingCycle(telegram_id);
+            if (cycle?.next_run_at && new Date(cycle.next_run_at).getTime() > now) continue;
+
+            const lastTrade = getLastTradeTime(telegram_id);
+            if (lastTrade && (now - lastTrade.getTime()) < TRADE_COOLDOWN_MS) {
+                upsertFundingCycle(telegram_id, cycle?.last_sent_at ?? null, cycle?.last_msg_id ?? null,
+                    new Date(lastTrade.getTime() + TRADE_COOLDOWN_MS).toISOString().replace('T', ' ').split('.')[0]);
+                continue;
+            }
+
+            const templateKey = FUNDING_TEMPLATES[Math.floor(Math.random() * FUNDING_TEMPLATES.length)];
+            const template = getTemplateByKey(templateKey);
+            if (!template) continue;
+
+            const promo = PROMO_CODES[Math.floor(Math.random() * PROMO_CODES.length)];
+            const msg = (template.message ?? '').replace(/10xfirst|10xsecond/g, promo);
+            const btnMarkup = { inline_keyboard: [[{ text: template.button_text ?? '💎 Fund now', url: template.button_url ?? 'https://iqoption.com/pwa/payments/deposit' }]] };
+            const fundMedia = getSequenceMedia(templateKey);
+
+            if (cycle?.last_msg_id) {
+                bot.telegram.deleteMessage(telegram_id, cycle.last_msg_id).catch(() => {});
+            }
+
+            let newMsgId: number | undefined;
+            if (fundMedia?.file_id) {
+                if (fundMedia.media_type === 'video') {
+                    const m = await bot.telegram.sendVideo(telegram_id, fundMedia.file_id, { caption: msg, reply_markup: btnMarkup }).catch(() => undefined);
+                    newMsgId = m?.message_id;
+                } else {
+                    const m = await bot.telegram.sendPhoto(telegram_id, fundMedia.file_id, { caption: msg, reply_markup: btnMarkup }).catch(() => undefined);
+                    newMsgId = m?.message_id;
+                }
+            } else {
+                const m = await bot.telegram.sendMessage(telegram_id, msg, { reply_markup: btnMarkup }).catch(() => undefined);
+                newMsgId = m?.message_id;
+            }
+
+            if (newMsgId) {
+                upsertFundingCycle(telegram_id, isoNow(), newMsgId, isoNow(FUNDING_INTERVAL_MS));
+            }
+        } catch (err) {
+            console.error(`[funding] error for ${telegram_id}:`, err instanceof Error ? err.message : err);
+        }
+    }
+}
+
+function seedFundingCycle(): void {
+    const users = getDemoUsersWithTrades();
+    for (const { telegram_id } of users) {
+        if (!getFundingCycle(telegram_id)) {
+            upsertFundingCycle(telegram_id, null, null, isoNow(300_000));
+        }
+    }
+}
+
+function startFundingLoop(bot: Telegraf): void {
+    const dueNow = getFundingCycleDueUsers();
+    if (dueNow.length > 0) {
+        console.log(`[funding] startup: ${dueNow.length} users due`);
+        fireFundingCycle(bot);
+    }
+    setInterval(() => { fireFundingCycle(bot); }, 60_000);
+}
+
 bot.launch();
 logger.info('bot', 'iqbot-v3 running');
 startAutoBroadcast(bot);
+seedFundingCycle();
+startFundingLoop(bot);
 
 // ─── Fabricated Leaderboard: seed + update checker + midnight reset ───────────
 
