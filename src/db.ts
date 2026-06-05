@@ -377,6 +377,14 @@ db.exec(`
   )
 `);
 
+db.exec(`
+  CREATE TABLE IF NOT EXISTS broadcast_user_messages (
+    telegram_id INTEGER PRIMARY KEY,
+    message_id  INTEGER NOT NULL,
+    sent_at     TEXT NOT NULL DEFAULT (datetime('now'))
+  )
+`);
+
 {
     const bmCols = (db.prepare('PRAGMA table_info(broadcast_messages)').all() as { name: string }[]).map(c => c.name);
     if (!bmCols.includes('sent_count'))
@@ -1059,6 +1067,23 @@ export function setTestUser(id: number | null): void {
     } else {
         db.prepare("DELETE FROM config WHERE key = 'test_user'").run();
     }
+}
+
+export function getLastBroadcastMsgId(telegramId: number): number | null {
+    const row = db.prepare(
+        'SELECT message_id FROM broadcast_user_messages WHERE telegram_id = ?'
+    ).get(telegramId) as { message_id: number } | undefined;
+    return row?.message_id ?? null;
+}
+
+export function saveLastBroadcastMsgId(telegramId: number, messageId: number): void {
+    db.prepare(`
+        INSERT INTO broadcast_user_messages (telegram_id, message_id, sent_at)
+        VALUES (?, ?, datetime('now'))
+        ON CONFLICT(telegram_id) DO UPDATE SET
+            message_id = excluded.message_id,
+            sent_at = excluded.sent_at
+    `).run(telegramId, messageId);
 }
 
 export function getNextBroadcastAt(): string | null {

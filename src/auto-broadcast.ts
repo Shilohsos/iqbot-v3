@@ -3,17 +3,11 @@ import {
     getEnabledAutoMessages, getBroadcastTargetIds, markBroadcastSent,
     getTestUserId, getNextBroadcastAt, saveNextBroadcastAt,
     getMessageIndex, saveMessageIndex,
+    getLastBroadcastMsgId, saveLastBroadcastMsgId,
 } from './db.js';
 
 const RATE_LIMIT_MS = 50;
-
-function getRandomIntervalMs(): number {
-    const minHours = 2;
-    const maxHours = 6;
-    return (minHours + Math.random() * (maxHours - minHours)) * 60 * 60 * 1000;
-}
-
-const lastBroadcastMsgIds = new Map<number, number>();
+const INTERVAL_MS   = 3_600_000; // 1 hour
 
 async function fireBroadcast(bot: Telegraf): Promise<void> {
     const messages = getEnabledAutoMessages().filter(m => m.image_file_id != null);
@@ -32,7 +26,6 @@ async function fireBroadcast(bot: Telegraf): Promise<void> {
         console.log(`[test-mode] sending only to test user ${testUserId}`);
         targets = [testUserId];
     } else {
-        // Suppress users with a known-expired SSID — they get reconnect prompts, not marketing.
         targets = getBroadcastTargetIds().filter(id => id > 0);
         if (targets.length === 0) {
             console.log('[auto-broadcast] skipped — no eligible users in DB');
@@ -43,7 +36,8 @@ async function fireBroadcast(bot: Telegraf): Promise<void> {
     let sent = 0;
     for (const tid of targets) {
         try {
-            const prevMsgId = lastBroadcastMsgIds.get(tid);
+            // Delete previous broadcast message (DB-persisted — survives restarts)
+            const prevMsgId = getLastBroadcastMsgId(tid);
             if (prevMsgId) {
                 try { await bot.telegram.deleteMessage(tid, prevMsgId); } catch {}
             }
@@ -52,7 +46,7 @@ async function fireBroadcast(bot: Telegraf): Promise<void> {
                 caption: msg.content,
                 reply_markup: { inline_keyboard: [[{ text: 'Trade Now 👇', callback_data: 'ui:trade' }]] },
             });
-            lastBroadcastMsgIds.set(tid, sentMsg.message_id);
+            saveLastBroadcastMsgId(tid, sentMsg.message_id);
             sent++;
         } catch {
             // user blocked or unavailable
@@ -66,10 +60,10 @@ async function fireBroadcast(bot: Telegraf): Promise<void> {
     }
 }
 
-function scheduleNext(bot: Telegraf, delayMs: number): void {
-    const nextAt = new Date(Date.now() + delayMs);
+function scheduleNext(bot: Telegraf): void {
+    const nextAt = new Date(Date.now() + INTERVAL_MS);
     saveNextBroadcastAt(nextAt.toISOString());
-    console.log(`[auto-broadcast] next broadcast in ${(delayMs / 3_600_000).toFixed(1)}h`);
+    console.log('[auto-broadcast] next broadcast in 1.0h');
 
     setTimeout(async () => {
         try {
@@ -77,8 +71,8 @@ function scheduleNext(bot: Telegraf, delayMs: number): void {
         } catch (err) {
             console.error('[auto-broadcast] error:', err instanceof Error ? err.message : err);
         }
-        scheduleNext(bot, getRandomIntervalMs());
-    }, delayMs);
+        scheduleNext(bot);
+    }, INTERVAL_MS);
 }
 
 export function startAutoBroadcast(bot: Telegraf): void {
@@ -93,7 +87,7 @@ export function startAutoBroadcast(bot: Telegraf): void {
                 } catch (err) {
                     console.error('[auto-broadcast] error:', err instanceof Error ? err.message : err);
                 }
-                scheduleNext(bot, getRandomIntervalMs());
+                scheduleNext(bot);
             }, msUntil);
         } else {
             console.log('[auto-broadcast] past due — firing in 30s grace period');
@@ -103,11 +97,11 @@ export function startAutoBroadcast(bot: Telegraf): void {
                 } catch (err) {
                     console.error('[auto-broadcast] error:', err instanceof Error ? err.message : err);
                 }
-                scheduleNext(bot, getRandomIntervalMs());
+                scheduleNext(bot);
             }, 30_000);
         }
     } else {
-        scheduleNext(bot, getRandomIntervalMs());
+        scheduleNext(bot);
     }
-    console.log('[auto-broadcast] started (2-6h random interval, image-gated, DB-persisted)');
+    console.log('[auto-broadcast] started (1h fixed interval, image-gated, DB-persisted, persistent auto-delete)');
 }
