@@ -45,7 +45,7 @@ import {
     setGiveawayStatus,
     getGiveawayParticipants,
     deleteGiveaway,
-    seedTemplates,
+    seedTemplates, seedReengageVariants,
     setOnboardingState,
     touchOnboardingActivity,
     setUserPidginEnabled,
@@ -72,6 +72,7 @@ import {
     getReengageTracking,
     getDailyDemoCount,
     incrementDailyDemoCount,
+    cycleReengageVariant,
 } from './db.js';
 import { friendlyError } from './errors.js';
 import { logger } from './logger.js';
@@ -4562,6 +4563,7 @@ bot.catch((err: unknown, ctx) => {
 cleanStaleSessions();
 rehydrateScheduledBroadcasts();
 seedTemplates();
+seedReengageVariants();
 
 // Activate any giveaways/promos that were due during downtime
 (async () => {
@@ -4782,16 +4784,19 @@ backgroundIntervals.push(setInterval(async () => {
         const nonActivated = getStuckOnboardingUsers(1);
         for (const user of nonActivated) {
             try {
-                const key = getReengageTemplateKey(user.onboarding_state ?? 'entry_branch_sent');
-                const t = getTemplateByKey(key);
+                const chatId = user.telegram_id;
+                const baseKey = getReengageTemplateKey(user.onboarding_state ?? 'entry_branch_sent');
+                const variant = cycleReengageVariant(chatId);
+                const suffix = ['_a', '_b', '_c'][variant];
+                const key = baseKey + suffix;
+                const t = getTemplateByKey(key) ?? getTemplateByKey(baseKey);
                 if (!t) continue;
                 const msg = resolveUsernameTemplate(t.message, user.username ?? 'there');
-                const chatId = user.telegram_id;
                 const tracking = getReengageTracking(chatId);
                 if (tracking?.last_msg_id) {
                     try { await bot.telegram.deleteMessage(chatId, tracking.last_msg_id); } catch {}
                 }
-                const mediaKey = key.replace(/^reengage_/, '');
+                const mediaKey = key.replace(/^reengage_/, '').replace(/_[abc]$/, '');
                 const media = getSequenceMedia(mediaKey);
                 const s1BtnMarkup = t.button_text && t.button_url
                     ? { inline_keyboard: [[{ text: t.button_text, url: t.button_url }]] }
@@ -4819,16 +4824,18 @@ backgroundIntervals.push(setInterval(async () => {
         const idleConnected = getConnectedNonTraders(1);
         for (const user of idleConnected) {
             try {
-                const key = 'reengage_never_traded';
-                const t = getTemplateByKey(key);
+                const chatId = user.telegram_id;
+                const variant = cycleReengageVariant(chatId);
+                const suffix = ['_a', '_b', '_c'][variant];
+                const key = 'reengage_never_traded' + suffix;
+                const t = getTemplateByKey(key) ?? getTemplateByKey('reengage_never_traded');
                 if (!t) continue;
                 const msg = resolveUsernameTemplate(t.message, user.username ?? 'there');
-                const chatId = user.telegram_id;
                 const tracking = getReengageTracking(chatId);
                 if (tracking?.last_msg_id) {
                     try { await bot.telegram.deleteMessage(chatId, tracking.last_msg_id); } catch {}
                 }
-                const mediaKey = key.replace(/^reengage_/, '');
+                const mediaKey = key.replace(/^reengage_/, '').replace(/_[abc]$/, '');
                 const media = getSequenceMedia(mediaKey);
                 const s2BtnMarkup = t.button_text && t.button_url
                     ? { inline_keyboard: [[{ text: t.button_text, url: t.button_url }]] }
