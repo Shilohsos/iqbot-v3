@@ -2249,7 +2249,7 @@ export function getFundingCycleDueUsers(): Array<{ telegram_id: number }> {
 }
 
 export function getDemoUsersWithTrades(): Array<{ telegram_id: number }> {
-    return db.prepare(`SELECT telegram_id FROM users WHERE tier NOT IN ('PRO', 'MASTER') AND demo_trade_count > 0 AND ssid_valid = 1`).all() as any;
+    return db.prepare(`SELECT DISTINCT u.telegram_id FROM users u INNER JOIN daily_demo_tracking ddt ON ddt.telegram_id = u.telegram_id WHERE u.tier NOT IN ('PRO', 'MASTER') AND u.ssid_valid = 1 AND ddt.trade_count > 0`).all() as any;
 }
 
 export function getLastTradeTime(telegramId: number): Date | null {
