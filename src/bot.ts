@@ -108,7 +108,7 @@ import { checkAffiliate } from './affiliate.js';
 import { setupChannelHandlers, startWelcomeFollowUp } from './channel.js';
 import { startAutoBroadcast } from './auto-broadcast.js';
 import { generatePost, type LlmRequest } from './llm.js';
-import { getBrainResponse } from './classifier.js';
+import { getBrainFlow, type UserContext } from './classifier.js';
 import { resolveUsername as resolveUsernameTemplate, applyPidgin } from './pidgin.js';
 import {
     startNewOnboarding, handleNewTrader, handleWatchedVideo,
@@ -125,6 +125,17 @@ const BOT_TOKEN = process.env.BOT_TOKEN;
 const IQ_SSID   = process.env.IQ_SSID;
 const AFFILIATE_LINK   = process.env.AFFILIATE_LINK   ?? 'https://iqbroker.com/lp/regframe-01-light-nosocials/?aff=749367&aff_model=revenue';
 const ADMIN_CONTACT_LINK = process.env.ADMIN_CONTACT_LINK ?? 'https://t.me/shiloh_is_10xing';
+
+const FLOW_BUTTONS: Record<string, { text: string; action: string | { url: string } }> = {
+    start_trading:        { text: '🚀 Start Trading', action: 'ui:trade' },
+    reconnect:            { text: '🔗 Reconnect',     action: 'ui:connect' },
+    continue_onboarding:  { text: '▶️ Continue',      action: 'ui:start' },
+    verify_user_id:       { text: '👤 Contact Admin', action: { url: process.env.ADMIN_CONTACT_LINK ?? 'https://t.me/shiloh_is_10xing' } },
+    fund_account:         { text: '💰 Fund Account',  action: { url: 'https://iqoption.com/pwa/payments/deposit' } },
+    go_home:              { text: '🏠 Menu',           action: 'ui:start' },
+    help_contact:         { text: '👤 Contact Admin', action: { url: process.env.ADMIN_CONTACT_LINK ?? 'https://t.me/shiloh_is_10xing' } },
+};
+
 // Resolve assets dir from env, else from the source layout (src/.. -> assets).
 // Warn loudly at startup if the directory doesn't exist so image sends don't
 // fail silently every time a wizard step needs to upload a photo.
@@ -4416,41 +4427,41 @@ bot.on('text', async ctx => {
         return;
     }
 
-    // ── LLM brain fallthrough ─────────────────────────────────────────────────
-    // Only for non-wizard, non-admin, non-onboarding messages
-    const wiz = wizardSessions.get(chatId);
-    if (!wiz) {
-        const brainTemplate = await getBrainResponse(ctx.from!.id, text).catch(() => undefined);
-        if (brainTemplate) {
-            const user2 = getUser(ctx.from!.id);
-            const name2 = ctx.from?.first_name ?? ctx.from?.username ?? 'there';
-            const pidginEnabled = user2?.pidgin_enabled === 1;
-            let msg2 = resolveUsernameTemplate(brainTemplate.message, name2);
-            if (pidginEnabled) msg2 = applyPidgin(msg2);
-            const markup2 = brainTemplate.button_text && brainTemplate.button_url
-                ? { inline_keyboard: [[{ text: brainTemplate.button_text, url: brainTemplate.button_url }]] }
-                : undefined;
-            if (brainTemplate.media_file_id) {
-                await ctx.replyWithPhoto(brainTemplate.media_file_id, { caption: msg2, ...(markup2 ? { reply_markup: markup2 } : {}) });
-            } else {
-                await ctx.reply(msg2, { ...(markup2 ? { reply_markup: markup2 } : {}) });
-            }
+    // ── LLM brain — push to flow ──────────────────────────────────────────────
+    const brainWiz = wizardSessions.get(chatId);
+    if (!brainWiz) {
+        const user = getUser(ctx.from!.id);
+        const brainCtx: UserContext = {
+            onboarding_state: user?.onboarding_state ?? null,
+            ssid_valid: user?.ssid_valid ?? null,
+            has_ssid: !!user?.ssid,
+            demo_trade_count: user ? getDemoTradeCount(user.telegram_id) : null,
+            tier: user?.tier ?? 'DEMO',
+        };
+        const brainResult = await getBrainFlow(ctx.from!.id, text, brainCtx).catch(() => ({ flow: 'go_home', message: '', shouldReply: true }));
+        if (brainResult.shouldReply) {
+            const btn = FLOW_BUTTONS[brainResult.flow] ?? FLOW_BUTTONS.go_home;
+            const replyText = brainResult.message || btn.text;
+            const replyMarkup = typeof btn.action === 'string'
+                ? { inline_keyboard: [[{ text: btn.text, callback_data: btn.action }]] }
+                : { inline_keyboard: [[{ text: btn.text, url: btn.action.url }]] };
+            await ctx.reply(replyText, { reply_markup: replyMarkup });
         }
         return;
     }
 
-    if (wiz.step !== 'custom_amount') return;
+    if (brainWiz.step !== 'custom_amount') return;
 
     const amount = parseFloat(text);
     if (isNaN(amount) || amount <= 0) { await ctx.reply('Please enter a valid positive number (e.g. 75).'); return; }
-    if (wiz.mode === 'demo' && amount > 20) { await ctx.reply('❌ Demo max is $20 or equivalent. Please enter a smaller amount.'); return; }
+    if (brainWiz.mode === 'demo' && amount > 20) { await ctx.reply('❌ Demo max is $20 or equivalent. Please enter a smaller amount.'); return; }
 
-    wiz.amount = amount;
-    wiz.step = 'timeframe';
-    if (wiz.lastImageMsgId) {
-        try { await ctx.telegram.deleteMessage(chatId, wiz.lastImageMsgId); } catch {}
+    brainWiz.amount = amount;
+    brainWiz.step = 'timeframe';
+    if (brainWiz.lastImageMsgId) {
+        try { await ctx.telegram.deleteMessage(chatId, brainWiz.lastImageMsgId); } catch {}
     }
-    try { const m = await ctx.replyWithPhoto(ASSET('L5.png')); wiz.lastImageMsgId = m.message_id; } catch {}
+    try { const m = await ctx.replyWithPhoto(ASSET('L5.png')); brainWiz.lastImageMsgId = m.message_id; } catch {}
     const isWizAdmin = ctx.from!.id === getAdminId();
     const tfWizUser = isWizAdmin ? null : getUser(ctx.from!.id);
     const tfWizTier = isWizAdmin ? 'MASTER' : (tfWizUser?.tier ?? undefined);

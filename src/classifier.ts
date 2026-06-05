@@ -1,56 +1,67 @@
-import { getRandomTemplate, getConfig, type TemplateRecord } from './db.js';
+import { getConfig } from './db.js';
 
-const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
-const OPENROUTER_MODEL   = process.env.OPENROUTER_MODEL ?? 'google/gemini-2.5-flash';
-const OPENROUTER_URL     = 'https://openrouter.ai/api/v1/chat/completions';
+const DEEPSEEK_API_KEY  = process.env.DEEPSEEK_API_KEY;
+const DEEPSEEK_MODEL    = process.env.DEEPSEEK_MODEL ?? 'deepseek-chat';
+const DEEPSEEK_BASE_URL = process.env.DEEPSEEK_BASE_URL ?? 'https://api.deepseek.com/v1';
 
-const VALID_CATEGORIES = new Set([
-    'greeting', 'new_user_greeting', 'returning_user', 'account_creation',
-    'connect_account', 'bot_not_working', 'ssid_connect_fail', 'how_bot_works',
-    'trading_explanation', 'funding_deposit', 'withdrawal', 'loss_recovery',
-    'risk_safety', 'bot_strategy', 'pricing_tiers', 'promo_bonus',
-    'upgrade_migration', 'scam_legit', 'need_time', 'frustration_complaint',
-    'referral_affiliate', 'talk_to_admin', 'leaderboard_stats', 'thanks_response',
-    'unrecognized',
+const VALID_FLOWS = new Set([
+    'start_trading',
+    'reconnect',
+    'continue_onboarding',
+    'verify_user_id',
+    'fund_account',
+    'go_home',
+    'help_contact',
 ]);
 
-const SYSTEM_PROMPT = `You are an intent classifier for a trading bot called "10x Bot".
-Classify the user's message into EXACTLY one of these categories:
+const SYSTEM_PROMPT = `You are a flow router for a trading bot called "10x Bot".
 
-greeting — Hello, hi, good morning, casual greeting
-new_user_greeting — First message from someone who's new
-returning_user — Has traded before, has an account
-account_creation — How to create IQ Option account, sign up
-connect_account — How to connect account to bot
-bot_not_working — Bot stopped, no signals, something broken
-ssid_connect_fail — Connection failed, wrong ID, auth error
-how_bot_works — How does the bot work, what does it do
-trading_explanation — CALL/PUT, expiry, how binary options work
-funding_deposit — How to deposit, minimum, payment methods
-withdrawal — How to withdraw, processing time
-loss_recovery — Lost money, bad trades, red streak
-risk_safety — Is it safe, can I lose, guaranteed profit?
-bot_strategy — Win rate, strategy accuracy, indicators
-pricing_tiers — Cost, PRO vs MASTER, what's included
-promo_bonus — Promo codes, discounts, bonuses
-upgrade_migration — Upgrade tier, migrate account
-scam_legit — Is this a scam, proof, verification
-need_time — I'll think about it, later, not ready
-frustration_complaint — Angry, calling scam, cursing
-referral_affiliate — Refer friends, affiliate program
-talk_to_admin — Talk to human, support, real person
-leaderboard_stats — My performance, PnL, how I'm doing
-thanks_response — Thank you, ok, alright, got it
-unrecognized — Catch-all for anything else
+A user has sent a message. Your job is to decide which flow to push them into AND write a short, contextual reply telling them what to do next.
 
-If the user sent an image, analyze what's in it and classify accordingly.
+You receive their message AND their current state in the bot.
 
-Respond with ONLY the category name in lowercase, nothing else.`;
+Available flows:
+- start_trading — User wants to trade or hasn't started yet. Push to trading.
+- reconnect — User's session is expired or they can't connect. Push to reconnect.
+- continue_onboarding — User is in the middle of setting up. Push to continue.
+- verify_user_id — User sent what looks like a numeric User ID (7-10 digits).
+- fund_account — User wants to deposit or fund their account.
+- go_home — General help, what to do, menu. Push to main menu.
+- help_contact — User needs human help, complaining, frustrated.
+
+Rules:
+1. If the message is a number with 7-10 digits → verify_user_id
+2. If user has no SSID or ssid_valid=0 → reconnect
+3. If user is in an onboarding state (entry, awaiting_email, etc.) → continue_onboarding
+4. If user hasn't traded (demo_trade_count=0 or null) → start_trading
+5. If user asks about funding/deposit → fund_account
+6. If user is angry or needs admin → help_contact
+7. For anything else → go_home
+
+Your reply message must:
+- Be SHORT (1-2 lines max)
+- BRIEFLY explain what the user should do next — one clear instruction
+- Feel like a real person, not a robot
+- Use the user's language/energy level from their message
+
+Example good messages:
+- "Your session expired. Tap Reconnect and enter your email/password to get back in 👇"
+- "You haven't started trading yet. Hit Start Trading and let's make moves 💜"
+- "Let's get your account setup first. Tap Continue below 👇"
+- "You need to fund your account to trade live. Tap Fund Account when you're ready 🟣"
+- "Drop your IQ Option User ID below and I'll get you verified 🆔"
+
+Respond with ONLY a JSON object in this exact format — no other text:
+{"flow": "action_name", "message": "your short reply here"}
+
+Examples:
+{"flow": "reconnect", "message": "Your session expired. Tap Reconnect to sign back in 👇"}
+{"flow": "start_trading", "message": "You haven't traded yet. Tap Start Trading and let's go 💜"}
+{"flow": "go_home", "message": "What would you like to do? Check your balance or start trading 👇"}`;
 
 const rateLimitMap = new Map<number, number>();
 const RATE_LIMIT_MS = 5_000;
 
-/** Returns false if this user has called the LLM within the last 5 seconds. */
 function checkRateLimit(userId: number): boolean {
     const last = rateLimitMap.get(userId) ?? 0;
     if (Date.now() - last < RATE_LIMIT_MS) return false;
@@ -58,66 +69,88 @@ function checkRateLimit(userId: number): boolean {
     return true;
 }
 
-async function classifyIntent(text: string, imageUrl?: string): Promise<string> {
-    if (!OPENROUTER_API_KEY) return 'unrecognized';
+export interface UserContext {
+    onboarding_state: string | null;
+    ssid_valid: number | null;
+    has_ssid: boolean;
+    demo_trade_count: number | null;
+    tier: string;
+}
 
-    const userContent: Array<{ type: string; text?: string; image_url?: { url: string } }> = [];
-    if (imageUrl) userContent.push({ type: 'image_url', image_url: { url: imageUrl } });
-    userContent.push({ type: 'text', text });
+export interface BrainResult {
+    flow: string;
+    message: string;
+    shouldReply: boolean;
+}
+
+const GO_HOME_FALLBACK: BrainResult = { flow: 'go_home', message: '', shouldReply: true };
+
+async function classifyFlow(text: string, context: UserContext): Promise<BrainResult> {
+    if (!DEEPSEEK_API_KEY) return GO_HOME_FALLBACK;
+
+    const contextStr = [
+        `User state: onboarding="${context.onboarding_state ?? 'none'}",`,
+        `ssid_valid=${context.ssid_valid ?? 'null'},`,
+        `has_ssid=${context.has_ssid},`,
+        `demo_trade_count=${context.demo_trade_count ?? 0},`,
+        `tier=${context.tier}`,
+    ].join(' ');
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 15_000);
-    let resp: Response;
+    const timeoutId = setTimeout(() => controller.abort(), 10_000);
+
     try {
-        resp = await fetch(OPENROUTER_URL, {
+        const resp = await fetch(`${DEEPSEEK_BASE_URL}/chat/completions`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+                Authorization: `Bearer ${DEEPSEEK_API_KEY}`,
             },
             body: JSON.stringify({
-                model: OPENROUTER_MODEL,
+                model: DEEPSEEK_MODEL,
                 messages: [
                     { role: 'system', content: SYSTEM_PROMPT },
-                    { role: 'user', content: userContent },
+                    { role: 'user', content: `Message: "${text}"\n\n${contextStr}` },
                 ],
-                max_tokens: 20,
-                temperature: 0,
+                max_tokens: 150,
+                temperature: 0.3,
             }),
             signal: controller.signal,
         });
+
+        if (!resp.ok) throw new Error(`DeepSeek ${resp.status}`);
+        const data = await resp.json() as { choices: Array<{ message: { content: string } }> };
+        const raw = (data.choices[0]?.message?.content ?? '').trim();
+
+        try {
+            const parsed = JSON.parse(raw) as { flow?: string; message?: string };
+            const flow = (parsed.flow ?? '').trim().toLowerCase();
+            const message = (parsed.message ?? '').trim();
+            if (VALID_FLOWS.has(flow) && message) {
+                return { flow, message, shouldReply: true };
+            }
+        } catch {
+            // JSON parse failed — fall through to go_home
+        }
+        return GO_HOME_FALLBACK;
     } catch (err) {
         if (err instanceof Error && err.name === 'AbortError') {
-            console.warn('[classifier] OpenRouter request timed out after 15s');
-            return 'unrecognized';
+            console.warn('[brain] DeepSeek request timed out');
+            return GO_HOME_FALLBACK;
         }
-        throw err;
+        console.warn('[brain] error:', err instanceof Error ? err.message : err);
+        return GO_HOME_FALLBACK;
     } finally {
         clearTimeout(timeoutId);
     }
-
-    if (!resp.ok) throw new Error(`OpenRouter ${resp.status}`);
-    const data = await resp.json() as { choices: Array<{ message: { content: string } }> };
-    const raw = (data.choices[0]?.message?.content ?? '').trim().toLowerCase();
-    return VALID_CATEGORIES.has(raw) ? raw : 'unrecognized';
 }
 
-/**
- * Main entry point: classify the user's message and return a matching template.
- * Returns undefined when rate-limited, API unavailable, or no template found.
- */
-export async function getBrainResponse(
+export async function getBrainFlow(
     userId: number,
     text: string,
-    imageUrl?: string,
-): Promise<TemplateRecord | undefined> {
-    if (getConfig('features_paused') === '1') return undefined;
-    if (!checkRateLimit(userId)) return undefined;
-    try {
-        const category = await classifyIntent(text, imageUrl);
-        return getRandomTemplate(category, 'brain');
-    } catch (err) {
-        console.warn('[classifier] error:', err instanceof Error ? err.message : err);
-        return getRandomTemplate('unrecognized', 'brain');
-    }
+    context: UserContext,
+): Promise<BrainResult> {
+    if (getConfig('features_paused') === '1') return { flow: 'go_home', message: '', shouldReply: false };
+    if (!checkRateLimit(userId)) return { flow: 'go_home', message: '', shouldReply: false };
+    return classifyFlow(text, context);
 }
