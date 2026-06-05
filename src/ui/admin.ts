@@ -43,30 +43,17 @@ export function adminKeyboard(): IKMarkup {
             ],
             [
                 { text: '🎁 Giveaways',   callback_data: 'admin:giveaways' },
-                { text: '📁 Media Lib',   callback_data: 'admin:media_library' },
-            ],
-            [
                 { text: '🏆 Top Traders', callback_data: 'admin:top_traders' },
+            ],
+            [
                 { text: '🔻 Funnel',      callback_data: 'admin:funnel' },
-            ],
-            [
-                { text: '🔑 SSID Health', callback_data: 'admin:ssid_health' },
-                { text: '👣 Onboarding',  callback_data: 'admin:onboarding_funnel' },
-            ],
-            [
-                { text: '🧠 LLM Templates', callback_data: 'admin:llm_templates' },
-                { text: '📈 Broadcasts',    callback_data: 'admin:broadcast_history' },
-            ],
-            [
                 { text: '📋 Audits',      callback_data: 'admin:audits' },
-                { text: '🛡️ Admin',      callback_data: 'admin:admin' },
             ],
-            [{ text: '✍️ Compose Post',   callback_data: 'admin:compose' }],
-            [{ text: '🟢 Go Live',         callback_data: 'admin:golive' }],
             [
-                { text: '🔴 Test Mode ON',  callback_data: 'admin:testmode:on' },
-                { text: '🟢 Test Mode OFF', callback_data: 'admin:testmode:off' },
+                { text: '🛡️ Admin',      callback_data: 'admin:admin' },
+                { text: '✍️ Compose Post', callback_data: 'admin:compose' },
             ],
+            [{ text: '🟢 Go Live',         callback_data: 'admin:golive' }],
             [{ text: '🔙 Back', callback_data: 'ui:start' }],
         ],
     };
