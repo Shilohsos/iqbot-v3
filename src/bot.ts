@@ -696,12 +696,26 @@ async function sendStartMenu(ctx: Context): Promise<void> {
     const user = getUser(telegramId);
 
     if (!user || user.approval_status === 'pending' || user.approval_status === 'manual') {
-        setOnboardingState(ctx.from!.id, 'awaiting_user_id');
+        setOnboardingState(ctx.from!.id, 'entry');
         await ctx.reply(
-            'Welcome to 10x Special Bot 💜\n\n' +
-            'Send your IQ Option User ID to get started.\n\n' +
-            'Need an account? Tap below 👇',
-            { reply_markup: { inline_keyboard: [[{ text: '🆕 Create Account', url: AFFILIATE_LINK }]] } }
+            "I'm 10x Special Bot 💜\n\n" +
+            "The smartest semi auto-trading bot for IQ Option OTC pairs.\n\n" +
+            "I scan markets. I read signals. I place trades.\n" +
+            "You sit back and watch the wins land."
+        );
+        await ctx.reply(
+            "Connect your IQ Option account.\n\n" +
+            "Free signup · 60 seconds · Linked instantly.\n" +
+            "Bot trades on your account. Money stays yours.\n\n" +
+            "Pick what fits 👇",
+            {
+                reply_markup: {
+                    inline_keyboard: [[
+                        { text: '✅ I have an IQ Option account', callback_data: 'onboard:yes' },
+                        { text: '🆕 Create Account', url: AFFILIATE_LINK },
+                    ]]
+                }
+            }
         );
         return;
     }
@@ -1135,7 +1149,8 @@ bot.command('start', sendStartMenu);
 
 bot.action('onboard:yes', async ctx => {
     await ctx.answerCbQuery().catch(() => {});
-    await sendStartMenu(ctx);
+    setOnboardingState(ctx.from!.id, 'awaiting_user_id');
+    await ctx.reply("Bet. Let's link it up.\n\nDrop your IQ Option User ID 👇");
 });
 
 bot.action('onboard:no', async ctx => {
