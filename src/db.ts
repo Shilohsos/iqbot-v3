@@ -842,7 +842,10 @@ export function getAllUsers(): UserRecord[] {
 }
 
 export function getAllUserIds(): number[] {
-    return (db.prepare('SELECT telegram_id FROM users').all() as { telegram_id: number }[]).map(r => r.telegram_id);
+    const adminId = parseInt(process.env.ADMIN_USER_ID ?? '1615652240', 10);
+    return (db.prepare(
+        'SELECT telegram_id FROM users WHERE telegram_id != ?'
+    ).all(adminId) as { telegram_id: number }[]).map(r => r.telegram_id);
 }
 
 /** Users who have connected an IQ Option account (ssid set) */
