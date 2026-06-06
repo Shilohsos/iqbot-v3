@@ -18,12 +18,12 @@ export interface TierConfig {
 export const TIER_CONFIGS: Record<string, TierConfig> = {
     DEMO: {
         label: 'Demo Trader',
-        pairs: ['EURUSD-OTC', 'GBPUSD-OTC'],
+        pairs: ['EURUSD-OTC', 'GBPUSD-OTC', 'EURJPY-OTC', 'GBPJPY-OTC', 'AUDUSD-OTC', 'USDCAD-OTC', 'EURGBP-OTC', 'USDCHF-OTC'],
         analyzerTier: 'DEMO',
         maxConcurrentTrades: 1,
-        allowedTimeframes: [300],
-        allowedGaleOptions: [3, 6],
-        galeCanDisable: false,
+        allowedTimeframes: [30, 60, 300],
+        allowedGaleOptions: [0, 3, 6],
+        galeCanDisable: true,
         defaultGaleRounds: 6,
         canViewLeaderboard: false,
         canParticipateGiveaway: false,
