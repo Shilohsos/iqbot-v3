@@ -4141,7 +4141,7 @@ bot.on('text', async ctx => {
 
             if (as.step === 'marathon_v2_desc') {
                 const desc = text.trim().toLowerCase() === 'skip' ? undefined : text.trim();
-                adminSessions.set(chatId, { ...as, marathonV2Desc: desc });
+                adminSessions.set(chatId, { ...as, marathonV2Desc: desc, step: 'marathon_v2_winners' });
                 await ctx.reply(`✅ Description set.\n\nStep 3: Select the *marathon duration*:`, {
                     parse_mode: 'Markdown',
                     reply_markup: marathonDurationKeyboard(),

@@ -13,6 +13,7 @@ import {
     insertGiveawayParticipant,
     getGiveawayParticipants,
     getGiveawayParticipantCount,
+    getMarathonParticipantCount,
     incrementParticipantTradeCount,
     setParticipantWinner,
     getActiveParticipations,
@@ -199,7 +200,9 @@ export async function participate(giveawayId: number, telegramId: number): Promi
     }
 
     const participantId = insertGiveawayParticipant(giveawayId, telegramId);
-    const count = getGiveawayParticipantCount(giveawayId);
+    const count = event.event_type === 'marathon'
+        ? getMarathonParticipantCount(giveawayId)
+        : getGiveawayParticipantCount(giveawayId);
 
     return {
         success: true,
@@ -330,7 +333,9 @@ export function sendMotivationalMessages(giveawayId: number): void {
     const msg = getRandomMotivationalMessage();
     if (!msg) return;
 
-    const count = getGiveawayParticipantCount(giveawayId);
+    const count = event.event_type === 'marathon'
+        ? getMarathonParticipantCount(giveawayId)
+        : getGiveawayParticipantCount(giveawayId);
     const text = msg.content
         .replace(/\$\{prize_pool\}/g, event.prize_pool != null ? `$${event.prize_pool.toFixed(2)}` : 'the prize')
         .replace(/\$\{prize_per_winner\}/g, event.prize_per_winner != null ? `$${event.prize_per_winner.toFixed(2)}` : 'the prize')
@@ -469,7 +474,8 @@ export async function claimPromoCode(
     }
 
     const claimed = getGiveawayParticipantCount(giveawayId);
-    if (event.max_winners != null && claimed >= event.max_winners) {
+    const totalClaimed = claimed + (event.fabricated_claims ?? 0);
+    if (event.max_winners != null && totalClaimed >= event.max_winners) {
         return { success: false, message: '❌ This promo code has reached its maximum number of claims. Check back for more promos!' };
     }
 
@@ -477,7 +483,8 @@ export async function claimPromoCode(
     setParticipantWinner(participantId);
 
     const newCount = getGiveawayParticipantCount(giveawayId);
-    if (event.max_winners != null && newCount >= event.max_winners) {
+    const newTotal = newCount + (event.fabricated_claims ?? 0);
+    if (event.max_winners != null && newTotal >= event.max_winners) {
         setGiveawayStatus(giveawayId, 'completed');
     }
 

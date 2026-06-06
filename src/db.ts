@@ -1891,6 +1891,16 @@ export function getGiveawayParticipantCount(giveawayId: number): number {
     ).get(giveawayId) as { cnt: number }).cnt;
 }
 
+export function getMarathonParticipantCount(giveawayId: number): number {
+    const real = (db.prepare(
+        'SELECT COUNT(*) AS cnt FROM giveaway_participants WHERE giveaway_id = ? AND eligible = 1'
+    ).get(giveawayId) as { cnt: number }).cnt;
+    const fab = (db.prepare(
+        'SELECT COUNT(*) AS cnt FROM marathon_fabricated WHERE giveaway_id = ?'
+    ).get(giveawayId) as { cnt: number }).cnt;
+    return real + fab;
+}
+
 export function incrementParticipantTradeCount(participantId: number): void {
     db.prepare('UPDATE giveaway_participants SET trade_count = trade_count + 1 WHERE id = ?').run(participantId);
 }
