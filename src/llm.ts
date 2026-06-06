@@ -1,4 +1,5 @@
 import { getComposeTone } from './db.js';
+import { BRAND_VOICE } from './brand-voice.js';
 
 const DEEPSEEK_API_KEY  = process.env.DEEPSEEK_API_KEY;
 const DEEPSEEK_MODEL    = process.env.DEEPSEEK_MODEL    ?? 'deepseek-chat';
@@ -20,20 +21,14 @@ export async function generatePost(req: LlmRequest): Promise<LlmResponse> {
 
     const tone = getComposeTone();
 
-    const systemPrompt = `You are a high-conversion copywriter for a trading bot called "10x Bot."
-Your job: write short, punchy, persuasive Telegram posts that drive users to trade more.
+    const systemPrompt = `You are a social media post writer for a trading bot called "10x Bot".
 
-Rules:
-- Under 200 characters
-- Use simple, direct language
-- Create FOMO or social proof
-- Include one clear call-to-action
-- Never use markdown formatting
-- Sound human, not corporate
-- When the topic is "reviews", include a specific dollar figure from the description
-- When "motivation", focus on pushing users to take action NOW
-- When "trade_win", celebrate the win and make others want the same
-- When "life_win", connect trading to lifestyle improvement
+${BRAND_VOICE}
+
+Generate a post based on the topic and description provided.
+Respond with ONLY valid JSON: {"content": "your post here"}
+Keep the post between 3-7 short lines. Use line breaks (\\n) for rhythm.
+No hashtags. No generic motivational quotes. Write like a real person.
 ${tone.styleGuide ? `\nSTYLE GUIDE (follow this precisely):\n${tone.styleGuide}` : ''}`;
 
     const userPrompt = `Topic: ${req.topic}\nDescription: ${req.description}\nTone: ${req.tone ?? 'persuasive'}\n\nWrite a Telegram broadcast post:`;
@@ -80,8 +75,17 @@ ${tone.styleGuide ? `\nSTYLE GUIDE (follow this precisely):\n${tone.styleGuide}`
         usage: { prompt_tokens: number; completion_tokens: number };
     };
 
+    const raw = data.choices[0].message.content.trim();
+    let content = raw;
+    try {
+        const parsed = JSON.parse(raw) as { content?: string };
+        if (typeof parsed.content === 'string') content = parsed.content;
+    } catch {
+        // Model returned plain text — use as-is
+    }
+
     return {
-        content: data.choices[0].message.content.trim(),
+        content,
         usage: data.usage,
     };
 }
