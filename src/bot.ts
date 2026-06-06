@@ -4495,7 +4495,28 @@ bot.on('text', async ctx => {
         if (conn.step === 'confirmed_user_id') {
             const userId = text.trim();
             if (!/^\d{6,12}$/.test(userId)) {
-                await ctx.reply('❌ Please send a valid IQ Option User ID (numbers only).');
+                const failCount = incrementUserIdFailCount(ctx.from!.id);
+                const brainUser = getUser(ctx.from!.id);
+                const brainCtx: UserContext = {
+                    onboarding_state: 'awaiting_user_id',
+                    ssid_valid: null,
+                    has_ssid: false,
+                    demo_trade_count: null,
+                    tier: brainUser?.tier ?? 'DEMO',
+                    is_activated: false,
+                    user_id_fail_count: failCount,
+                };
+                const brainResult = await getBrainFlow(ctx.from!.id, text, brainCtx).catch(
+                    () => ({ flow: 'help_contact', message: '', shouldReply: true })
+                );
+                if (brainResult.shouldReply && brainResult.flow && brainResult.flow !== 'flow_sleep' && brainResult.flow !== 'flow_done') {
+                    const btn = FLOW_BUTTONS[brainResult.flow] ?? FLOW_BUTTONS.help_contact;
+                    const replyText = brainResult.message || btn.text;
+                    const replyMarkup = typeof btn.action === 'string'
+                        ? { inline_keyboard: [[{ text: btn.text, callback_data: btn.action }]] }
+                        : { inline_keyboard: [[{ text: btn.text, url: btn.action.url }]] };
+                    await ctx.reply(replyText, { reply_markup: replyMarkup });
+                }
                 return;
             }
             console.log(`[confirmed] user ${ctx.from!.id} submitted User ID: ${userId}`);
