@@ -92,6 +92,7 @@ export async function executeTradeWithSdk(sdk: ClientSdk, trade: TradeRequest): 
             trade_id: tradeResult.tradeId,
             error: tradeResult.error,
             martingale_run: trade.martingaleRunId,
+            external_id: result.externalId,
         });
 
         return tradeResult;
@@ -136,11 +137,11 @@ function isTimeoutError(err: unknown): boolean {
     return err.name === 'TimeoutError' || err.message.includes('timed out') || err.message.includes('TimeoutError');
 }
 
-function waitForResult(
+export function waitForResult(
     positions: Positions,
     optionId: number,
     timeoutSeconds: number,
-): Promise<Pick<TradeResult, 'status' | 'pnl' | 'error'>> {
+): Promise<Pick<TradeResult, 'status' | 'pnl' | 'error'> & { externalId?: number }> {
     return new Promise(resolve => {
         let externalId: number | undefined;
         let done = false;
@@ -151,7 +152,7 @@ function waitForResult(
             clearTimeout(timer);
             clearInterval(poll);
             positions.unsubscribeOnUpdatePosition(callback);
-            resolve(result);
+            resolve({ ...result, externalId });
         };
 
         const timer = setTimeout(() => {
@@ -179,7 +180,8 @@ function waitForResult(
         // Polling fallback every 5s:
         // - Captures externalId if the websocket open event was missed
         // - Detects close if the websocket close event is never delivered
-        const poll = setInterval(() => {
+        // - Falls back to position history API for trades that left the opened list
+        const poll = setInterval(async () => {
             const opened = positions.getOpenedPositions();
 
             if (externalId === undefined) {
@@ -194,6 +196,21 @@ function waitForResult(
                     const reason = pos.closeReason ?? '';
                     const status: TradeResult['status'] = reason === 'win' ? 'WIN' : reason === 'equal' ? 'TIE' : 'LOSS';
                     finish({ status, pnl });
+                    return;
+                }
+
+                if (!pos) {
+                    try {
+                        const historyPos = await positions.getPositionsHistory().getPositionHistory(externalId);
+                        if (historyPos && historyPos.status === 'closed') {
+                            const pnl = historyPos.closeProfit ?? 0;
+                            const reason = historyPos.closeReason ?? '';
+                            const status: TradeResult['status'] = reason === 'win' ? 'WIN' : reason === 'equal' ? 'TIE' : 'LOSS';
+                            finish({ status, pnl });
+                        }
+                    } catch {
+                        // History lookup failed — next poll will retry
+                    }
                 }
             }
         }, 5_000);

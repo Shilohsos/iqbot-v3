@@ -31,6 +31,9 @@ if (!existingCols.includes('martingale_run')) {
 if (!existingCols.includes('telegram_id')) {
     db.exec('ALTER TABLE trades ADD COLUMN telegram_id INTEGER');
 }
+if (!existingCols.includes('external_id')) {
+    db.exec('ALTER TABLE trades ADD COLUMN external_id INTEGER');
+}
 
 // Users table with full onboarding columns (ssid nullable — user may onboard before /connect)
 db.exec(`
@@ -563,6 +566,7 @@ export interface TradeRecord {
     trade_id?: number;
     error?: string;
     martingale_run?: string;
+    external_id?: number;
     created_at?: string;
 }
 
@@ -575,8 +579,8 @@ export interface TradeStats {
 }
 
 const insertStmt = db.prepare(`
-    INSERT INTO trades (telegram_id, pair, direction, amount, status, pnl, trade_id, error, martingale_run)
-    VALUES (@telegram_id, @pair, @direction, @amount, @status, @pnl, @trade_id, @error, @martingale_run)
+    INSERT INTO trades (telegram_id, pair, direction, amount, status, pnl, trade_id, error, martingale_run, external_id)
+    VALUES (@telegram_id, @pair, @direction, @amount, @status, @pnl, @trade_id, @error, @martingale_run, @external_id)
 `);
 
 export function insertTrade(t: TradeRecord): void {
@@ -594,6 +598,7 @@ export function insertTrade(t: TradeRecord): void {
         trade_id: t.trade_id ?? null,
         error: t.error ?? null,
         martingale_run: t.martingale_run ?? null,
+        external_id: t.external_id ?? null,
     });
 }
 

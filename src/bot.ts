@@ -3,6 +3,7 @@ import { Telegraf, Context } from 'telegraf';
 import { ClientSdk, SsidAuthMethod, BalanceType } from './index.js';
 import { WS_URL, PLATFORM_ID, IQ_HOST, IQ_AUTH_URL } from './protocol.js';
 import { executeTrade, executeTradeWithSdk, createSdk, type TradeRequest, type TradeResult } from './trade.js';
+import { recoverMissedTradeResults } from './tradeRecovery.js';
 import { sdkPool } from './sdk-pool.js';
 import { getTierConfig, normalizeTier, autoPromoteTier, convertToUsd, TIER_CONFIGS } from './tiers.js';
 import {
@@ -4947,6 +4948,9 @@ function startReconnectLoop(bot: Telegraf): void {
 
 bot.launch();
 logger.info('bot', 'iqbot-v3 running');
+recoverMissedTradeResults().catch(err => {
+    console.error('[RECOVERY] Failed to recover missed trades:', err);
+});
 startAutoBroadcast(bot);
 seedFundingCycle();
 startFundingLoop(bot);
