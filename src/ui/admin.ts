@@ -53,6 +53,7 @@ export function adminKeyboard(): IKMarkup {
                 { text: '🛡️ Admin',      callback_data: 'admin:admin' },
                 { text: '✍️ Compose Post', callback_data: 'admin:compose' },
             ],
+            [{ text: '📔 Admin Diary',     callback_data: 'admin:diary' }],
             [{ text: '🟢 Go Live',         callback_data: 'admin:golive' }],
             [{ text: '🔙 Back', callback_data: 'ui:start' }],
         ],

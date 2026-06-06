@@ -2483,3 +2483,23 @@ export function getOnboardingFunnelStats(): Record<string, number> {
     result['connected_ssid'] = (db.prepare("SELECT COUNT(*) AS cnt FROM users WHERE ssid IS NOT NULL").get() as { cnt: number }).cnt;
     return result;
 }
+
+export function getMarketPulseStats(): Record<string, number | string> {
+    const today = new Date().toISOString().split('T')[0]!;
+    const totalUsers    = (db.prepare('SELECT COUNT(*) AS c FROM users').get() as { c: number }).c;
+    const activeTraders = (db.prepare('SELECT COUNT(DISTINCT telegram_id) AS c FROM daily_demo_tracking WHERE date = ? AND trade_count > 0').get(today) as { c: number }).c;
+    const demoToday     = (db.prepare('SELECT COALESCE(SUM(trade_count), 0) AS c FROM daily_demo_tracking WHERE date = ?').get(today) as { c: number }).c;
+    const usersAtLimit  = (db.prepare('SELECT COUNT(*) AS c FROM daily_demo_tracking WHERE date = ? AND trade_count >= 10').get(today) as { c: number }).c;
+    const totalConnects = (db.prepare('SELECT COUNT(*) AS c FROM users WHERE ssid_valid = 1').get() as { c: number }).c;
+    const fundedUsers   = (db.prepare("SELECT COUNT(*) AS c FROM users WHERE tier IN ('PRO', 'MASTER')").get() as { c: number }).c;
+    const recentTrades  = (db.prepare("SELECT COUNT(*) AS c FROM trades WHERE created_at >= datetime('now', '-24 hours')").get() as { c: number }).c;
+    return {
+        total_users:    totalUsers,
+        active_traders: activeTraders,
+        demo_trades:    demoToday,
+        users_at_limit: usersAtLimit,
+        total_connects: totalConnects,
+        funded_users:   fundedUsers,
+        recent_trades:  recentTrades,
+    };
+}

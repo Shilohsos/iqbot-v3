@@ -74,6 +74,7 @@ import {
     getReconnectCycle, upsertReconnectCycle, getReconnectCycleDueUsers,
     getSsidExpiredUsers, getUserIdRejectedUsers, getLoginFailedUsers,
     getAbandonedOnboardingUsers, getNeverConnectedUsers,
+    getMarketPulseStats,
 } from './db.js';
 import { friendlyError } from './errors.js';
 import { logger } from './logger.js';
@@ -109,7 +110,7 @@ import {
 import { checkAffiliate } from './affiliate.js';
 import { setupChannelHandlers } from './channel.js';
 import { startAutoBroadcast } from './auto-broadcast.js';
-import { generatePost, type LlmRequest } from './llm.js';
+import { generatePost, generateDiaryEntry, type LlmRequest } from './llm.js';
 import { getBrainFlow, type UserContext } from './classifier.js';
 import { resolveUsername as resolveUsernameTemplate, applyPidgin } from './pidgin.js';
 import {
@@ -3252,6 +3253,95 @@ bot.action('compose_tone:view', async ctx => {
     msg += tone.sample2   ? `*Sample 2:*\n${truncate(tone.sample2)}\n\n` : '*Sample 2:* _(not set)_\n\n';
     msg += tone.sample3   ? `*Sample 3:*\n${truncate(tone.sample3)}` : '*Sample 3:* _(not set)_';
     await ctx.reply(msg, { parse_mode: 'Markdown', reply_markup: composeToneKeyboard() });
+});
+
+// ─── Admin Diary ──────────────────────────────────────────────────────────────
+
+bot.action('admin:diary', async ctx => {
+    await ctx.answerCbQuery();
+    if (ctx.from?.id !== getAdminId()) return;
+    await ctx.reply(
+        '📔 *Admin Diary*\n\nWhat would you like to generate?',
+        {
+            parse_mode: 'Markdown',
+            reply_markup: {
+                inline_keyboard: [
+                    [{ text: '🎁 Giveaway',    callback_data: 'diary:giveaway' }],
+                    [{ text: '⭐ Review',       callback_data: 'diary:review' }],
+                    [{ text: '📝 Post',         callback_data: 'diary:post' }],
+                    [{ text: '🎙️ Live Topics', callback_data: 'diary:live_topics' }],
+                    [{ text: '📊 Market Pulse', callback_data: 'diary:market_pulse' }],
+                    [{ text: '🔙 Back',         callback_data: 'admin:back' }],
+                ],
+            },
+        },
+    );
+});
+
+bot.action('diary:giveaway', async ctx => {
+    await ctx.answerCbQuery();
+    if (ctx.from?.id !== getAdminId()) return;
+    const loading = await ctx.reply('⏳ Generating giveaway idea...');
+    try {
+        const result = await generateDiaryEntry('giveaway');
+        await ctx.telegram.deleteMessage(ctx.chat!.id, loading.message_id).catch(() => {});
+        await ctx.reply(`🎁 *Giveaway Idea*\n\n${result.content}`, { parse_mode: 'Markdown' });
+    } catch (err) {
+        await ctx.reply(`❌ ${err instanceof Error ? err.message : 'Generation failed'}`);
+    }
+});
+
+bot.action('diary:review', async ctx => {
+    await ctx.answerCbQuery();
+    if (ctx.from?.id !== getAdminId()) return;
+    const loading = await ctx.reply('⏳ Generating client review...');
+    try {
+        const result = await generateDiaryEntry('review');
+        await ctx.telegram.deleteMessage(ctx.chat!.id, loading.message_id).catch(() => {});
+        await ctx.reply(`⭐ *Client Review*\n\n${result.content}`, { parse_mode: 'Markdown' });
+    } catch (err) {
+        await ctx.reply(`❌ ${err instanceof Error ? err.message : 'Generation failed'}`);
+    }
+});
+
+bot.action('diary:post', async ctx => {
+    await ctx.answerCbQuery();
+    if (ctx.from?.id !== getAdminId()) return;
+    const loading = await ctx.reply('⏳ Generating post...');
+    try {
+        const result = await generateDiaryEntry('post');
+        await ctx.telegram.deleteMessage(ctx.chat!.id, loading.message_id).catch(() => {});
+        await ctx.reply(`📝 *Post Idea*\n\n${result.content}`, { parse_mode: 'Markdown' });
+    } catch (err) {
+        await ctx.reply(`❌ ${err instanceof Error ? err.message : 'Generation failed'}`);
+    }
+});
+
+bot.action('diary:live_topics', async ctx => {
+    await ctx.answerCbQuery();
+    if (ctx.from?.id !== getAdminId()) return;
+    const loading = await ctx.reply('⏳ Generating live topics...');
+    try {
+        const result = await generateDiaryEntry('live_topics');
+        await ctx.telegram.deleteMessage(ctx.chat!.id, loading.message_id).catch(() => {});
+        await ctx.reply(`🎙️ *Live Topics*\n\n${result.content}`, { parse_mode: 'Markdown' });
+    } catch (err) {
+        await ctx.reply(`❌ ${err instanceof Error ? err.message : 'Generation failed'}`);
+    }
+});
+
+bot.action('diary:market_pulse', async ctx => {
+    await ctx.answerCbQuery();
+    if (ctx.from?.id !== getAdminId()) return;
+    const loading = await ctx.reply('⏳ Analyzing market pulse...');
+    try {
+        const stats = getMarketPulseStats();
+        const result = await generateDiaryEntry('market_pulse', stats);
+        await ctx.telegram.deleteMessage(ctx.chat!.id, loading.message_id).catch(() => {});
+        await ctx.reply(`📊 *Market Pulse*\n\n${result.content}`, { parse_mode: 'Markdown' });
+    } catch (err) {
+        await ctx.reply(`❌ ${err instanceof Error ? err.message : 'Generation failed'}`);
+    }
 });
 
 // ─── Go Live broadcast ────────────────────────────────────────────────────────
