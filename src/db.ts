@@ -807,11 +807,12 @@ export function getUsersWithSsid(): UserRecord[] {
     return db.prepare('SELECT * FROM users WHERE ssid IS NOT NULL').all() as UserRecord[];
 }
 
-/** Broadcast targets: only funded users (PRO/MASTER with SSID). */
+/** Broadcast targets: only funded users (PRO/MASTER with SSID), excluding admin. */
 export function getBroadcastTargetIds(): number[] {
+    const adminId = parseInt(process.env.ADMIN_USER_ID ?? '1615652240', 10);
     return (db.prepare(
-        "SELECT telegram_id FROM users WHERE ssid IS NOT NULL AND ssid != '' AND tier IN ('PRO','MASTER')"
-    ).all() as { telegram_id: number }[]).map(r => r.telegram_id);
+        "SELECT telegram_id FROM users WHERE ssid IS NOT NULL AND ssid != '' AND tier IN ('PRO','MASTER') AND telegram_id != ?"
+    ).all(adminId) as { telegram_id: number }[]).map(r => r.telegram_id);
 }
 
 /** Expired-SSID users due for a reconnect follow-up (never prompted, or last prompt older than `hours`). */

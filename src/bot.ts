@@ -1456,16 +1456,7 @@ bot.action(/^pair:(.+)$/, async ctx => {
 
         let analysis: AnalysisResult;
         if (isAdmin) {
-            // Silent engine swap — admin gets ultra-strict multi-TF analysis
             const adminResult = await adminAnalyze(sdk, pair).catch(err => { throw err; });
-            if (adminResult.skipped) {
-                if (l7MsgId) { try { await ctx.telegram.deleteMessage(chatId, l7MsgId); } catch {} }
-                await ctx.telegram.editMessageText(
-                    chatId, progressMsg.message_id, undefined,
-                    '⚠️ No clear signal right now. Try a different pair or timeframe.'
-                ).catch(() => {});
-                return;
-            }
             analysis = { direction: adminResult.direction, confidence: adminResult.confidence, reason: adminResult.reason };
         } else {
             const analysisTier = normalizeTier(getUser(ctx.from!.id)?.tier);
