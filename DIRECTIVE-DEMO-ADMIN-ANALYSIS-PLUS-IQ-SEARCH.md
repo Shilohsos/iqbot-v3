@@ -78,7 +78,7 @@ if (isAdmin || analysisTier === 'DEMO') {
         a => norm(a.ticker) === normalizedPair || norm(a.localizationKey) === normalizedPair
     );
     if (!active) throw new Error(`Unknown pair: ${pair}`);
-    const history = await candlesFacade.getCandles(active.id, timeframe, { count: 70 }) as AdminCandle[];
+    const history = await candlesFacade.getCandles(active.id, timeframe, { count: 200 }) as AdminCandle[];
     if (history.length < 30) throw new Error('Not enough data');
     analysis = runAdminAnalysis(history);
 } else {
