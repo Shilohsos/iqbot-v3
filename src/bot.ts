@@ -2740,13 +2740,18 @@ bot.action(/^giveaway_winners:(\d+)$/, async ctx => {
 bot.action(/^giveaway_winners_confirm:(\d+)$/, async ctx => {
     await ctx.answerCbQuery('🏆 Selecting winners…');
     const giveawayId = parseInt(ctx.match[1], 10);
+    const event = getGiveawayEvent(giveawayId);
+    if (event && event.status === 'completed') {
+        await ctx.answerCbQuery('This giveaway already has winners.');
+        await ctx.reply('❌ This giveaway already has winners selected.', { reply_markup: adminBackKeyboard() });
+        return;
+    }
     ctx.telegram.sendChatAction(ctx.chat!.id, 'typing').catch(() => {});
     const winners = giveawaySelectWinners(giveawayId);
     if (winners.length === 0) {
         await ctx.reply('❌ No eligible participants found.', { reply_markup: adminBackKeyboard() });
         return;
     }
-    const event = getGiveawayEvent(giveawayId);
     await ctx.reply(
         `✅ *${winners.length} winner${winners.length !== 1 ? 's' : ''} selected* for *${escapeMd(event?.title ?? 'giveaway')}*\\!\n\nWinner notifications queued\\. They will be notified shortly\\.`,
         { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() }
@@ -2803,7 +2808,7 @@ bot.action(/^giveaway_view:(\d+)$/, async ctx => {
         `Type: ${escapeMd(event.event_type)}`,
         `Status: ${escapeMd(event.status)}`,
         event.event_type === 'giveaway'
-            ? `Participants: ${real + fabricated} total (Real: ${real} | Fabricated: ${fabricated})`
+            ? `Participants: ${real + fabricated} total (${real} real | ${fabricated} system)`
             : `Participants: ${real}`,
         event.prize_pool != null ? `Prize Pool: $${event.prize_pool.toFixed(2)}` : '',
         `Max Winners: ${event.max_winners}`,

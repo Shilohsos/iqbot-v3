@@ -227,7 +227,7 @@ export function selectWinners(giveawayId: number): Array<{ telegram_id: number; 
     const event = getGiveawayEvent(giveawayId);
     if (!event) return [];
 
-    const allEligible = getGiveawayParticipants(giveawayId, true);
+    const allEligible = getGiveawayParticipants(giveawayId, true).filter(p => !p.won_at);
     if (allEligible.length === 0) return [];
 
     // For giveaways: winners come from fabricated pool only — no real payout

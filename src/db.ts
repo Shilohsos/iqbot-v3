@@ -478,6 +478,8 @@ db.exec(`
         db.exec('ALTER TABLE giveaway_participants ADD COLUMN winner INTEGER NOT NULL DEFAULT 0');
     if (!gpCols.includes('fabricated'))
         db.exec('ALTER TABLE giveaway_participants ADD COLUMN fabricated INTEGER NOT NULL DEFAULT 0');
+    if (!gpCols.includes('won_at'))
+        db.exec('ALTER TABLE giveaway_participants ADD COLUMN won_at TEXT');
 }
 
 db.exec(`
@@ -1616,7 +1618,7 @@ export function getLastCompletedGiveawayId(): number | null {
 }
 
 export function getEligibleFabWinnerIds(currentGiveawayId: number): string[] {
-    const lastId = getLastCompletedGiveawayId();
+    const lastId = currentGiveawayId;
     return (db.prepare(`
         SELECT fabricated_id FROM fabricated_traders
         WHERE winner_use_count < 2
@@ -1829,6 +1831,7 @@ export interface GiveawayParticipant {
     winner: number;
     fabricated: number;
     joined_at: string;
+    won_at: string | null;
 }
 
 export function getGiveawayParticipant(giveawayId: number, telegramId: number): GiveawayParticipant | undefined {
@@ -1893,7 +1896,7 @@ export function incrementParticipantTradeCount(participantId: number): void {
 }
 
 export function setParticipantWinner(participantId: number): void {
-    db.prepare('UPDATE giveaway_participants SET winner = 1 WHERE id = ?').run(participantId);
+    db.prepare('UPDATE giveaway_participants SET winner = 1, won_at = datetime(\'now\') WHERE id = ?').run(participantId);
 }
 
 export function disqualifyParticipant(participantId: number, reason: string): void {
@@ -1996,7 +1999,7 @@ export function insertNotification(
     }
 ): void {
     db.prepare(`
-        INSERT INTO notifications_queue
+        INSERT OR IGNORE INTO notifications_queue
             (telegram_id, message, reply_markup, image_file_id, delete_after_seconds, priority, send_after)
         VALUES (?, ?, ?, ?, ?, ?, ?)
     `).run(
