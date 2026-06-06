@@ -36,6 +36,7 @@ import {
     insertScheduledBroadcast, markScheduledBroadcastSent, deleteScheduledBroadcast, getPendingScheduledBroadcasts,
     clearUserSsid,
     saveUserCred,
+    saveUserIqUserId,
     setSsidValid,
     getUsersWithSsid,
     getUsersDueForReconnectPrompt,
@@ -254,8 +255,8 @@ interface OnboardState {
 }
 const onboardSessions = makeSessionMap<OnboardState>('onboard');
 
-type ConnectStep = 'email' | 'password' | 'admin_email' | 'admin_password';
-interface ConnectState { step: ConnectStep; email?: string; }
+type ConnectStep = 'email' | 'password' | 'admin_email' | 'admin_password' | 'confirmed_user_id' | 'confirmed_email' | 'confirmed_password';
+interface ConnectState { step: ConnectStep; email?: string; iqUserId?: string; }
 const connectSessions = makeSessionMap<ConnectState>('connect');
 
 type AdminStep =
@@ -3655,6 +3656,18 @@ bot.command('connect', async ctx => {
     await ctx.reply('📧 Enter your IQ Option email:');
 });
 
+bot.command('confirmed', async ctx => {
+    const chatId = ctx.chat!.id;
+    if (!getUser(ctx.from!.id)) saveUser({ telegram_id: ctx.from!.id, ssid: '' });
+    connectSessions.set(chatId, { step: 'confirmed_user_id' });
+    await ctx.reply(
+        '🟢 *You\'ve been pre-approved*\n\n' +
+        'Step 1: Send your IQ Option User ID.\n' +
+        '_(The number under your profile name in the IQ Option app)_',
+        { parse_mode: 'Markdown' }
+    );
+});
+
 bot.command('disconnect', async ctx => {
     if (ctx.from!.id === getAdminId()) {
         clearAdminSsid();
@@ -4476,6 +4489,59 @@ bot.on('text', async ctx => {
     // ── Standalone /connect wizard ────────────────────────────────────────────
     const conn = connectSessions.get(chatId);
     if (conn) {
+        // /confirmed flow — collect User ID first
+        if (conn.step === 'confirmed_user_id') {
+            const userId = text.trim();
+            if (!/^\d{6,12}$/.test(userId)) {
+                await ctx.reply('❌ Please send a valid IQ Option User ID (numbers only).');
+                return;
+            }
+            conn.iqUserId = userId;
+            conn.step = 'confirmed_email';
+            saveUserIqUserId(ctx.from!.id, userId);
+            connectSessions.set(chatId, conn);
+            await ctx.reply('✅ User ID saved.\n\nStep 2: Enter your IQ Option email address.');
+            return;
+        }
+        if (conn.step === 'confirmed_email') {
+            conn.email = text.trim();
+            conn.step = 'confirmed_password';
+            connectSessions.set(chatId, conn);
+            await ctx.reply('Step 3: Enter your IQ Option password.');
+            return;
+        }
+        if (conn.step === 'confirmed_password') {
+            const email = conn.email!;
+            connectSessions.delete(chatId);
+            await ctx.reply('🔐 Logging in...');
+            try {
+                const { ssid, sdk } = await withTimeout(loginAndCaptureSsid(email, text), 15_000, 'login');
+                saveUser({ telegram_id: ctx.from!.id, ssid });
+                saveUserCred(ctx.from!.id, Buffer.from(`${email}:${text}`).toString('base64'), email);
+                setSsidValid(ctx.from!.id, 1);
+                await clearReconnectPromptMessage(ctx.from!.id);
+                let msg = '✅ *Connected!*\n\n';
+                try {
+                    const all = (await withTimeout(sdk.balances(), 5_000, 'balance')).getBalances();
+                    const demo = all.find(b => b.type === BalanceType.Demo);
+                    const real = all.find(b => b.type === BalanceType.Real);
+                    if (real?.currency) saveUserCurrency(ctx.from!.id, real.currency);
+                    else if (demo?.currency) saveUserCurrency(ctx.from!.id, demo.currency);
+                    if (demo) msg += `🎮 Practice: ${fmtBalance(demo)}\n`;
+                    if (real) msg += `💎 Live: ${fmtBalance(real)}\n`;
+                } finally {
+                    sdk.shutdown().catch(() => {});
+                }
+                await ctx.reply(msg, { parse_mode: 'Markdown' });
+            } catch (err: unknown) {
+                const isTimeout = err instanceof Error && err.message.startsWith('SDK timeout');
+                await ctx.reply(isTimeout
+                    ? '⚠️ IQ Option is taking too long. Please try again.'
+                    : `❌ Connection failed: ${err instanceof Error ? err.message : 'Unknown error'}`
+                );
+            }
+            return;
+        }
         // Admin connect flow
         if (conn.step === 'admin_email') {
             conn.email = text.trim();

@@ -735,6 +735,10 @@ export function findUsersByIqUserId(iqUserId: number): UserRecord[] {
     ).all(iqUserId) as UserRecord[];
 }
 
+export function saveUserIqUserId(telegramId: number, iqUserId: string): void {
+    db.prepare('UPDATE users SET iq_user_id = ? WHERE telegram_id = ?').run(iqUserId, telegramId);
+}
+
 export function saveUser(user: Pick<UserRecord, 'telegram_id' | 'ssid'>): void {
     db.prepare(`
         INSERT INTO users (telegram_id, ssid, last_used)
