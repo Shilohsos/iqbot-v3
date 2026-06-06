@@ -1102,8 +1102,12 @@ export interface FunnelPipeline {
 export function getFunnelPipeline(): FunnelPipeline {
     const weekAgo = new Date(Date.now() - 7 * 86400_000).toISOString();
 
-    const count = (sql: string, param?: string): number =>
-        (db.prepare(sql).get(param) as { cnt: number }).cnt ?? 0;
+    const count = (sql: string, param?: string): number => {
+        const row = param !== undefined
+            ? (db.prepare(sql).get(param) as { cnt: number })
+            : (db.prepare(sql).get() as { cnt: number });
+        return row?.cnt ?? 0;
+    };
 
     const recent = db.prepare(
         `SELECT event_type, created_at, source FROM funnel_events ORDER BY created_at DESC LIMIT 20`
