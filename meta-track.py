@@ -106,6 +106,26 @@ def track():
         logger.error(f"meta fail: {event_name} → {e}")
         return jsonify({"status": "error", "detail": str(e)}), 502
 
+@app.route("/api/log_visit", methods=["POST"])
+def log_visit():
+    """Log a landing page visit to the bot's funnel_events table."""
+    data = request.get_json(silent=True) or {}
+    source = str(data.get("source", "direct"))[:64]
+    db_path = os.path.join(os.path.dirname(__file__), "iqbot-v3.db")
+    try:
+        import sqlite3
+        con = sqlite3.connect(db_path, timeout=5)
+        con.execute(
+            "INSERT INTO funnel_events (event_type, source) VALUES (?, ?)",
+            ("page_visit", source),
+        )
+        con.commit()
+        con.close()
+        return jsonify({"ok": True})
+    except Exception as e:
+        logger.error(f"log_visit error: {e}")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
 @app.route("/health")
 def health():
     return jsonify({"status": "ok", "pixel": PIXEL_ID})

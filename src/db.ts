@@ -300,6 +300,13 @@ db.exec(`
   )
 `);
 
+// Migration: add source column if missing
+{
+    const feCols = (db.prepare('PRAGMA table_info(funnel_events)').all() as { name: string }[]).map(c => c.name);
+    if (!feCols.includes('source'))
+        db.exec('ALTER TABLE funnel_events ADD COLUMN source TEXT');
+}
+
 db.exec(`
   CREATE TABLE IF NOT EXISTS config (
     key        TEXT PRIMARY KEY,
@@ -1074,6 +1081,45 @@ export function getFunnelStats(): { events: number; byType: Array<{ event_type: 
         `SELECT event_type, COUNT(*) AS cnt FROM funnel_events WHERE date(created_at) = date('now') GROUP BY event_type`
     ).all() as Array<{ event_type: string; cnt: number }>;
     return { events, byType };
+}
+
+export function logPageVisit(source?: string): void {
+    db.prepare('INSERT INTO funnel_events (event_type, source) VALUES (?, ?)').run('page_visit', source ?? null);
+}
+
+export interface FunnelPipeline {
+    page_views_today: number;
+    page_views_this_week: number;
+    channel_joins_today: number;
+    channel_joins_this_week: number;
+    connects_today: number;
+    connects_this_week: number;
+    funded_today: number;
+    funded_this_week: number;
+    recent_events: Array<{ event_type: string; created_at: string; source: string | null }>;
+}
+
+export function getFunnelPipeline(): FunnelPipeline {
+    const weekAgo = new Date(Date.now() - 7 * 86400_000).toISOString();
+
+    const count = (sql: string, param?: string): number =>
+        (db.prepare(sql).get(param) as { cnt: number }).cnt ?? 0;
+
+    const recent = db.prepare(
+        `SELECT event_type, created_at, source FROM funnel_events ORDER BY created_at DESC LIMIT 20`
+    ).all() as Array<{ event_type: string; created_at: string; source: string | null }>;
+
+    return {
+        page_views_today:        count(`SELECT COUNT(*) AS cnt FROM funnel_events WHERE event_type = 'page_visit' AND date(created_at) = date('now')`),
+        page_views_this_week:    count(`SELECT COUNT(*) AS cnt FROM funnel_events WHERE event_type = 'page_visit' AND created_at >= ?`, weekAgo),
+        channel_joins_today:     count(`SELECT COUNT(*) AS cnt FROM funnel_events WHERE event_type = 'channel_join_approved' AND date(created_at) = date('now')`),
+        channel_joins_this_week: count(`SELECT COUNT(*) AS cnt FROM funnel_events WHERE event_type = 'channel_join_approved' AND created_at >= ?`, weekAgo),
+        connects_today:          count(`SELECT COUNT(*) AS cnt FROM funnel_events WHERE event_type = 'user_connected' AND date(created_at) = date('now')`),
+        connects_this_week:      count(`SELECT COUNT(*) AS cnt FROM funnel_events WHERE event_type = 'user_connected' AND created_at >= ?`, weekAgo),
+        funded_today:            count(`SELECT COUNT(*) AS cnt FROM funnel_events WHERE event_type = 'user_funded' AND date(created_at) = date('now')`),
+        funded_this_week:        count(`SELECT COUNT(*) AS cnt FROM funnel_events WHERE event_type = 'user_funded' AND created_at >= ?`, weekAgo),
+        recent_events: recent,
+    };
 }
 
 // ─── Config ───────────────────────────────────────────────────────────────────

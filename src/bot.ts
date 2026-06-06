@@ -17,7 +17,7 @@ import {
     generateToken, validateToken, useToken, getTokens,
     updateLeaderboardAuto, addLeaderboardManual, getLeaderboard,
     getLeaderboardDetailed, updateLeaderboardManual,
-    getFunnelStats, getConfig, setConfig, getTestUserId, setTestUser,
+    getFunnelStats, insertFunnelEvent, getConfig, setConfig, getTestUserId, setTestUser,
     getAuditReport, maskUserId,
     calculatePairWinRates, selectTopPicks, type PairWinRate,
     setSession, getSession, deleteSession, cleanStaleSessions,
@@ -75,6 +75,7 @@ import {
     getSsidExpiredUsers, getUserIdRejectedUsers, getLoginFailedUsers,
     getAbandonedOnboardingUsers, getNeverConnectedUsers,
     getMarketPulseStats,
+    getFunnelPipeline,
 } from './db.js';
 import { friendlyError } from './errors.js';
 import { logger } from './logger.js';
@@ -811,6 +812,7 @@ async function sendStartMenu(ctx: Context): Promise<void> {
                         const oldTier = user.tier;
                         setUserTier(telegramId, newTier);
                         user.tier = newTier;
+                        if (oldTier === 'DEMO') insertFunnelEvent('user_funded', JSON.stringify({ telegram_id: telegramId }));
                         logger.info('bot', `auto-promoted user ${telegramId} from ${oldTier} to ${newTier} (balance: ${currency} ${real.amount.toFixed(2)} ≈ $${usdAmount.toFixed(2)})`);
                     }
                 }
@@ -1902,6 +1904,7 @@ bot.command('balance', async ctx => {
             if (newTier && newTier !== user.tier) {
                 const oldTier = user.tier;
                 setUserTier(uid, newTier);
+                if (oldTier === 'DEMO') insertFunnelEvent('user_funded', JSON.stringify({ telegram_id: uid }));
                 logger.info('bot', `auto-promoted user ${uid} from ${oldTier} to ${newTier} via /balance (${currency} ${real.amount.toFixed(2)} ≈ $${usdAmount.toFixed(2)})`);
             }
         }
@@ -2413,11 +2416,40 @@ bot.action(/^trader_edit:(\d+)$/, async ctx => {
 bot.action('admin:funnel', async ctx => {
     await ctx.answerCbQuery();
     const url = getConfig('funnel_url') ?? 'Not set';
-    const stats = getFunnelStats();
-    let msg = `🔻 *Funnel Settings*\n\n🌐 Landing Page: ${url}\n📊 Events Today: ${stats.events}`;
-    if (stats.byType.length > 0) {
-        msg += '\n' + stats.byType.map(e => `• ${e.event_type}: ${e.cnt}`).join('\n');
-    }
+    const p = getFunnelPipeline();
+
+    const pct = (num: number, den: number) =>
+        den > 0 ? ((num / den) * 100).toFixed(1) : '0.0';
+
+    const recentLines = p.recent_events.slice(0, 5).map(e =>
+        `• ${e.event_type}${e.source ? ` (${e.source})` : ''} — ${e.created_at.slice(11, 16)}`
+    ).join('\n');
+
+    const msg = [
+        `🔻 *Conversion Funnel*`,
+        `🌐 Landing Page: ${url}`,
+        ``,
+        `*📈 Today*`,
+        `👁️ Page Views: ${p.page_views_today}`,
+        `📥 Channel Joins: ${p.channel_joins_today}`,
+        `🔗 Connects: ${p.connects_today}`,
+        `💰 Funded: ${p.funded_today}`,
+        ``,
+        `*📊 Conversion Rates*`,
+        `Views → Joins: ${pct(p.channel_joins_today, p.page_views_today)}%`,
+        `Joins → Connects: ${pct(p.connects_today, p.channel_joins_today)}%`,
+        `Connects → Funded: ${pct(p.funded_today, p.connects_today)}%`,
+        ``,
+        `*📅 This Week*`,
+        `👁️ Views: ${p.page_views_this_week}`,
+        `📥 Joins: ${p.channel_joins_this_week}`,
+        `🔗 Connects: ${p.connects_this_week}`,
+        `💰 Funded: ${p.funded_this_week}`,
+        ``,
+        `*🕐 Recent Activity*`,
+        recentLines || '— none yet',
+    ].join('\n');
+
     await ctx.reply(msg, { parse_mode: 'Markdown', reply_markup: funnelKeyboard() });
 });
 
@@ -4403,6 +4435,7 @@ bot.on('text', async ctx => {
                 sdk.shutdown().catch(() => {});
             }
             onboardSessions.delete(chatId);
+            insertFunnelEvent('user_connected', JSON.stringify({ telegram_id: ctx.from!.id }));
             await handleConnected(ctx, ctx.from!.id, balanceText);
         } catch (err) {
             const loginFails = ((onboardSessions.get(chatId) as any)?.loginFailCount ?? 0) + 1;
@@ -4946,7 +4979,9 @@ backgroundIntervals.push(setInterval(async () => {
                         const usdAmount = await convertToUsd(real.amount, real.currency ?? 'USD', sdk);
                         const newTier = autoPromoteTier(user.telegram_id, usdAmount, user.tier ?? 'DEMO');
                         if (newTier && newTier !== user.tier) {
+                            const oldTier = user.tier;
                             setUserTier(user.telegram_id, newTier);
+                            if (oldTier === 'DEMO') insertFunnelEvent('user_funded', JSON.stringify({ telegram_id: user.telegram_id }));
                             logger.info('bot', `[periodic] auto-promoted ${user.telegram_id} ${user.tier} → ${newTier} ($${usdAmount.toFixed(2)})`);
                         }
                     }
