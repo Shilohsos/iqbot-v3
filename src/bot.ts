@@ -3855,7 +3855,8 @@ bot.on('text', async ctx => {
                     const u = getUser(byId);
                     found = u ? [u] : [];
                 } else {
-                    found = findUsersByUsername(text);
+                    const cleanText = text.replace(/^@/, '').trim();
+                    found = findUsersByUsername(cleanText);
                 }
                 if (found.length === 0) {
                     await ctx.reply('🔍 No user found.', { reply_markup: adminBackKeyboard() });

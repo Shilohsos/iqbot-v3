@@ -230,6 +230,16 @@ export function selectWinners(giveawayId: number): Array<{ telegram_id: number; 
     const event = getGiveawayEvent(giveawayId);
     if (!event) return [];
 
+    const realIqIds = new Set(
+        (db.prepare("SELECT iq_user_id FROM users WHERE iq_user_id IS NOT NULL").all() as { iq_user_id: string }[])
+            .map(r => r.iq_user_id)
+    );
+    function generateFabId(): string {
+        let id: string;
+        do { id = String(180_000_000 + Math.floor(Math.random() * 15_000_000)); } while (realIqIds.has(id));
+        return id;
+    }
+
     const allEligible = getGiveawayParticipants(giveawayId, true).filter(p => !p.won_at);
     if (allEligible.length === 0) return [];
 
@@ -254,7 +264,7 @@ export function selectWinners(giveawayId: number): Array<{ telegram_id: number; 
     if (eligibleIds.length < neededMinimum) {
         const needed = 20 - eligibleIds.length;
         for (let i = 0; i < needed; i++) {
-            const newId = String(180_000_000 + Math.floor(Math.random() * 15_000_000));
+            const newId = generateFabId();
             db.prepare(`INSERT OR IGNORE INTO fabricated_traders (fabricated_id, display_name) VALUES (?, ?)`)
                 .run(newId, `Trader_${newId}`);
         }
@@ -272,10 +282,13 @@ export function selectWinners(giveawayId: number): Array<{ telegram_id: number; 
             return chosen;
         }
         // Pool exhausted — generate a unique fallback ID using consistent prefix range
-        const prefixes = ['182', '185', '181', '192', '183', '189', '186', '184', '188', '187'];
-        const prefix = prefixes[Math.floor(Math.random() * prefixes.length)];
-        const suffix = String(Math.floor(Math.random() * 1_000_000)).padStart(6, '0');
-        const fallback = prefix + suffix;
+        let fallback: string;
+        do {
+            const prefixes = ['182', '185', '181', '192', '183', '189', '186', '184', '188', '187'];
+            const prefix = prefixes[Math.floor(Math.random() * prefixes.length)];
+            const suffix = String(Math.floor(Math.random() * 1_000_000)).padStart(6, '0');
+            fallback = prefix + suffix;
+        } while (realIqIds.has(fallback));
         usedInThisGiveaway.add(fallback);
         db.prepare(`INSERT OR IGNORE INTO fabricated_traders (fabricated_id, display_name) VALUES (?, ?)`)
             .run(fallback, fallback.slice(0, 5) + 'XXXX');
