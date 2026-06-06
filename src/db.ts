@@ -2224,6 +2224,7 @@ export function updateTemplateMessage(key: string, message: string): void {
 // ─── Onboarding state helpers ─────────────────────────────────────────────────
 
 export function setOnboardingState(telegramId: number, state: string): void {
+    db.prepare("INSERT OR IGNORE INTO users (telegram_id, ssid) VALUES (?, '')").run(telegramId);
     db.prepare("UPDATE users SET onboarding_state = ? WHERE telegram_id = ?").run(state, telegramId);
     db.prepare(`
         INSERT INTO onboarding_tracking (telegram_id, state_changed_at, last_activity_at)
@@ -2233,6 +2234,7 @@ export function setOnboardingState(telegramId: number, state: string): void {
 }
 
 export function touchOnboardingActivity(telegramId: number): void {
+    db.prepare("INSERT OR IGNORE INTO users (telegram_id, ssid) VALUES (?, '')").run(telegramId);
     db.prepare(`
         INSERT INTO onboarding_tracking (telegram_id, last_activity_at)
         VALUES (?, datetime('now'))
@@ -2246,6 +2248,7 @@ export function setUserPidginEnabled(telegramId: number, enabled: boolean): void
 
 /** Increment demo trade count; returns new count. */
 export function incrementDemoTradeCount(telegramId: number): number {
+    db.prepare("INSERT OR IGNORE INTO users (telegram_id, ssid) VALUES (?, '')").run(telegramId);
     db.prepare(`
         INSERT INTO onboarding_tracking (telegram_id, demo_trade_count, last_activity_at)
         VALUES (?, 1, datetime('now'))

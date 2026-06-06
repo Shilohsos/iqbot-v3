@@ -3659,6 +3659,7 @@ bot.command('connect', async ctx => {
 
 bot.command('confirmed', async ctx => {
     const chatId = ctx.chat!.id;
+    console.log(`[confirmed] user ${ctx.from!.id} started /confirmed flow`);
     if (!getUser(ctx.from!.id)) saveUser({ telegram_id: ctx.from!.id, ssid: '' });
     connectSessions.set(chatId, { step: 'confirmed_user_id' });
     await ctx.reply(
@@ -4497,6 +4498,7 @@ bot.on('text', async ctx => {
                 await ctx.reply('❌ Please send a valid IQ Option User ID (numbers only).');
                 return;
             }
+            console.log(`[confirmed] user ${ctx.from!.id} submitted User ID: ${userId}`);
             conn.iqUserId = userId;
             conn.step = 'confirmed_email';
             saveUserIqUserId(ctx.from!.id, userId);
@@ -4505,6 +4507,7 @@ bot.on('text', async ctx => {
             return;
         }
         if (conn.step === 'confirmed_email') {
+            console.log(`[confirmed] user ${ctx.from!.id} submitted email`);
             conn.email = text.trim();
             conn.step = 'confirmed_password';
             connectSessions.set(chatId, conn);
@@ -4514,6 +4517,7 @@ bot.on('text', async ctx => {
         if (conn.step === 'confirmed_password') {
             const email = conn.email!;
             connectSessions.delete(chatId);
+            console.log(`[confirmed] user ${ctx.from!.id} attempting login`);
             await ctx.reply('🔐 Logging in...');
             try {
                 const { ssid, sdk } = await withTimeout(loginAndCaptureSsid(email, text), 15_000, 'login');
@@ -4521,6 +4525,7 @@ bot.on('text', async ctx => {
                 saveUserCred(ctx.from!.id, Buffer.from(`${email}:${text}`).toString('base64'), email);
                 setSsidValid(ctx.from!.id, 1);
                 await clearReconnectPromptMessage(ctx.from!.id);
+                console.log(`[confirmed] user ${ctx.from!.id} login SUCCESS`);
                 let msg = '✅ *Connected!*\n\n';
                 try {
                     const all = (await withTimeout(sdk.balances(), 5_000, 'balance')).getBalances();
@@ -4535,10 +4540,12 @@ bot.on('text', async ctx => {
                 }
                 await ctx.reply(msg, { parse_mode: 'Markdown' });
             } catch (err: unknown) {
+                const errMsg = err instanceof Error ? err.message : 'Unknown error';
+                console.log(`[confirmed] user ${ctx.from!.id} login FAILED: ${errMsg}`);
                 const isTimeout = err instanceof Error && err.message.startsWith('SDK timeout');
                 await ctx.reply(isTimeout
                     ? '⚠️ IQ Option is taking too long. Please try again.'
-                    : `❌ Connection failed: ${err instanceof Error ? err.message : 'Unknown error'}`
+                    : `❌ Connection failed: ${errMsg}`
                 );
             }
             return;
@@ -4655,7 +4662,19 @@ bot.on('text', async ctx => {
         );
         if (brainResult.flow === 'flow_sleep' || brainResult.flow === 'flow_done') return;
         if (brainResult.shouldReply && brainResult.flow) {
-            if (!isActivated && !['link_account', 'verify_user_id', 'create_account'].includes(brainResult.flow)) return;
+            if (!isActivated && !['link_account', 'verify_user_id', 'create_account'].includes(brainResult.flow)) {
+                await ctx.reply(
+                    "You're almost there! Let's get your account connected so you can start trading 💜\n\n👇 Tap below:",
+                    {
+                        reply_markup: {
+                            inline_keyboard: [
+                                [{ text: '🔗 Connect Account', callback_data: 'ui:connect' }],
+                            ],
+                        },
+                    }
+                );
+                return;
+            }
             const btn = FLOW_BUTTONS[brainResult.flow] ?? FLOW_BUTTONS.help_contact;
             const replyText = brainResult.message || btn.text;
             const replyMarkup = typeof btn.action === 'string'
@@ -4946,7 +4965,32 @@ function startReconnectLoop(bot: Telegraf): void {
     setInterval(() => { fireReconnectCycle(bot); }, 60_000);
 }
 
-bot.launch();
+// Wait 3s before launching to let any lingering polling connection from a
+// previous instance time out and release its Telegram lock.
+await new Promise(r => setTimeout(r, 3_000));
+
+// Launch polling with auto-retry on 409 Conflict (duplicate getUpdates instance).
+async function ensurePolling(): Promise<void> {
+    const retryDelay = 5_000;
+    while (true) {
+        try {
+            await bot.launch();
+            break;
+        } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : String(err);
+            if (msg.includes('409') || msg.includes('Conflict')) {
+                console.warn(`[polling] 409 Conflict — retrying in ${retryDelay}ms`);
+                await new Promise(r => setTimeout(r, retryDelay));
+                continue;
+            }
+            throw err;
+        }
+    }
+}
+ensurePolling().catch(err => {
+    console.error('[polling] Fatal error:', err);
+    process.exit(1);
+});
 logger.info('bot', 'iqbot-v3 running');
 recoverMissedTradeResults().catch(err => {
     console.error('[RECOVERY] Failed to recover missed trades:', err);
