@@ -2422,7 +2422,7 @@ bot.action('admin:funnel', async ctx => {
         den > 0 ? ((num / den) * 100).toFixed(1) : '0.0';
 
     const recentLines = p.recent_events.slice(0, 5).map(e =>
-        `• ${e.event_type}${e.source ? ` (${e.source})` : ''} — ${e.created_at.slice(11, 16)}`
+        `• ${e.event_type.replace(/_/g, ' ')}${e.source ? ` (${e.source})` : ''} — ${e.created_at.slice(11, 16)}`
     ).join('\n');
 
     const msg = [
