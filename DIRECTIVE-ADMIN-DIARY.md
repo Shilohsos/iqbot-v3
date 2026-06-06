@@ -29,6 +29,7 @@ bot.action('admin:diary', async ctx => {
                     [{ text: '⭐ Review', callback_data: 'diary:review' }],
                     [{ text: '📝 Post', callback_data: 'diary:post' }],
                     [{ text: '🎙️ Live Topics', callback_data: 'diary:live_topics' }],
+                    [{ text: '📊 Market Pulse', callback_data: 'diary:market_pulse' }],
                     [{ text: '🔙 Back', callback_data: 'admin:back' }],
                 ]
             }
@@ -93,6 +94,22 @@ bot.action('diary:live_topics', async ctx => {
         await ctx.telegram.deleteMessage(ctx.chat!.id, loading.message_id).catch(() => {});
         await ctx.reply(
             `🎙️ *Live Topics*\n\n${result.content}`,
+            { parse_mode: 'Markdown' }
+        );
+    } catch (err) {
+        await ctx.reply(`❌ ${err instanceof Error ? err.message : 'Generation failed'}`);
+    }
+});
+
+bot.action('diary:market_pulse', async ctx => {
+    await ctx.answerCbQuery();
+    const loading = await ctx.reply('⏳ Analyzing market pulse...');
+    try {
+        const stats = getMarketPulseStats();
+        const result = await generateDiaryEntry('market_pulse', stats);
+        await ctx.telegram.deleteMessage(ctx.chat!.id, loading.message_id).catch(() => {});
+        await ctx.reply(
+            `📊 *Market Pulse*\n\n${result.content}`,
             { parse_mode: 'Markdown' }
         );
     } catch (err) {
@@ -167,14 +184,41 @@ Generate 3-5 talking points for Shiloh's next live trading session. Include:
 
 Each point should be 1-2 sentences. Natural speaking tone, not scripted.
 
-Respond with ONLY valid JSON: {"content": "🎙️ *Live Session Topics*\\n\\n1. [hook]\\n2. [point]\\n3. [point]\\n4. [point]\\n5. [closing CTA]"}`
+Respond with ONLY valid JSON: {"content": "🎙️ *Live Session Topics*\\n\\n1. [hook]\\n2. [point]\\n3. [point]\\n4. [point]\\n5. [closing CTA]"}`,
+
+    market_pulse: `You are a bot performance analyst for 10x Bot.
+
+${BRAND_VOICE}
+
+Review the following bot activity stats and write a brief "state of the bot" pulse check. Be honest and insightful — this is for Shiloh to read before going live.
+
+Stats:
+- Total users: {total_users}
+- Active traders (traded today): {active_traders}
+- Demo trades today: {demo_trades}
+- Users at demo limit (10/10): {users_at_limit}
+- Total connects (all time): {total_connects}
+- Users who funded: {funded_users}
+- Recent trades (last 24h): {recent_trades}
+
+Write 3-4 sentences. What's working? What needs attention? What's the one thing Shiloh should focus on today?
+
+Respond with ONLY valid JSON: {"content": "📊 *Market Pulse — [date]*\\n\\n[your analysis here]"}`
 };
 
 export async function generateDiaryEntry(
-    type: 'giveaway' | 'review' | 'post' | 'live_topics'
+    type: 'giveaway' | 'review' | 'post' | 'live_topics' | 'market_pulse',
+    context?: Record<string, any>
 ): Promise<{ content: string }> {
-    const prompt = DIARY_PROMPTS[type];
+    let prompt = DIARY_PROMPTS[type];
     if (!prompt) throw new Error(`Unknown diary type: ${type}`);
+
+    // Inject context into market_pulse prompt
+    if (type === 'market_pulse' && context) {
+        for (const [key, value] of Object.entries(context)) {
+            prompt = prompt.replace(`{${key}}`, String(value ?? 'N/A'));
+        }
+    }
 
     const apiKey = process.env.DEEPSEEK_API_KEY;
     if (!apiKey) throw new Error('DEEPSEEK_API_KEY not configured');
@@ -227,6 +271,31 @@ import { generatePost, generateDiaryEntry, type LlmRequest } from './llm.js';
 ```
 
 (Only needed if not already imported — check existing imports.)
+
+### 4. `src/db.ts` — Add `getMarketPulseStats()`
+
+```typescript
+export function getMarketPulseStats(): Record<string, any> {
+    const today = new Date().toISOString().split('T')[0];
+    const totalUsers = db.prepare('SELECT COUNT(*) FROM users').pluck() as number ?? 0;
+    const activeTraders = db.prepare(`SELECT COUNT(DISTINCT telegram_id) FROM daily_demo_tracking WHERE date = ? AND trade_count > 0`).pluck() as number ?? 0;
+    const demoToday = db.prepare(`SELECT COALESCE(SUM(trade_count), 0) FROM daily_demo_tracking WHERE date = ?`).pluck() as number ?? 0;
+    const usersAtLimit = db.prepare(`SELECT COUNT(*) FROM daily_demo_tracking WHERE date = ? AND trade_count >= 10`).pluck() as number ?? 0;
+    const totalConnects = db.prepare('SELECT COUNT(*) FROM users WHERE ssid_valid = 1').pluck() as number ?? 0;
+    const fundedUsers = db.prepare("SELECT COUNT(*) FROM users WHERE tier IN ('PRO', 'MASTER')").pluck() as number ?? 0;
+    const recentTrades = db.prepare('SELECT COUNT(*) FROM trades WHERE created_at >= datetime(\'now\', \'-24 hours\')').pluck() as number ?? 0;
+    
+    return {
+        total_users: totalUsers,
+        active_traders: activeTraders,
+        demo_trades: demoToday,
+        users_at_limit: usersAtLimit,
+        total_connects: totalConnects,
+        funded_users: fundedUsers,
+        recent_trades: recentTrades,
+    };
+}
+```
 
 ## Deploy
 
