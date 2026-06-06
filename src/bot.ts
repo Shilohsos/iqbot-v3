@@ -4973,7 +4973,7 @@ backgroundIntervals.push(setInterval(async () => {
     try {
         const candidates = getAllUserIds()
             .map(id => getUser(id))
-            .filter((u): u is NonNullable<typeof u> => !!(u?.ssid) && u.tier !== 'MASTER');
+            .filter((u): u is NonNullable<typeof u> => !!(u?.ssid));
         for (const user of candidates) {
             try {
                 const sdk = await sdkPool.get(user.telegram_id, user.ssid!);
@@ -4987,7 +4987,8 @@ backgroundIntervals.push(setInterval(async () => {
                             const oldTier = user.tier;
                             setUserTier(user.telegram_id, newTier);
                             if (oldTier === 'DEMO') insertFunnelEvent('user_funded', JSON.stringify({ telegram_id: user.telegram_id }));
-                            logger.info('bot', `[periodic] auto-promoted ${user.telegram_id} ${user.tier} → ${newTier} ($${usdAmount.toFixed(2)})`);
+                            if (newTier === 'DEMO' && oldTier !== 'DEMO') insertFunnelEvent('user_unfunded', JSON.stringify({ telegram_id: user.telegram_id }));
+                            logger.info('bot', `[periodic] tier changed ${user.telegram_id} ${oldTier} → ${newTier} ($${usdAmount.toFixed(2)})`);
                         }
                     }
                 } finally {

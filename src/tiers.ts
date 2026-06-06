@@ -127,14 +127,18 @@ export async function convertToUsd(amount: number, currency: string, sdk: Client
 }
 
 export function autoPromoteTier(telegramId: number, realBalance: number, currentTier: string): string | null {
-    // User is already MASTER — no promotion needed
-    if (currentTier === 'MASTER') return null;
+    // Determine correct tier from balance alone
+    let targetTier: string;
+    if (realBalance >= 50) {
+        targetTier = 'MASTER';
+    } else if (realBalance >= 10) {
+        targetTier = 'PRO';
+    } else {
+        targetTier = 'DEMO';
+    }
 
-    // $50+ → MASTER (if not already)
-    if (realBalance >= 50) return 'MASTER';
+    // No change needed
+    if (targetTier === currentTier) return null;
 
-    // $10+ → PRO (only if currently DEMO)
-    if (realBalance >= 10 && currentTier === 'DEMO') return 'PRO';
-
-    return null;
+    return targetTier;
 }
