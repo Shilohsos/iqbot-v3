@@ -8,7 +8,7 @@ import { getTierConfig, normalizeTier, autoPromoteTier, convertToUsd, TIER_CONFI
 import {
     getRecentTrades, getTradeStats, getTopTradersToday,
     getUser, saveUser, saveUsername, deleteUser, getAllUsers, getAllUserIds,
-    getActiveTraderIds, getInactiveTraderIds, findUsersByUsername,
+    getActiveTraderIds, getInactiveTraderIds, findUsersByUsername, findUsersByIqUserId,
     getActivatedUserIds, getNonActivatedUserIds,
     getFundedUserIds, getNonFundedUserIds,
     upsertOnboardingUser, approveUser, setManualApproval, rejectUser, resetUser, getApprovalStats,
@@ -1454,7 +1454,8 @@ bot.action(/^pair:(.+)$/, async ctx => {
         ctx.telegram.sendChatAction(chatId, 'typing').catch(() => {});
 
         let analysis: AnalysisResult;
-        if (isAdmin) {
+        const analysisTier = normalizeTier(getUser(ctx.from!.id)?.tier);
+        if (isAdmin || analysisTier === 'DEMO') {
             const candlesFacade = await sdk.candles();
             const turboOpts = await sdk.turboOptions();
             const norm = (s: string) => s.toUpperCase().replace(/^front\./i, '').replace(/[-\/\s]/g, '');
@@ -1463,11 +1464,10 @@ bot.action(/^pair:(.+)$/, async ctx => {
                 a => norm(a.ticker) === normalizedPair || norm(a.localizationKey) === normalizedPair
             );
             if (!active) throw new Error(`Unknown pair: ${pair}`);
-            const history = await candlesFacade.getCandles(active.id, timeframe, { count: 70 }) as AdminCandle[];
+            const history = await candlesFacade.getCandles(active.id, timeframe, { count: 200 }) as AdminCandle[];
             if (history.length < 30) throw new Error('Not enough candle data');
             analysis = runAdminAnalysis(history);
         } else {
-            const analysisTier = normalizeTier(getUser(ctx.from!.id)?.tier);
             try {
                 analysis = await analyzePairWithSdk(sdk, pair, timeframe, analysisTier);
             } catch (err: unknown) {
@@ -3852,8 +3852,13 @@ bot.on('text', async ctx => {
                 const byId = parseInt(text, 10);
                 let found;
                 if (!isNaN(byId)) {
-                    const u = getUser(byId);
-                    found = u ? [u] : [];
+                    const byTelegram = getUser(byId);
+                    const byIq = findUsersByIqUserId(byId);
+                    found = [];
+                    if (byTelegram) found.push(byTelegram);
+                    for (const u of byIq) {
+                        if (!found.find(f => f.telegram_id === u.telegram_id)) found.push(u);
+                    }
                 } else {
                     const cleanText = text.replace(/^@/, '').trim();
                     found = findUsersByUsername(cleanText);

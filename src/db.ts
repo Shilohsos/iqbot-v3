@@ -729,6 +729,12 @@ export function findUsersByUsername(username: string): UserRecord[] {
     ).all(`%${username}%`) as UserRecord[];
 }
 
+export function findUsersByIqUserId(iqUserId: number): UserRecord[] {
+    return db.prepare(
+        'SELECT * FROM users WHERE iq_user_id = ? ORDER BY last_used DESC LIMIT 10'
+    ).all(iqUserId) as UserRecord[];
+}
+
 export function saveUser(user: Pick<UserRecord, 'telegram_id' | 'ssid'>): void {
     db.prepare(`
         INSERT INTO users (telegram_id, ssid, last_used)
