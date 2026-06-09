@@ -4,16 +4,32 @@ import {
     getTestUserId, getNextBroadcastAt, saveNextBroadcastAt,
     getMessageIndex, saveMessageIndex,
     getLastBroadcastMsgId, saveLastBroadcastMsgId,
+    getConfig,
 } from './db.js';
 
 const RATE_LIMIT_MS = 50;
 const INTERVAL_MS   = 3_600_000; // 1 hour
 
 async function fireBroadcast(bot: Telegraf): Promise<void> {
+    if (getConfig('features_paused') === '1') {
+        console.log('[auto-broadcast] skipped — features_paused');
+        return;
+    }
     const messages = getEnabledAutoMessages().filter(m => m.image_file_id != null);
     if (messages.length === 0) {
         console.log('[auto-broadcast] skipped — no messages with images yet');
         return;
+    }
+
+    // Check manual broadcast cooldown — pause auto for 30min after admin sends manually
+    const cooldownRaw = getConfig('manual_broadcast_cooldown');
+    if (cooldownRaw) {
+        const cooldownUntil = new Date(cooldownRaw).getTime();
+        if (Date.now() < cooldownUntil) {
+            const remainingMin = Math.ceil((cooldownUntil - Date.now()) / 60_000);
+            console.log(`[auto-broadcast] skipped — manual broadcast cooldown active (${remainingMin}m remaining)`);
+            return;
+        }
     }
 
     const idx = getMessageIndex();

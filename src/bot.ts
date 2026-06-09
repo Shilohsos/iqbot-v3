@@ -93,7 +93,7 @@ import {
 import { analyzePair, analyzePairWithSdk, type AnalysisResult } from './analysis.js';
 import {
     amountKeyboard, timeframeKeyboard, pairKeyboard, tfLabel, OTC_PAIRS,
-    tradeModeKeyboard, demoUpsellKeyboard, affiliateFailKeyboard,
+    tradeModeKeyboard, demoUpsellKeyboard, affiliateFailKeyboard, currencyKeyboard,
 } from './menu.js';
 import { startKeyboard, backKeyboard } from './ui/user.js';
 import {
@@ -120,6 +120,7 @@ import {
     handleUserIdVerified, handleUserIdFailed, handleEmailCollected,
     handleConnected,
 } from './onboarding.js';
+import { ProxyAgent } from 'undici';
 import { existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -128,6 +129,7 @@ const BOT_TOKEN = process.env.BOT_TOKEN;
 const IQ_SSID   = process.env.IQ_SSID;
 const AFFILIATE_LINK   = process.env.AFFILIATE_LINK   ?? 'https://iqbroker.com/lp/regframe-01-light-nosocials/?aff=749367&aff_model=revenue';
 const ADMIN_CONTACT_LINK = process.env.ADMIN_CONTACT_LINK ?? 'https://t.me/shiloh_is_10xing';
+const LOGIN_PROXY_URL    = process.env.LOGIN_PROXY_URL;
 
 const FLOW_BUTTONS: Record<string, { text: string; action: string | { url: string } }> = {
     start_trading:        { text: '🚀 Start Trading',  action: 'ui:trade' },
@@ -168,6 +170,34 @@ if (!BOT_TOKEN) throw new Error('BOT_TOKEN missing from .env');
 
 process.on('unhandledRejection', (reason) => { console.error('[unhandledRejection]', reason); });
 
+// ─── Admin notification queue ─────────────────────────────────────────────────
+// Defers admin notifications when admin is actively using the portal.
+// Notifications are queued and delivered 20 min after the last admin activity.
+const adminNotificationQueue: { msg: string; parseMode?: any }[] = [];
+let adminNotificationTimer: NodeJS.Timeout | null = null;
+
+function touchAdminActivity(): void {
+    if (adminNotificationTimer) clearTimeout(adminNotificationTimer);
+    adminNotificationTimer = setTimeout(flushAdminNotifications, 20 * 60 * 1000);
+}
+
+async function notifyAdmin(msg: string, parseMode?: any): Promise<void> {
+    if (adminNotificationTimer) {
+        adminNotificationQueue.push({ msg, parseMode });
+        return;
+    }
+    try { await bot.telegram.sendMessage(getAdminId(), msg, { parse_mode: parseMode ?? 'Markdown' }); } catch {}
+}
+
+function flushAdminNotifications(): void {
+    adminNotificationTimer = null;
+    const queue = adminNotificationQueue.splice(0);
+    if (queue.length === 0) return;
+    for (const n of queue) {
+        bot.telegram.sendMessage(getAdminId(), n.msg, { parse_mode: n.parseMode ?? 'Markdown' }).catch(() => {});
+    }
+}
+
 const bot = new Telegraf(BOT_TOKEN, { handlerTimeout: Infinity });
 
 // ─── Channel integration ──────────────────────────────────────────────────────
@@ -202,6 +232,9 @@ function fmtBalance(b: { amount: number; currency?: string }): string {
     const sym = (b.currency && CURRENCY_SYMBOLS[b.currency]) || b.currency || '$';
     return `${sym}${b.amount.toFixed(2)}`;
 }
+function fmtMoney(n: number, cur = 'USD'): string {
+    return `${CURRENCY_SYMBOLS[cur] ?? '$'}${n.toFixed(2)}`;
+}
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label?: string): Promise<T> {
     return Promise.race([
@@ -235,11 +268,12 @@ function makeSessionMap<T>(prefix: string) {
         has: (k: number): boolean => cache.has(k) || getSession<T>(`session:${prefix}:${k}`) !== undefined,
     };
 }
+type WizardStep = 'mode' | 'currency' | 'amount' | 'timeframe' | 'pair' | 'custom_amount';
 
-type WizardStep = 'mode' | 'amount' | 'timeframe' | 'pair' | 'custom_amount';
 interface WizardState {
     step: WizardStep;
     mode?: 'demo' | 'live';
+    currency?: string;
     amount?: number;
     timeframe?: number;
     lastImageMsgId?: number;
@@ -294,6 +328,7 @@ type AdminStep =
     | 'marathon_v2_winners'
     | 'marathon_v2_prize'
     | 'compose_description'
+    | 'compose_manual'
     | 'compose_image'
     | 'compose_cta'
     | 'compose_tone_guide'
@@ -304,7 +339,7 @@ type AdminStep =
 
 interface AdminSessionState {
     step: AdminStep;
-    broadcastTarget?: 'funded' | 'nonfunded' | 'nonactivated' | 'testuser';
+    broadcastTarget?: 'all' | 'funded' | 'nonfunded' | 'nonactivated' | 'testuser';
     broadcastLinkUrl?: string;
     manualAddUserId?: number;
     editTraderTelegramId?: number;
@@ -382,6 +417,20 @@ let nextScheduledId = 1;
 
 // userId → number of active martingale trades in flight
 const activeTradeSessions = new Map<number, number>();
+
+// Asset file_id cache — avoids re-uploading the same image to Telegram
+const assetFileIdCache = new Map<string, string>();
+async function sendCachedAsset(ctx: any, assetName: string): Promise<{ message_id: number } | undefined> {
+    const cachedId = assetFileIdCache.get(assetName);
+    if (cachedId) {
+        try { return await ctx.replyWithPhoto(cachedId); } catch {}
+    }
+    try {
+        const m = await ctx.replyWithPhoto(ASSET(assetName));
+        assetFileIdCache.set(assetName, m.photo[0].file_id);
+        return m;
+    } catch { return undefined; }
+}
 
 // Top picks cache — refreshed every 2 hours
 const PICKS_REFRESH_MS = 2 * 60 * 60 * 1000;
@@ -520,7 +569,7 @@ async function executeScheduledBroadcast(scheduled: ScheduledBroadcast): Promise
         scheduled.deleteAfterMs < 3_600_000 ? `${scheduled.deleteAfterMs / 60_000}m` : `${scheduled.deleteAfterMs / 3_600_000}h`;
     let msg = `📅 Scheduled broadcast #${scheduled.id} sent to *${sent}/${scheduled.targetIds.length}* users. Auto-delete: ${timerLabel}`;
     if (deferred > 0) msg += `\n⏳ *${deferred}* deferred (active traders — will deliver after trade ends)`;
-    try { await bot.telegram.sendMessage(getAdminId(), msg, { parse_mode: 'Markdown' }); } catch {}
+    try { await notifyAdmin(msg, 'Markdown'); } catch {}
 }
 
 function scheduleBroadcastInMemory(scheduled: ScheduledBroadcast, delayMs: number): void {
@@ -590,6 +639,11 @@ async function executeBroadcast(chatId: number, deleteAfterMs: number, ctx: Cont
     if (!pending) { await ctx.reply('❌ Session expired.', { reply_markup: adminBackKeyboard() }); return; }
 
     const { sent, deferred } = await dispatchBroadcastPayload({ ...pending, deleteAfterMs });
+
+    // Pause auto-broadcasts for 30 minutes after manual broadcast
+    const cooldownUntil = new Date(Date.now() + 30 * 60 * 1000).toISOString();
+    setConfig('manual_broadcast_cooldown', cooldownUntil);
+    console.log(`[broadcast] manual broadcast cooldown set — auto paused for 30m`);
 
     const timerLabel = deleteAfterMs === 0 ? 'never' :
         deleteAfterMs < 60_000 ? `${deleteAfterMs / 1_000}s` :
@@ -691,11 +745,15 @@ async function loginAndCaptureSsid(email: string, password: string): Promise<{ s
 
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
         try {
-            const res = await fetch(`${IQ_AUTH_URL}/v2/login`, {
+            const fetchOptions: RequestInit & { dispatcher?: any } = {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'User-Agent': 'quadcode-client-sdk-js/1.3.21' },
                 body: JSON.stringify({ identifier: email, password }),
-            });
+            };
+            if (LOGIN_PROXY_URL) {
+                fetchOptions.dispatcher = new ProxyAgent(LOGIN_PROXY_URL);
+            }
+            const res = await fetch(`${IQ_AUTH_URL}/v2/login`, fetchOptions);
             const rawBody = await res.text();
             console.log(`[connect] (attempt ${attempt}/${MAX_RETRIES}) HTTP ${res.status}: ${rawBody.slice(0, 200)}`);
             let data: { code?: string; message?: string; ssid?: string };
@@ -910,6 +968,7 @@ async function runMartingale(
     martingaleRounds?: number,
     preTradeMessageIds: number[] = [],
     existingSdk?: ClientSdk,
+    currency = 'USD',
 ): Promise<void> {
     const userId = ctx.from!.id;
     const effectiveRounds = martingaleRounds ?? getUserMartingaleSettings(userId).maxRounds;
@@ -951,7 +1010,7 @@ async function runMartingale(
     };
 
     for (let round = 1; round <= effectiveRounds + 1; round++) {
-        logLines.push(`⚡ Trade 1|🟡 $${currentAmount.toFixed(2)} → in flight`);
+        logLines.push(`⚡ Trade 1|🟡 ${fmtMoney(currentAmount, currency)} → in flight`);
         await syncLog();
 
         const roundTrade: TradeRequest = { pair, direction, amount: currentAmount, martingaleRunId: runId, timeframeSec, balanceType, telegramId: ctx.from!.id };
@@ -963,7 +1022,7 @@ async function runMartingale(
                 : await withTimeout(executeTrade(ssid, roundTrade), roundTimeoutMs, 'trade');
         } catch (err: unknown) {
             const errMsg = err instanceof Error ? err.message : 'Unknown error';
-            logLines[logLines.length - 1] = `⚡ Trade 1|⚠️ $${currentAmount.toFixed(2)} → error`;
+            logLines[logLines.length - 1] = `⚡ Trade 1|⚠️ ${fmtMoney(currentAmount, currency)} → error`;
             await syncLog();
             
             // FRIENDLY BALANCE ERROR
@@ -992,22 +1051,24 @@ async function runMartingale(
 
         const lastIdx = logLines.length - 1;
         if (result.status === 'WIN') {
-            logLines[lastIdx] = `⚡ Trade 1|🟢 $${currentAmount.toFixed(2)} → +$${result.pnl.toFixed(2)}`;
+            logLines[lastIdx] = `⚡ Trade 1|🟢 ${fmtMoney(currentAmount, currency)} → +${fmtMoney(result.pnl, currency)}`;
         } else if (result.status === 'LOSS') {
-            logLines[lastIdx] = `⚡ Trade 1|🔴 $${currentAmount.toFixed(2)} → -$${currentAmount.toFixed(2)}`;
+            logLines[lastIdx] = `⚡ Trade 1|🔴 ${fmtMoney(currentAmount, currency)} → -${fmtMoney(currentAmount, currency)}`;
         } else if (result.status === 'TIE') {
-            logLines[lastIdx] = `⚡ Trade 1|⚪ $${currentAmount.toFixed(2)} → $0.00`;
+            logLines[lastIdx] = `⚡ Trade 1|⚪ ${fmtMoney(currentAmount, currency)} → ${fmtMoney(0, currency)}`;
         } else {
-            logLines[lastIdx] = `⚡ Trade 1|⚠️ $${currentAmount.toFixed(2)} → ${result.error ?? result.status}`;
+            logLines[lastIdx] = `⚡ Trade 1|⚠️ ${fmtMoney(currentAmount, currency)} → ${result.error ?? result.status}`;
         }
         await syncLog();
 
         // Update session stats on any settled trade
-        // Capture pre-increment demo count before settling, then increment for all settled trades
+        // Capture pre-increment demo count before settling, then increment ONCE per trade sequence (not per martingale round)
         let demoPrevCount = 0;
-        if (balanceType === 'demo' && (result.status === 'WIN' || result.status === 'LOSS' || result.status === 'TIE')) {
+        let demoCounted = false;
+        if (balanceType === 'demo' && !demoCounted && (result.status === 'WIN' || result.status === 'LOSS' || result.status === 'TIE')) {
             demoPrevCount = getDailyDemoCount(ctx.from!.id);
             incrementDailyDemoCount(ctx.from!.id);
+            demoCounted = true;
         }
 
         if (result.status === 'WIN' || result.status === 'LOSS' || result.status === 'TIE') {
@@ -1022,9 +1083,9 @@ async function runMartingale(
             // Round 1 = direct win (L11a); round 2+ = comeback (L11b)
             await sendRoundImage(round === 1 ? 'L11a.png' : 'L11b.png');
             const winReply = await ctx.reply(
-                `🏆 +$${result.pnl.toFixed(2)} added to your balance.\n\n` +
+                `🏆 +${fmtMoney(result.pnl, currency)} added to your balance.\n\n` +
                 (round > 1 ? `Recovery complete.\n\n` : '') +
-                `💸 You just made +$${result.pnl.toFixed(2)}`,
+                `💸 You just made +${fmtMoney(result.pnl, currency)}`,
                 { reply_markup: { inline_keyboard: [[{ text: '🔄 New Opportunity', callback_data: 'ui:trade' }]] } }
             );
             sentMessages.push(winReply.message_id);
@@ -1090,9 +1151,11 @@ async function runMartingale(
 
     const sign = totalPnl >= 0 ? '+' : '';
     // L11c = LOST, BUT THIS IS NOT THE END; replaces L10 if showing
+    const absPnl = Math.abs(totalPnl);
+    const pnlSign2 = totalPnl >= 0 ? '+' : '';
     await sendRoundImage('L11c.png');
     const lostReply = await ctx.reply(
-        `Lost this one 💔! Remain confident! New setup loading 👾\n\nTotal: ${sign}$${totalPnl.toFixed(2)}`,
+        `Lost this one 💔! Remain confident! New setup loading 👾\n\nTotal: ${pnlSign2}${fmtMoney(absPnl, currency)}`,
         { reply_markup: { inline_keyboard: [[{ text: '🔄 New Opportunity', callback_data: 'ui:trade' }]] } }
     );
     sentMessages.push(lostReply.message_id);
@@ -1216,6 +1279,7 @@ bot.action('onboard:need_account',  async ctx => { await ctx.answerCbQuery().cat
 
 bot.action(/^mode:(demo|live)$/, async ctx => {
     await ctx.answerCbQuery();
+    if (ctx.from!.id === getAdminId()) touchAdminActivity();
     const chatId = ctx.chat!.id;
     const state = wizardSessions.get(chatId);
     if (!state || state.step !== 'mode') return;
@@ -1231,8 +1295,25 @@ bot.action(/^mode:(demo|live)$/, async ctx => {
     }
 
     state.mode = mode;
+    state.step = 'currency';
+    await ctx.reply('💰 Select your trading currency:', { reply_markup: currencyKeyboard() });
+});
+
+// ─── Trade wizard — currency ───────────────────────────────────────────────────
+
+bot.action(/^cur:(.+)$/, async ctx => {
+    const chatId = ctx.chat!.id;
+    const state = wizardSessions.get(chatId);
+    if (!state || state.step !== 'currency') { await ctx.answerCbQuery('Session expired — start over.'); return; }
+    await ctx.answerCbQuery();
+    if (ctx.from!.id === getAdminId()) touchAdminActivity();
+    state.currency = ctx.match[1];
     state.step = 'amount';
-    await ctx.reply('Enter amount', { reply_markup: amountKeyboard() });
+    if (state.lastImageMsgId) {
+        try { await ctx.telegram.deleteMessage(ctx.chat!.id, state.lastImageMsgId); } catch {}
+    }
+    try { const m = await sendCachedAsset(ctx, 'L5.png'); state.lastImageMsgId = m?.message_id; } catch {}
+    await ctx.reply('💰 Enter amount:', { reply_markup: amountKeyboard(state.currency) });
 });
 
 // ─── Trade wizard — amount ────────────────────────────────────────────────────
@@ -1252,6 +1333,7 @@ bot.action(/^amt:(.+)$/, async ctx => {
     const state = wizardSessions.get(chatId);
     if (!state || state.step !== 'amount') { await ctx.answerCbQuery('Session expired — start over.'); return; }
     await ctx.answerCbQuery();
+    if (ctx.from!.id === getAdminId()) touchAdminActivity();
 
     const val = ctx.match[1];
     if (val === 'custom') {
@@ -1261,13 +1343,16 @@ bot.action(/^amt:(.+)$/, async ctx => {
         try { await ctx.editMessageText(`✏️ Enter your custom amount (e.g. 75 ${cur}):`); } catch {}
     } else {
         const amt = parseFloat(val);
-        if (state.mode === 'demo' && amt > 20) { await ctx.reply('❌ Demo max is $20 or equivalent.'); return; }
+        if (state.mode === 'demo') {
+            const maxAmt = state.currency === 'NGN' ? 20000 : 20;
+            if (amt > maxAmt) { await ctx.reply(`❌ Demo max is ${state.currency === 'NGN' ? '₦20,000' : '$20'} or equivalent.`); return; }
+        }
         state.amount = amt;
         state.step = 'timeframe';
         if (state.lastImageMsgId) {
             try { await ctx.telegram.deleteMessage(ctx.chat!.id, state.lastImageMsgId); } catch {}
         }
-        try { const m = await ctx.replyWithPhoto(ASSET('L5.png')); state.lastImageMsgId = m.message_id; } catch {}
+        try { const m = await sendCachedAsset(ctx, 'L5.png'); state.lastImageMsgId = m?.message_id; } catch {}
         const isAdminAmt = ctx.from!.id === getAdminId();
         const tfBtnUser = isAdminAmt ? null : getUser(ctx.from!.id);
         const tfBtnTier = isAdminAmt ? 'MASTER' : tfBtnUser?.tier ?? undefined;
@@ -1285,12 +1370,13 @@ bot.action(/^tf:(\d+)$/, async ctx => {
     const state = wizardSessions.get(chatId);
     if (!state || state.step !== 'timeframe') { await ctx.answerCbQuery('Session expired — start over.'); return; }
     await ctx.answerCbQuery(); // stop spinner immediately before slow image upload
+    if (ctx.from!.id === getAdminId()) touchAdminActivity();
     state.timeframe = parseInt(ctx.match[1], 10);
     state.step = 'pair';
     if (state.lastImageMsgId) {
         try { await ctx.telegram.deleteMessage(ctx.chat!.id, state.lastImageMsgId); } catch {}
     }
-    try { const m = await ctx.replyWithPhoto(ASSET('L6.png')); state.lastImageMsgId = m.message_id; } catch {}
+    try { const m = await sendCachedAsset(ctx, 'L6.png'); state.lastImageMsgId = m?.message_id; } catch {}
     const tfTier = ctx.from!.id === getAdminId() ? 'MASTER' : normalizeTier(getUser(chatId)?.tier);
     const picks = getTopPicks();
     const medals = ['🏆', '🥇', '🥈', '🥉', '4️⃣'];
@@ -1369,17 +1455,21 @@ bot.action(/^pair:(.+)$/, async ctx => {
     const state = wizardSessions.get(chatId);
     if (!state || state.step !== 'pair') { await ctx.answerCbQuery('Session expired — start over.'); return; }
     await ctx.answerCbQuery();
+    if (ctx.from!.id === getAdminId()) touchAdminActivity();
 
     const pair = ctx.match[1];
-    const { amount, timeframe, mode, lastImageMsgId: prevImgId } = state;
+    const { amount, timeframe, mode, currency, lastImageMsgId: prevImgId } = state;
     wizardSessions.delete(chatId);
 
     if (!amount || !timeframe) { await ctx.reply('❌ Session error — start over.'); return; }
 
-    const isAdmin = ctx.from!.id === getAdminId();
+    const useCur = currency || 'USD';
 
-    // Block demo trades at daily limit (non-admin only)
-    if (!isAdmin && mode === 'demo') {
+    const isAdmin = ctx.from!.id === getAdminId();
+    const isPrivileged = isAdmin || ctx.from!.id === 6622587977;
+
+    // Block demo trades at daily limit (non-admin/non-privileged only)
+    if (!isPrivileged && mode === 'demo') {
         const dailyCount = getDailyDemoCount(ctx.from!.id);
         if (dailyCount >= 10) {
             await ctx.answerCbQuery('🎯 Demo limit reached. Fund to go live or wait until tomorrow.', { show_alert: true });
@@ -1449,7 +1539,7 @@ bot.action(/^pair:(.+)$/, async ctx => {
     let tradeStarted = false;
     try {
         // Tier validation — skip for admin (unrestricted access)
-        if (!isAdmin) {
+        if (!isPrivileged) {
             const analysisUser = getUser(ctx.from!.id);
             const analysisTier = normalizeTier(analysisUser?.tier);
             const tierCfg = getTierConfig(analysisTier);
@@ -1475,7 +1565,7 @@ bot.action(/^pair:(.+)$/, async ctx => {
 
         let analysis: AnalysisResult;
         const analysisTier = normalizeTier(getUser(ctx.from!.id)?.tier);
-        if (isAdmin || analysisTier === 'DEMO') {
+        if (isPrivileged || analysisTier === 'DEMO') {
             const candlesFacade = await sdk.candles();
             const turboOpts = await sdk.turboOptions();
             const norm = (s: string) => s.toUpperCase().replace(/^front\./i, '').replace(/[-\/\s]/g, '');
@@ -1514,12 +1604,12 @@ bot.action(/^pair:(.+)$/, async ctx => {
         if (l9) preTradeMessageIds.push(l9.message_id);
         const opportunityMsg = await ctx.reply(
             `OPPORTUNITY FOUND\nConfidence: ${Math.round(analysis.confidence)}% · Bot is ready to execute.\n\n${dirStr}\n\n` +
-            `🔷 Trading pair: ${pair}\n🔷 Amount: $${amount.toFixed(2)} USD\n` +
+            `🔷 Trading pair: ${pair}\n🔷 Amount: ${fmtMoney(amount, useCur)} ${useCur}\n` +
             `🔷 Expiration: ${tfLabel(timeframe)}\n🔷 Strategy: High-Profit ⚡`
         ).catch(() => undefined);
         if (opportunityMsg) preTradeMessageIds.push(opportunityMsg.message_id);
 
-        const maxConcurrent = isAdmin ? 999 : getTierConfig(normalizeTier(getUser(ctx.from!.id)?.tier)).maxConcurrentTrades;
+        const maxConcurrent = isPrivileged ? 999 : getTierConfig(normalizeTier(getUser(ctx.from!.id)?.tier)).maxConcurrentTrades;
         const currentCount = activeTradeSessions.get(ctx.from!.id) ?? 0;
         if (currentCount >= maxConcurrent) {
             const tradeCfg = getTierConfig(normalizeTier(getUser(ctx.from!.id)?.tier));
@@ -1535,7 +1625,7 @@ bot.action(/^pair:(.+)$/, async ctx => {
         const mgSettings = getUserMartingaleSettings(ctx.from!.id);
         const martingaleRounds = mgSettings.enabled ? mgSettings.maxRounds : 1;
         logger.trade('executing', pair, ctx.from!.id, `$${amount} ${tfLabel(timeframe)} ${mode}`);
-        const tradePromise = runMartingale(ctx, ssid, pair, analysis.direction, amount, timeframe, (mode ?? 'live') as 'demo' | 'live', martingaleRounds, preTradeMessageIds, sdk)
+        const tradePromise = runMartingale(ctx, ssid, pair, analysis.direction, amount, timeframe, (mode ?? 'live') as 'demo' | 'live', martingaleRounds, preTradeMessageIds, sdk, useCur)
             .catch(err => {
                 logger.error('trade', `Unhandled trade error: ${err instanceof Error ? err.message : String(err)}`);
             });
@@ -1558,19 +1648,17 @@ bot.action(/^pair:(.+)$/, async ctx => {
 bot.action('upsell:live', async ctx => {
     await ctx.answerCbQuery();
     const chatId = ctx.chat!.id;
-    const state: WizardState = { step: 'amount', mode: 'live' };
-    try { const m = await ctx.replyWithPhoto(ASSET('L5.png')); state.lastImageMsgId = m.message_id; } catch {}
+    const state: WizardState = { step: 'currency', mode: 'live' };
     wizardSessions.set(chatId, state);
-    await ctx.reply('💰 Enter amount for Live trade:', { reply_markup: amountKeyboard() });
+    await ctx.reply('💰 Select your currency for Live trade:', { reply_markup: currencyKeyboard() });
 });
 
 bot.action('upsell:demo', async ctx => {
     await ctx.answerCbQuery();
     const chatId = ctx.chat!.id;
-    const state: WizardState = { step: 'amount', mode: 'demo' };
-    try { const m = await ctx.replyWithPhoto(ASSET('L5.png')); state.lastImageMsgId = m.message_id; } catch {}
+    const state: WizardState = { step: 'currency', mode: 'demo' };
     wizardSessions.set(chatId, state);
-    await ctx.reply('💰 Enter amount for Demo trade:', { reply_markup: amountKeyboard() });
+    await ctx.reply('💰 Select your currency for Demo trade:', { reply_markup: currencyKeyboard() });
 });
 
 // ─── User menu actions ────────────────────────────────────────────────────────
@@ -1853,8 +1941,8 @@ bot.command('trade', async ctx => {
             );
             return;
         }
-        wizardSessions.set(ctx.chat.id, { step: 'amount', mode: 'live' });
-        await ctx.reply('Enter trade amount (USD):', { reply_markup: amountKeyboard() });
+        wizardSessions.set(ctx.chat.id, { step: 'currency', mode: 'live' });
+        await ctx.reply('💰 Select currency:', { reply_markup: currencyKeyboard() });
         return;
     }
     if (!await requireApproval(ctx)) return;
@@ -2242,11 +2330,12 @@ bot.action('admin:broadcast', async ctx => {
     await ctx.reply('📢 *Broadcast* — Select target group:', { parse_mode: 'Markdown', reply_markup: broadcastTargetKeyboard() });
 });
 
-bot.action(/^broadcast:(funded|nonfunded|nonactivated|testuser)$/, async ctx => {
+bot.action(/^broadcast:(all|funded|nonfunded|nonactivated|testuser)$/, async ctx => {
     await ctx.answerCbQuery();
-    const target = ctx.match[1] as 'funded' | 'nonfunded' | 'nonactivated' | 'testuser';
+    const target = ctx.match[1] as 'all' | 'funded' | 'nonfunded' | 'nonactivated' | 'testuser';
     adminSessions.set(ctx.chat!.id, { step: 'broadcast_message', broadcastTarget: target });
     const labelMap: Record<string, string> = {
+        all: 'All Users',
         funded: 'Funded users (PRO/MASTER)',
         nonfunded: 'Non-Funded users (connected, no deposit)',
         nonactivated: 'Non-Activated users',
@@ -3156,6 +3245,12 @@ bot.action('compose:edit', async ctx => {
     await ctx.reply('✏️ Enter a new description (≤10 words):');
 });
 
+bot.action('compose:manual', async ctx => {
+    await ctx.answerCbQuery();
+    adminSessions.set(ctx.chat!.id, { step: 'compose_manual' });
+    await ctx.reply('✏️ Paste or type the text you want to send:');
+});
+
 bot.action('compose:approve', async ctx => {
     await ctx.answerCbQuery();
     const chatId = ctx.chat!.id;
@@ -3168,7 +3263,7 @@ bot.action('compose:approve', async ctx => {
     await ctx.reply('📎 Send an image to attach, or type *skip* to send text-only:', { parse_mode: 'Markdown' });
 });
 
-bot.action(/^compose_btn:(start|trade|fund|none)$/, async ctx => {
+bot.action(/^compose_btn:(start|trade|fund|contact|none)$/, async ctx => {
     await ctx.answerCbQuery();
     const chatId = ctx.chat!.id;
     const as = adminSessions.get(chatId);
@@ -3198,9 +3293,10 @@ bot.action(/^compose_delivery:(bot|channel|both)$/, async ctx => {
     const fundUrl = process.env.FUNDING_URL ?? 'https://iqoption.com/pwa/payments/deposit';
     const botUsername = process.env.BOT_USERNAME ?? '';
     const ctaBtnMap: Record<string, { text: string; callback_data?: string; url?: string }> = {
-        start: { text: '🚀 Start Bot', url: `https://t.me/${botUsername}?start=` },
-        trade: { text: '🎯 Trade Now', callback_data: 'ui:trade' },
-        fund:  { text: '💰 Fund Account', url: fundUrl },
+        start:   { text: '🚀 Start Bot', url: `https://t.me/${botUsername}?start=` },
+        trade:   { text: '🎯 Trade Now', callback_data: 'ui:trade' },
+        fund:    { text: '💰 Fund Account', url: fundUrl },
+        contact: { text: '📞 Contact Admin', url: ADMIN_CONTACT_LINK },
     };
     const cta = as.composeCta;
     const ctaBtn = cta && cta !== 'none' ? ctaBtnMap[cta] : { text: '🚀 Trade Now', callback_data: 'ui:trade' };
@@ -3918,7 +4014,8 @@ bot.on('text', async ctx => {
                 try {
                     const target = as.broadcastTarget!;
                     let targetIds: number[];
-                    if (target === 'funded') targetIds = getFundedUserIds();
+                    if (target === 'all') targetIds = getAllUserIds();
+                    else if (target === 'funded') targetIds = getFundedUserIds();
                     else if (target === 'nonfunded') targetIds = getNonFundedUserIds();
                     else if (target === 'nonactivated') targetIds = getNonActivatedUserIds();
                     else if (target === 'testuser') {
@@ -3928,6 +4025,7 @@ bot.on('text', async ctx => {
                     else targetIds = [];
 
                     const segLabelMap: Record<string, string> = {
+                        all: 'All Users',
                         funded: 'Funded (PRO/MASTER)',
                         nonfunded: 'Non-Funded (connected, no deposit)',
                         nonactivated: 'Non-Activated',
@@ -4255,6 +4353,16 @@ bot.on('text', async ctx => {
             }
 
             // ── Compose post wizard text steps ────────────────────────────────
+            if (as.step === 'compose_manual') {
+                if (!text.trim()) { await ctx.reply('❌ Please enter some text:'); return; }
+                adminSessions.set(chatId, { ...as, composeContent: text, step: 'compose_image' });
+                await ctx.reply(
+                    `✍️ *Your text:*\n\n"${text}"\n\n📎 Send an image to attach, or type *skip* to send text-only:`,
+                    { parse_mode: 'Markdown' }
+                );
+                return;
+            }
+
             if (as.step === 'compose_description' && as.composeTopic) {
                 if (!text.trim()) { await ctx.reply('❌ Please enter a description:'); return; }
                 const desc = text.trim();
@@ -4359,8 +4467,10 @@ bot.on('text', async ctx => {
     if (onboardingState === 'awaiting_user_id') {
         touchOnboardingActivity(ctx.from!.id);
 
+        // Strip common prefixes (#) before checking
+        const userIdText = text.trim().replace(/^#/, '');
         // If it doesn't look like a User ID, let the brain handle it
-        if (!/^\d{5,}$/.test(text.trim())) {
+        if (!/^\d{5,}$/.test(userIdText)) {
             const brainUser = getUser(ctx.from!.id);
             const brainIsActivated = brainUser?.ssid_valid === 1 && !!brainUser?.ssid;
             const brainCtx: UserContext = {
@@ -4386,7 +4496,7 @@ bot.on('text', async ctx => {
             return;
         }
 
-        const iqUserId = parseInt(text, 10);
+        const iqUserId = parseInt(userIdText, 10);
         upsertOnboardingUser(ctx.from!.id, iqUserId);
         try {
             const result = await withTimeout(checkAffiliate(iqUserId), 15_000, 'affiliate').catch(() => ({ found: false, data: null }));
@@ -4398,10 +4508,9 @@ bot.on('text', async ctx => {
                 const failCount = incrementUserIdFailCount(ctx.from!.id);
                 const adminId = getAdminId();
                 if (adminId) {
-                    bot.telegram.sendMessage(adminId,
-                        `⚠️ *User ID verification failed*\n\nUser: ${ctx.from!.id} (@${ctx.from!.username ?? 'no username'})\nAttempt: ${failCount}\nLast input: \`${text}\``,
-                        { parse_mode: 'Markdown' }
-                    ).catch(() => {});
+                    notifyAdmin(
+                        `⚠️ *User ID verification failed*\n\nUser: ${ctx.from!.id} (@${ctx.from!.username ?? 'no username'})\nAttempt: ${failCount}\nLast input: \`${text}\``
+                    );
                 }
                 if (failCount >= 3) {
                     await ctx.reply(
@@ -4417,10 +4526,9 @@ bot.on('text', async ctx => {
             const failCount = incrementUserIdFailCount(ctx.from!.id);
             const adminId = getAdminId();
             if (adminId) {
-                bot.telegram.sendMessage(adminId,
-                    `⚠️ *User ID verification failed*\n\nUser: ${ctx.from!.id} (@${ctx.from!.username ?? 'no username'})\nAttempt: ${failCount}\nLast input: \`${text}\``,
-                    { parse_mode: 'Markdown' }
-                ).catch(() => {});
+                notifyAdmin(
+                    `⚠️ *User ID verification failed*\n\nUser: ${ctx.from!.id} (@${ctx.from!.username ?? 'no username'})\nAttempt: ${failCount}\nLast input: \`${text}\``
+                );
             }
             if (failCount >= 3) {
                 await ctx.reply(
@@ -4500,7 +4608,8 @@ bot.on('text', async ctx => {
                 }
             } else {
                 setOnboardingState(ctx.from!.id, 'awaiting_email');
-                await ctx.reply('❌ Login failed. Please double-check your email:\n\n📧 Enter your IQ Option email:');
+                const errMsg = err instanceof Error ? err.message : 'Login failed';
+                await ctx.reply(`❌ ${errMsg}\n\n📧 Enter your IQ Option email again:`);
             }
         }
         return;
@@ -4728,7 +4837,10 @@ bot.on('text', async ctx => {
 
     const amount = parseFloat(text);
     if (isNaN(amount) || amount <= 0) { await ctx.reply('Please enter a valid positive number (e.g. 75).'); return; }
-    if (brainWiz.mode === 'demo' && amount > 20) { await ctx.reply('❌ Demo max is $20 or equivalent. Please enter a smaller amount.'); return; }
+    if (brainWiz.mode === 'demo') {
+        const maxAmt = brainWiz.currency === 'NGN' ? 20000 : 20;
+        if (amount > maxAmt) { await ctx.reply(`❌ Demo max is ${brainWiz.currency === 'NGN' ? '₦20,000' : '$20'} or equivalent. Please enter a smaller amount.`); return; }
+    }
 
     brainWiz.amount = amount;
     brainWiz.step = 'timeframe';

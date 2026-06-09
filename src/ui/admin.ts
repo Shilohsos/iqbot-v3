@@ -137,6 +137,7 @@ export function adminBackKeyboard(): IKMarkup {
 export function broadcastTargetKeyboard(): IKMarkup {
     return {
         inline_keyboard: [
+            [{ text: '👥 All Users',                           callback_data: 'broadcast:all' }],
             [{ text: '💰 Funded',                              callback_data: 'broadcast:funded' }],
             [{ text: '💎 Non-Funded (connected, no deposit)',  callback_data: 'broadcast:nonfunded' }],
             [{ text: '❌ Non-Activated (no IQ / rejected)',    callback_data: 'broadcast:nonactivated' }],
@@ -394,6 +395,7 @@ export function composeTopicKeyboard(): IKMarkup {
             [{ text: '💪 Motivation',     callback_data: 'compose_topic:motivation' }],
             [{ text: '💰 Trade Wins',     callback_data: 'compose_topic:trade_win' }],
             [{ text: '🏖️ Life Wins',     callback_data: 'compose_topic:life_win' }],
+            [{ text: '📝 Manual Text',    callback_data: 'compose:manual' }],
             [{ text: '🎭 Tone Settings',  callback_data: 'admin:compose_tone' }],
             [{ text: '🔙 Admin Menu',     callback_data: 'admin:back' }],
         ],
@@ -432,6 +434,7 @@ export function composeButtonKeyboard(): IKMarkup {
             [{ text: '🚀 Start Bot',      callback_data: 'compose_btn:start' }],
             [{ text: '🎯 Trade Now',       callback_data: 'compose_btn:trade' }],
             [{ text: '💰 Fund Account',    callback_data: 'compose_btn:fund' }],
+            [{ text: '📞 Contact Admin',  callback_data: 'compose_btn:contact' }],
             [{ text: '❌ No Button',       callback_data: 'compose_btn:none' }],
         ],
     };

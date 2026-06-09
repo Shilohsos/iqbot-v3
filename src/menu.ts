@@ -8,15 +8,40 @@ export const OTC_PAIRS = [
 type Btn = { text: string; callback_data: string } | { text: string; url: string };
 type IKMarkup = { inline_keyboard: Btn[][] };
 
-export function amountKeyboard(): IKMarkup {
+const CURRENCY_SYMS: Record<string, string> = { NGN: '₦', EUR: '€', GBP: '£', USD: '$' };
+
+export function currencyKeyboard(): IKMarkup {
     return {
         inline_keyboard: [
             [
-                { text: '$10',  callback_data: 'amt:10' },
-                { text: '$25',  callback_data: 'amt:25' },
-                { text: '$50',  callback_data: 'amt:50' },
-                { text: '$100', callback_data: 'amt:100' },
+                { text: '₦ NGN', callback_data: 'cur:NGN' },
+                { text: '$ USD', callback_data: 'cur:USD' },
             ],
+            [
+                { text: '€ EUR', callback_data: 'cur:EUR' },
+                { text: '£ GBP', callback_data: 'cur:GBP' },
+            ],
+            [{ text: '❌ Cancel', callback_data: 'wizard:cancel' }],
+        ],
+    };
+}
+
+export function amountKeyboard(currency = 'USD'): IKMarkup {
+    let row: Btn[];
+    if (currency === 'NGN') {
+        row = [
+            { text: '₦500',  callback_data: 'amt:500' },
+            { text: '₦1,000', callback_data: 'amt:1000' },
+            { text: '₦2,000', callback_data: 'amt:2000' },
+            { text: '₦5,000', callback_data: 'amt:5000' },
+        ];
+    } else {
+        const sym = CURRENCY_SYMS[currency] ?? '$';
+        row = [10, 25, 50, 100].map(v => ({ text: `${sym}${v}`, callback_data: `amt:${v}` }));
+    }
+    return {
+        inline_keyboard: [
+            row,
             [
                 { text: '✏️ Custom', callback_data: 'amt:custom' },
                 { text: '❌ Cancel', callback_data: 'wizard:cancel' },

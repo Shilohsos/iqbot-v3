@@ -27,7 +27,7 @@ TOKEN = os.getenv("META_ACCESS_TOKEN", "")
 API_URL = f"https://graph.facebook.com/v22.0/{PIXEL_ID}/events?access_token={TOKEN}"
 
 @app.route("/track", methods=["POST"])
-@app.route("/", methods=["POST"])
+@app.route("/api/track", methods=["POST"])
 def track():
     data = request.get_json(silent=True) or {}
     event_name = data.get("event_name", "ViewContent")

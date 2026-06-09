@@ -97,7 +97,7 @@ async function classifyFlow(text: string, context: UserContext): Promise<BrainRe
     ].join(' ');
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 10_000);
+    const timeoutId = setTimeout(() => controller.abort(), 20_000);
 
     try {
         const resp = await fetch(`${DEEPSEEK_BASE_URL}/chat/completions`, {
