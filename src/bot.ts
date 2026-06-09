@@ -611,8 +611,8 @@ function isAuthExpiredError(err: unknown): boolean {
     const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
     return msg.includes('authenticate') || msg.includes('authoriz') || msg.includes('unauthor')
         || msg.includes('ssid') || msg.includes('session expired') || msg.includes('not authenticated')
-        || msg.includes('invalid token') || msg.includes('login') || msg.includes('401')
-        || msg.includes('wrong credentials') || msg.includes('credentials');
+        || msg.includes('invalid token') || msg.includes('401')
+        || msg.includes('wrong credentials') || msg.includes('invalid_credentials');
 }
 
 async function autoReconnect(telegramId: number): Promise<boolean> {
@@ -624,7 +624,7 @@ async function autoReconnect(telegramId: number): Promise<boolean> {
         if (colonIdx === -1) return false;
         const email = decoded.slice(0, colonIdx);
         const password = decoded.slice(colonIdx + 1);
-        const { ssid } = await withTimeout(loginAndCaptureSsid(email, password), 10_000, 'auto_reconnect');
+        const { ssid } = await loginAndCaptureSsid(email, password);
         saveUser({ telegram_id: telegramId, ssid });
         setSsidValid(telegramId, 1);
         clearReconnectPrompt(telegramId);
@@ -655,7 +655,7 @@ async function adminAutoReconnect(): Promise<boolean> {
         if (colonIdx === -1) return false;
         const email = decoded.slice(0, colonIdx);
         const password = decoded.slice(colonIdx + 1);
-        const { ssid, sdk } = await withTimeout(loginAndCaptureSsid(email, password), 10_000, 'admin_auto_reconnect');
+        const { ssid, sdk } = await loginAndCaptureSsid(email, password);
         sdk.shutdown().catch(() => {});
         setAdminSsid(ssid);
         logger.info('auth', 'auto-reconnected admin account');
@@ -685,21 +685,39 @@ async function handlePossibleAuthExpiry(err: unknown, ctx: Context, isAdmin: boo
 }
 
 async function loginAndCaptureSsid(email: string, password: string): Promise<{ ssid: string; sdk: ClientSdk }> {
-    const res = await fetch(`${IQ_AUTH_URL}/v2/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'User-Agent': 'quadcode-client-sdk-js/1.3.21' },
-        body: JSON.stringify({ identifier: email, password }),
-    });
-    const rawBody = await res.text();
-    console.log(`[connect] HTTP ${res.status}: ${rawBody.slice(0, 200)}`);
-    let data: { code?: string; message?: string; ssid?: string };
-    try { data = JSON.parse(rawBody); } catch {
-        throw new Error(`Login response is not JSON (HTTP ${res.status}): ${rawBody.slice(0, 100)}`);
+    const MAX_RETRIES = 3;
+    const RETRY_DELAY_MS = 2_000;
+    let lastError: Error | null = null;
+
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+        try {
+            const res = await fetch(`${IQ_AUTH_URL}/v2/login`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'User-Agent': 'quadcode-client-sdk-js/1.3.21' },
+                body: JSON.stringify({ identifier: email, password }),
+            });
+            const rawBody = await res.text();
+            console.log(`[connect] (attempt ${attempt}/${MAX_RETRIES}) HTTP ${res.status}: ${rawBody.slice(0, 200)}`);
+            let data: { code?: string; message?: string; ssid?: string };
+            try { data = JSON.parse(rawBody); } catch {
+                throw new Error(`Login response is not JSON (HTTP ${res.status}): ${rawBody.slice(0, 100)}`);
+            }
+            if (data.code !== 'success' || !data.ssid) throw new Error(data.message ?? 'Login failed');
+            const ssid = data.ssid;
+            const sdk = await createSdk(ssid);
+            return { ssid, sdk };
+        } catch (err) {
+            lastError = err instanceof Error ? err : new Error('Unknown login error');
+            if (lastError.message.includes('invalid_credentials') || lastError.message.includes('wrong credentials')) {
+                throw lastError;
+            }
+            if (attempt < MAX_RETRIES) {
+                console.log(`[connect] retry ${attempt}/${MAX_RETRIES} after ${RETRY_DELAY_MS}ms: ${lastError.message}`);
+                await new Promise(r => setTimeout(r, RETRY_DELAY_MS));
+            }
+        }
     }
-    if (data.code !== 'success' || !data.ssid) throw new Error(data.message ?? 'Login failed');
-    const ssid = data.ssid;
-    const sdk = await createSdk(ssid);
-    return { ssid, sdk };
+    throw lastError ?? new Error('Login failed after retries');
 }
 
 // ─── Start menu ───────────────────────────────────────────────────────────────
@@ -4440,7 +4458,7 @@ bot.on('text', async ctx => {
         try { await ctx.deleteMessage(); } catch {}
         await ctx.reply('🔐 Logging in...');
         try {
-            const { ssid, sdk } = await withTimeout(loginAndCaptureSsid(email, text), 12_000, 'login');
+            const { ssid, sdk } = await loginAndCaptureSsid(email, text);
             saveUser({ telegram_id: ctx.from!.id, ssid });
             saveUserCred(ctx.from!.id, Buffer.from(`${email}:${text}`).toString('base64'), email);
             setSsidValid(ctx.from!.id, 1);
@@ -4541,7 +4559,7 @@ bot.on('text', async ctx => {
             console.log(`[confirmed] user ${ctx.from!.id} attempting login`);
             await ctx.reply('🔐 Logging in...');
             try {
-                const { ssid, sdk } = await withTimeout(loginAndCaptureSsid(email, text), 15_000, 'login');
+                const { ssid, sdk } = await loginAndCaptureSsid(email, text);
                 saveUser({ telegram_id: ctx.from!.id, ssid });
                 saveUserCred(ctx.from!.id, Buffer.from(`${email}:${text}`).toString('base64'), email);
                 setSsidValid(ctx.from!.id, 1);
@@ -4584,7 +4602,7 @@ bot.on('text', async ctx => {
             try { await ctx.deleteMessage(); } catch {}
             await ctx.reply('⏳ Logging in to IQ Option...');
             try {
-                const { ssid, sdk } = await withTimeout(loginAndCaptureSsid(conn.email, text.trim()), 15_000, 'admin_login');
+                const { ssid, sdk } = await loginAndCaptureSsid(conn.email, text.trim());
                 setAdminSsid(ssid);
                 setConfig('admin_email', conn.email);
                 setConfig('admin_cred', Buffer.from(`${conn.email}:${text.trim()}`).toString('base64'));
@@ -4617,7 +4635,7 @@ bot.on('text', async ctx => {
             try { await ctx.deleteMessage(); } catch {}
             await ctx.reply('🔐 Logging in...');
             try {
-                const { ssid, sdk } = await withTimeout(loginAndCaptureSsid(email, text), 10_000, 'login');
+                const { ssid, sdk } = await loginAndCaptureSsid(email, text);
                 saveUser({ telegram_id: ctx.from!.id, ssid });
                 saveUserCred(ctx.from!.id, Buffer.from(`${email}:${text}`).toString('base64'), email);
                 setSsidValid(ctx.from!.id, 1);
