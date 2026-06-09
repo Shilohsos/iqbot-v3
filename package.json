@@ -38,10 +38,12 @@
     "@upstash/redis": "^1.36.1",
     "better-sqlite3": "^12.9.0",
     "dotenv": "^16.6.1",
+    "https-proxy-agent": "^9.1.0",
     "isomorphic-ws": "^5.0.0",
     "telegraf": "^4.16.3",
     "telegram": "^2.26.22",
     "tweetsodium": "^0.0.5",
+    "undici": "^6.24.1",
     "vitest-websocket-mock": "^0.5.0",
     "ws": "^8.14.2"
   }
