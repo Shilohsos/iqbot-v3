@@ -7,6 +7,7 @@ export const FriendlyErrors: Record<string, string> = {
     'fetch failed':          '🔌 IQ Option is unreachable right now. Your account is safe — try again in a moment.',
     'Not connected':         '🔗 Your IQ Option account isn\'t linked yet. Tap to connect.',
     'Session expired':       '⏰ This session timed out. Let\'s start fresh.',
+    'authenticat':           '🔐 Your session expired. Reconnect to continue trading.',
     'Insufficient balance':  '🚫 Not enough funds. Deposit as little as $10 to trade.',
     'No demo balance':       '🧪 No practice balance found. Create a demo account on IQ Option first.',
     'No real balance':       '💳 No live balance found. Fund your account to start earning.',

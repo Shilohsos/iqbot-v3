@@ -112,7 +112,7 @@ async function classifyFlow(text: string, context: UserContext): Promise<BrainRe
                     { role: 'system', content: SYSTEM_PROMPT },
                     { role: 'user', content: `Message: "${text}"\n\n${contextStr}` },
                 ],
-                max_tokens: 150,
+                max_tokens: 300,
                 temperature: 0.3,
             }),
             signal: controller.signal,

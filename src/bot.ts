@@ -121,6 +121,7 @@ import {
     handleConnected,
 } from './onboarding.js';
 import { ProxyAgent } from 'undici';
+import { getProxyUrl, triggerProxyRotation } from './proxy.js';
 import { existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -129,7 +130,6 @@ const BOT_TOKEN = process.env.BOT_TOKEN;
 const IQ_SSID   = process.env.IQ_SSID;
 const AFFILIATE_LINK   = process.env.AFFILIATE_LINK   ?? 'https://iqbroker.com/lp/regframe-01-light-nosocials/?aff=749367&aff_model=revenue';
 const ADMIN_CONTACT_LINK = process.env.ADMIN_CONTACT_LINK ?? 'https://t.me/shiloh_is_10xing';
-const LOGIN_PROXY_URL    = process.env.LOGIN_PROXY_URL;
 
 const FLOW_BUTTONS: Record<string, { text: string; action: string | { url: string } }> = {
     start_trading:        { text: '🚀 Start Trading',  action: 'ui:trade' },
@@ -738,44 +738,46 @@ async function handlePossibleAuthExpiry(err: unknown, ctx: Context, isAdmin: boo
     return true;
 }
 
-async function loginAndCaptureSsid(email: string, password: string): Promise<{ ssid: string; sdk: ClientSdk }> {
-    const MAX_RETRIES = 3;
-    const RETRY_DELAY_MS = 2_000;
-    let lastError: Error | null = null;
+/** Single login attempt. Builds the request, optionally through the proxy, and returns the SSID + ready SDK. */
+async function attemptLogin(email: string, password: string, useProxy: boolean): Promise<{ ssid: string; sdk: ClientSdk }> {
+    const fetchOptions: RequestInit & { dispatcher?: any } = {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'User-Agent': 'quadcode-client-sdk-js/1.3.21' },
+        body: JSON.stringify({ identifier: email, password }),
+    };
+    const proxyUrl = getProxyUrl();
+    if (useProxy && proxyUrl) {
+        fetchOptions.dispatcher = new ProxyAgent(proxyUrl);
+    }
+    const res = await fetch(`${IQ_AUTH_URL}/v2/login`, fetchOptions);
+    const rawBody = await res.text();
+    console.log(`[connect] (${useProxy ? 'proxy' : 'direct'}) HTTP ${res.status}: ${rawBody.slice(0, 200)}`);
+    let data: { code?: string; message?: string; ssid?: string };
+    try { data = JSON.parse(rawBody); } catch {
+        throw new Error(`Login response is not JSON (HTTP ${res.status}): ${rawBody.slice(0, 100)}`);
+    }
+    if (data.code !== 'success' || !data.ssid) throw new Error(data.message ?? 'Login failed');
+    const ssid = data.ssid;
+    const sdk = await createSdk(ssid);
+    return { ssid, sdk };
+}
 
-    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+// Proxy fallback chain: try proxy → on failure fall back to a direct connection
+// immediately (user never waits) and rotate the proxy in the background so the
+// next login uses a fresh IP. Bad credentials short-circuit — no fallback/rotate.
+async function loginAndCaptureSsid(email: string, password: string): Promise<{ ssid: string; sdk: ClientSdk }> {
+    if (getProxyUrl()) {
         try {
-            const fetchOptions: RequestInit & { dispatcher?: any } = {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'User-Agent': 'quadcode-client-sdk-js/1.3.21' },
-                body: JSON.stringify({ identifier: email, password }),
-            };
-            if (LOGIN_PROXY_URL) {
-                fetchOptions.dispatcher = new ProxyAgent(LOGIN_PROXY_URL);
-            }
-            const res = await fetch(`${IQ_AUTH_URL}/v2/login`, fetchOptions);
-            const rawBody = await res.text();
-            console.log(`[connect] (attempt ${attempt}/${MAX_RETRIES}) HTTP ${res.status}: ${rawBody.slice(0, 200)}`);
-            let data: { code?: string; message?: string; ssid?: string };
-            try { data = JSON.parse(rawBody); } catch {
-                throw new Error(`Login response is not JSON (HTTP ${res.status}): ${rawBody.slice(0, 100)}`);
-            }
-            if (data.code !== 'success' || !data.ssid) throw new Error(data.message ?? 'Login failed');
-            const ssid = data.ssid;
-            const sdk = await createSdk(ssid);
-            return { ssid, sdk };
+            return await attemptLogin(email, password, true);
         } catch (err) {
-            lastError = err instanceof Error ? err : new Error('Unknown login error');
-            if (lastError.message.includes('invalid_credentials') || lastError.message.includes('wrong credentials')) {
-                throw lastError;
-            }
-            if (attempt < MAX_RETRIES) {
-                console.log(`[connect] retry ${attempt}/${MAX_RETRIES} after ${RETRY_DELAY_MS}ms: ${lastError.message}`);
-                await new Promise(r => setTimeout(r, RETRY_DELAY_MS));
-            }
+            const msg = err instanceof Error ? err.message : String(err);
+            if (msg.includes('invalid_credentials') || msg.includes('wrong credentials')) throw err;
+            console.warn(`[connect] proxy login failed (${msg}) — falling back to direct + rotating proxy`);
+            triggerProxyRotation().catch(() => {});
+            // fall through to direct
         }
     }
-    throw lastError ?? new Error('Login failed after retries');
+    return attemptLogin(email, password, false);
 }
 
 // ─── Start menu ───────────────────────────────────────────────────────────────
