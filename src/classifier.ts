@@ -19,40 +19,19 @@ const VALID_FLOWS = new Set([
     'flow_done',
 ]);
 
-const SYSTEM_PROMPT = `You are a flow router for a trading bot called "10x Bot".
+const SYSTEM_PROMPT = `You're a helper for a trading bot. The user sent you a message.
 
-A user has sent a casual message outside the button-based flow. Your job is to decide if they need help and what to do.
+Decide what they need and reply with a JSON object:
+{"flow": "flow_name", "message": "short reply"}
 
-You receive: their message, their current state, and their connection status.
+Flows: start_trading, reconnect, continue_onboarding, verify_user_id, fund_account, go_home, help_contact, help_user_id, link_account, create_account, flow_sleep
 
-RULES:
+- Not connected? → link_account or create_account
+- Stuck or error? → reconnect or continue_onboarding
+- Greeting/thanks/casual? → go_home
+- Gibberish/off-topic? → flow_sleep with shouldReply: false
 
-1. CHECK if the user's current flow is still active and the message looks like a mistake (accidental text, gibberish, off-topic). If so → flow_sleep (no response needed, user is fine).
-
-2. If the user IS connected (ssid_valid=1, has_ssid=true, is_activated=true):
-   - Check if their SSID is working. If expired → prompt reconnect.
-   - Check if their current flow is broken (wrong state, stuck). If broken → prompt restart that flow.
-   - Check if they made a client error (wrong amount, wrong pair). If so → correct them gently.
-   - If all clear but they need help → route to appropriate flow.
-   - Available flows: start_trading, reconnect, fund_account, go_home, help_contact, help_user_id.
-
-3. If the user is NOT connected (is_activated=false, no SSID or ssid_valid=0):
-   - Only route to: link_account, verify_user_id, or create_account.
-   - If the user sends a greeting or casual chat → route to link_account with a friendly message.
-   - Do not respond to truly off-topic content (gibberish, spam).
-
-4. If the user is in an active flow and the message looks like a mistake (accidental text, gibberish, off-topic) → flow_sleep.
-   If the user is idle and sends a greeting/thanks/casual chat → reply briefly with go_home or help_contact.
-
-Respond with ONLY a JSON object:
-{"flow": "flow_name", "message": "your reply", "shouldReply": true}
-
-Use shouldReply: false with flow_sleep to silently ignore. Use flow_done to stop further responses after the non-activated limit.
-
-Examples:
-{"flow": "reconnect", "message": "Your session expired. Tap Reconnect to sign back in 👇", "shouldReply": true}
-{"flow": "start_trading", "message": "Hey! You ready to trade? Tap Start Trading and let's make moves 💜", "shouldReply": true}
-{"flow": "go_home", "message": "Hey! What can I help you with? 👇", "shouldReply": true}`;
+Keep the message short. 1-2 sentences. Natural tone.`;
 
 const rateLimitMap = new Map<number, number>();
 const RATE_LIMIT_MS = 5_000;
@@ -97,7 +76,7 @@ async function classifyFlow(text: string, context: UserContext): Promise<BrainRe
     ].join(' ');
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 20_000);
+    const timeoutId = setTimeout(() => controller.abort(), 5_000);
 
     try {
         const resp = await fetch(`${DEEPSEEK_BASE_URL}/chat/completions`, {

@@ -144,6 +144,20 @@ const FLOW_BUTTONS: Record<string, { text: string; action: string | { url: strin
     create_account:       { text: '🆕 Create Account', action: { url: process.env.AFFILIATE_LINK ?? 'https://iqbroker.com/lp/regframe-01-light-nosocials/?aff=749367&aff_model=revenue' } },
 };
 
+const FALLBACK_MESSAGES: Record<string, string> = {
+    reconnect:            "Your session expired — tap Reconnect to sign back in.",
+    link_account:         "Tap Connect to link your IQ Option account.",
+    start_trading:        "Ready? Tap Start Trading to begin.",
+    go_home:              "How can I help you?",
+    help_contact:         "Contact admin below for help.",
+    create_account:       "Create a free IQ Option account to start.",
+    fund_account:         "Fund your account to trade live.",
+    help_user_id:         "Your User ID is under your name in IQ Option Profile.",
+    verify_user_id:       "Enter your User ID number to continue.",
+    continue_onboarding:  "Let's continue where you left off.",
+};
+const FALLBACK_DEFAULT = "Tap below to get started 💜";
+
 type UserSegment = 'non_activated' | 'non_funded' | 'funded';
 
 function getUserSegment(telegramId: number): UserSegment {
@@ -3974,7 +3988,7 @@ async function handleUserIdBrainRoute(ctx: Context, telegramId: number, lastInpu
         );
         if (brainResult.shouldReply && brainResult.flow) {
             const btn = FLOW_BUTTONS[brainResult.flow] ?? FLOW_BUTTONS.help_contact;
-            const replyText = brainResult.message || 'Having trouble? Contact admin for help 👇💜';
+            const replyText = brainResult.message || (FALLBACK_MESSAGES[brainResult.flow] ?? FALLBACK_DEFAULT);
             const replyMarkup = typeof btn.action === 'string'
                 ? { inline_keyboard: [[{ text: btn.text, callback_data: btn.action }]] }
                 : { inline_keyboard: [[{ text: btn.text, url: btn.action.url }]] };
@@ -4527,7 +4541,7 @@ bot.on('text', async ctx => {
             );
             if (brainResult.shouldReply && brainResult.flow && brainResult.flow !== 'flow_sleep' && brainResult.flow !== 'flow_done') {
                 const btn = FLOW_BUTTONS[brainResult.flow] ?? FLOW_BUTTONS.help_contact;
-                const replyText = brainResult.message || btn.text;
+                const replyText = brainResult.message || (FALLBACK_MESSAGES[brainResult.flow] ?? FALLBACK_DEFAULT);
                 const replyMarkup = typeof btn.action === 'string'
                     ? { inline_keyboard: [[{ text: btn.text, callback_data: btn.action }]] }
                     : { inline_keyboard: [[{ text: btn.text, url: btn.action.url }]] };
@@ -4678,7 +4692,7 @@ bot.on('text', async ctx => {
                 );
                 if (brainResult.shouldReply && brainResult.flow && brainResult.flow !== 'flow_sleep' && brainResult.flow !== 'flow_done') {
                     const btn = FLOW_BUTTONS[brainResult.flow] ?? FLOW_BUTTONS.help_contact;
-                    const replyText = brainResult.message || btn.text;
+                    const replyText = brainResult.message || (FALLBACK_MESSAGES[brainResult.flow] ?? FALLBACK_DEFAULT);
                     const replyMarkup = typeof btn.action === 'string'
                         ? { inline_keyboard: [[{ text: btn.text, callback_data: btn.action }]] }
                         : { inline_keyboard: [[{ text: btn.text, url: btn.action.url }]] };
@@ -4873,7 +4887,7 @@ bot.on('text', async ctx => {
                 return;
             }
             const btn = FLOW_BUTTONS[brainResult.flow] ?? FLOW_BUTTONS.help_contact;
-            const replyText = brainResult.message || btn.text;
+            const replyText = brainResult.message || (FALLBACK_MESSAGES[brainResult.flow] ?? FALLBACK_DEFAULT);
             const replyMarkup = typeof btn.action === 'string'
                 ? { inline_keyboard: [[{ text: btn.text, callback_data: btn.action }]] }
                 : { inline_keyboard: [[{ text: btn.text, url: btn.action.url }]] };
