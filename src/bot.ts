@@ -4653,7 +4653,11 @@ bot.on('text', async ctx => {
                     const markup3 = vf3.button_text && vf3.button_url
                         ? { reply_markup: { inline_keyboard: [[{ text: vf3.button_text, url: vf3.button_url }]] } }
                         : undefined;
-                    await ctx.reply(vf3.message || 'Having trouble connecting? Contact admin for help 👇💜', markup3);
+                    const vf3Msg = resolveUsernameTemplate(
+                        vf3.message || 'Having trouble connecting? Contact admin for help 👇💜',
+                        ctx.from?.first_name ?? ctx.from?.username ?? 'there',
+                    );
+                    await ctx.reply(vf3Msg, markup3);
                 } else {
                     await ctx.reply(
                         'Having trouble connecting? Contact admin for help 👇💜',
@@ -4998,6 +5002,22 @@ function isoNow(offsetMs = 0): string {
     return new Date(Date.now() + offsetMs).toISOString().replace('T', ' ').split('.')[0];
 }
 
+const _nameCache = new Map<number, { name: string; expires: number }>();
+const _NAME_CACHE_TTL = 10 * 60 * 1000;
+
+async function resolveUsernameForId(bot: Telegraf, telegramId: number): Promise<string> {
+    const cached = _nameCache.get(telegramId);
+    if (cached && cached.expires > Date.now()) return cached.name;
+    try {
+        const chat = await bot.telegram.getChat(telegramId);
+        const name = (chat as any).first_name ?? 'there';
+        _nameCache.set(telegramId, { name, expires: Date.now() + _NAME_CACHE_TTL });
+        return name;
+    } catch {
+        return 'there';
+    }
+}
+
 async function fireFundingCycle(bot: Telegraf): Promise<void> {
     if (getConfig('features_paused') === '1') return;
     const users = getDemoUsersWithTrades();
@@ -5023,7 +5043,9 @@ async function fireFundingCycle(bot: Telegraf): Promise<void> {
             if (!template) continue;
 
             const promo = PROMO_CODES[Math.floor(Math.random() * PROMO_CODES.length)];
-            const msg = (template.message ?? '').replace(/10xfirst|10xsecond/g, promo);
+            const firstName = await resolveUsernameForId(bot, telegram_id);
+            const msg = resolveUsernameTemplate(template.message ?? '', firstName)
+                .replace(/10xfirst|10xsecond/g, promo);
             const btnMarkup = { inline_keyboard: [[{ text: template.button_text ?? '💎 Fund now', url: template.button_url ?? 'https://iqoption.com/pwa/payments/deposit' }]] };
             const fundMedia = getSequenceMedia(templateKey);
 
