@@ -52,7 +52,16 @@ var tickerProfits = [1870, 3740, 1850, ...];
 var tickerProfits = [18.70, 37.40, 18.50, ...];
 ```
 
-## Fix 3: Remove the bar chart graphic
+## Fix 3: Trim results to 5 animated entries
+
+Instead of showing all 15 results in a static list, show ONLY 5 entries that auto-rotate (cycle through different results every few seconds).
+
+- Change the `results` array to 15 entries (keep them all in data)
+- Render only 5 visible rows at a time
+- Every 3 seconds, fade in the next 5 entries from the pool
+- This keeps the section compact while still showing all the proof
+
+## Fix 4: Remove the bar chart graphic
 
 In the hero section, remove the entire `.hero-card` div:
 
