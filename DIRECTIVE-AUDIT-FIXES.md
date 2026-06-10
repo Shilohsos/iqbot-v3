@@ -1,94 +1,93 @@
-# Directive: Fix Bugs Found in Giveaway/Marathon/Promo Audit
+# DIRECTIVE: Audit Findings — Critical Fixes Required
 
-**Authority:** Master Ferdinand Shiloh Hart  
-**From:** Wizard — directive only, do not implement autonomously  
-**Date:** 2026-06-06
+**IMPORTANT:** Merge master first before implementing. This directive covers findings from a comprehensive 10-test stress audit performed June 10.
 
-IMPORTANT: Merge master first before implementing.
+## Priority 1 — CRITICAL: Missing auth error mapping
+
+The `FriendlyErrors` map in `src/errors.ts` is missing the key `"authentication is failed"`. When a user's SSID expires mid-session, the SDK throws this exact string. It is NOT caught by any existing key, so it falls through to the generic fallback message.
+
+**Impact:** Users with expired SSIDs see "Could not analyze market" instead of a reconnect prompt. The PRO/MASTER analysis path (bot.ts:1565) is especially vulnerable because the error isn't caught by `handlePossibleAuthExpiry()` at that level.
+
+**Fix:** Add two new entries to `FriendlyErrors` in `src/errors.ts`:
+
+```
+'authentication is failed': '🔐 Your session expired. Reconnect to continue trading.',
+'authentication is failed': '🔐 Your session expired. Reconnect to continue trading.',
+```
+
+Wait — objects can't have duplicate keys. Change the approach: use a more specific key that covers both. Add these entries:
+
+```
+'authentication': '🔐 Your session expired. Reconnect to continue trading.',
+```
+
+Also add: `'authentication is failed'` won't match because the lookup uses `msg.includes(key)`. Since `'authenticate'` already appears in `isAuthExpiredError()` but NOT in `FriendlyErrors`, add it as a new key.
+
+**Add to FriendlyErrors map in src/errors.ts:**
+```
+'authenticate': '🔐 Your session expired. Reconnect to continue trading.',
+```
+
+This catches "authentication is failed", "not authenticated", and any other auth-related SDK error.
 
 ---
 
-## Fix 1: Marathon Participant Count Must Include Fabricated Entries
+## Priority 2 — CRITICAL: Brain classifier max_tokens too low
 
-**Files:** `src/db.ts`, `src/giveaway.ts`
+In `src/classifier.ts` line 115, `max_tokens: 150` is insufficient for `deepseek-v4-flash` which is a reasoning model. The model burns tokens on chain-of-thought reasoning and leaves zero tokens for the JSON response.
 
-**Bug:** `getGiveawayParticipantCount()` at db.ts:1888 only queries `giveaway_participants`. Marathon fabricated entries live in `marathon_fabricated` table (separate). When a user sees a marathon leaderboard with 5 fabricated entries, the participant count still shows "0 participants" — defeats the FOMO purpose.
+**Tested 5 scenarios at 150 tokens: 3/5 pass, 2/5 fail (truncated/empty JSON). At 300 tokens: 5/5 pass.**
 
-**Fix — Option A (recommended):** Create a new function `getMarathonParticipantCount(giveawayId)` that queries BOTH tables:
-
-```typescript
-export function getMarathonParticipantCount(giveawayId: number): number {
-    const real = db.prepare(
-        'SELECT COUNT(*) AS cnt FROM giveaway_participants WHERE giveaway_id = ? AND eligible = 1'
-    ).get(giveawayId) as { cnt: number };
-    const fab = db.prepare(
-        'SELECT COUNT(*) AS cnt FROM marathon_fabricated WHERE giveaway_id = ?'
-    ).get(giveawayId) as { cnt: number };
-    return real.cnt + fab.cnt;
-}
+**Fix:** In `src/classifier.ts`, change:
+```
+max_tokens: 150,
+```
+→
+```
+max_tokens: 300,
 ```
 
-**Fix — Option B (minimal):** Modify `getGiveawayParticipantCount()` to accept an optional event_type param and add the `marathon_fabricated` count when type is 'marathon'.
-
-**Where this count is used (must update all):**
-- `giveaway.ts:202` — participant count in activation
-- `giveaway.ts:333` — count in sendMotivationalMessages
-- `giveaway.ts:471` — promo claim count
-- `giveaway.ts:479` — promo auto-complete check
-- `giveaway.ts:556` — promo fabrication tick's realClaims
-
-For promo code paths (giveaway.ts:471, 479, 556), keep using real-only count — those should NOT include fabricated.
-
-For marathon paths: the count shown to users in motivational messages and interactions should show the merged total.
+This adds ~$0.00015 per call at DeepSeek's pricing — negligible.
 
 ---
 
-## Fix 2: Promo Max Claims Must Check Fabricated Claims
+## Priority 3 — IQ_HOST standardization
 
-**File:** `src/giveaway.ts`
+The current `IQ_HOST = 'https://iqoption.com'` in `src/protocol.ts` points to a host that gets intermittently TCP-blocked from this VPS. The SDK's `ClientSdk.create(WS_URL, PLATFORM_ID, auth, { host: IQ_HOST })` sends HTTP requests to this host for some operations.
 
-**Bug:** `claimPromoCode()` at giveaway.ts:471-473 checks `claimed >= event.max_winners` using only real participant count. `event.fabricated_claims` is ignored. Result: promo codes can be oversold by up to 92% of max_winners.
-
-**Fix:** Change the max-claims check in `claimPromoCode()` to:
-
-```typescript
-const claimed = getGiveawayParticipantCount(giveawayId);
-const totalClaimed = claimed + (event.fabricated_claims ?? 0);
-if (event.max_winners != null && totalClaimed >= event.max_winners) {
-    return { success: false, message: '❌ This promo code has reached its maximum number of claims. Check back for more promos!' };
-}
+**Fix option:** Set `IQ_HOST` to an environment variable with the current value as default:
 ```
-
-Also fix the auto-complete check at give away.ts:479-482 the same way:
-
-```typescript
-const newCount = getGiveawayParticipantCount(giveawayId);
-const newTotal = newCount + (event.fabricated_claims ?? 0);
-if (event.max_winners != null && newTotal >= event.max_winners) {
-    setGiveawayStatus(giveawayId, 'completed');
-}
+export const IQ_HOST = process.env.IQ_HOST ?? 'https://iqoption.com';
 ```
+This is already the case from Claude's last commit. The remaining question is whether to change the default to something else (like empty string or remove it) so the SDK doesn't make HTTP calls to the blocked host at all.
+
+Research needed: check if removing `host` from `ClientSdk.create()` options breaks anything. If SDK can operate WS-only without an HTTP host, set `IQ_HOST` to `''`.
 
 ---
 
-## Fix 3: Marathon Description Step Must Advance in Wizard
+## Priority 4 — Memory pressure investigation
 
-**File:** `src/bot.ts`
+The bot's V8 heap is at 91.12% usage (42.68/46.84 MiB). Two known sources:
+1. `assetFileIdCache` in bot.ts — grows unbounded (but practically capped at number of wizard images: 2)
+2. SDK pool entries — each pooled SDK holds a WS connection and in-memory state
+3. `wizardSessions` Map — 10 stale entries not cleaned up
 
-**Bug:** At bot.ts line ~4142-4150, the marathon wizard sets description but never advances the `step` key. The spread `{ ...as }` carries forward `step: 'marathon_v2_desc'`. Currently only works because next input is a button, but fragile.
-
-**Fix:** After setting description, explicitly advance the step:
-
-```typescript
-adminSessions.set(chatId, { ...as, marathonV2Desc: desc, step: 'marathon_v2_winners' });
-```
-
-Ensure a step called `marathon_v2_winners` exists in the handler chain, or that the next input (duration picker) matches against the correct step value.
+No immediate fix needed, but flagging for awareness. The slow callbacks (11-14s) in the logs are likely GC-related.
 
 ---
 
-## Verification
+## Priority 5 — SSID health check
 
-1. Create a marathon, seed 5-8 fabricated entries → user sees "X participants" matching leaderboard total
-2. Activate promo code with max_winners=50 → real claims show correct remaining including fabricated
-3. Walk through marathon creation wizard → description step cleanly advances to winners/participants count
+Only 135/233 users with stored SSID have `ssid_valid=1` (57.9%). The remaining 98 users will hit the "authentication is failed" error (Priority 1 above) when they try to trade. Once Priority 1 is fixed these users will get a proper reconnect prompt instead of a silent error.
+
+---
+
+## Verification Checklist
+
+Claude should verify:
+
+- [ ] `'authenticate'` key added to FriendlyErrors map (catches "authentication is failed" + "not authenticated")
+- [ ] Build passes after errors.ts change
+- [ ] `max_tokens` changed from 150 to 300 in classifier.ts
+- [ ] IQ_HOST env-override still functional (it was already there from the last commit)
+- [ ] "authentication is failed" error now surfaces a clear reconnect message instead of generic fallback
