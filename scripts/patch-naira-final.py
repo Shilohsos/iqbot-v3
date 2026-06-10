@@ -92,8 +92,8 @@ def convert_ticker_val(m: re.Match) -> str:
     return str(round(val / 100, 2))
 
 html = re.sub(
-    r'(?<=var tickerProfits\s*=\s*\[)[^\]]+',
-    lambda m: re.sub(r'\b(\d{3,})\b', convert_ticker_val, m.group(0)),
+    r'(var tickerProfits\s*=\s*\[)([^\]]+)',
+    lambda m: m.group(1) + re.sub(r'\b(\d{3,})\b', convert_ticker_val, m.group(2)),
     html,
 )
 
