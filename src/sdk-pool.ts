@@ -13,7 +13,7 @@ class UserSdkPool {
     private entries = new Map<number, PoolEntry>();
     private pending = new Map<number, Promise<ClientSdk>>();
     private readonly IDLE_TTL_MS = 5 * 60 * 1000;
-    private readonly MAX_AGE_MS = 30 * 60 * 1000;
+    private readonly MAX_AGE_MS = 10 * 60 * 1000;
     private cleanupTimer: ReturnType<typeof setInterval>;
 
     constructor() {
@@ -86,6 +86,9 @@ class UserSdkPool {
             if (!entry.inUse && now - entry.lastUsed > this.IDLE_TTL_MS) {
                 this.shutdown(userId).catch(() => {});
             }
+        }
+        if (this.entries.size > 0) {
+            console.log(`[pool] ${this.entries.size} active entries`);
         }
     }
 
