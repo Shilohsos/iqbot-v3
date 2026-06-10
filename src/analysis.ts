@@ -7,11 +7,11 @@ export interface AnalysisResult {
     reason: string;
 }
 
-export async function analyzePairWithSdk(sdk: ClientSdk, pair: string, timeframeSec: number, tier = 'DEMO'): Promise<AnalysisResult> {
-    return runAnalysis(sdk, pair, timeframeSec, tier);
+export async function analyzePairWithSdk(sdk: ClientSdk, pair: string, timeframeSec: number, tier = 'DEMO', candleCount?: number): Promise<AnalysisResult> {
+    return runAnalysis(sdk, pair, timeframeSec, tier, candleCount);
 }
 
-export async function analyzePair(ssid: string, pair: string, timeframeSec: number, tier = 'DEMO'): Promise<AnalysisResult> {
+export async function analyzePair(ssid: string, pair: string, timeframeSec: number, tier = 'DEMO', candleCount?: number): Promise<AnalysisResult> {
     const sdk = await Promise.race([
         createSdk(ssid),
         new Promise<never>((_, reject) =>
@@ -19,15 +19,15 @@ export async function analyzePair(ssid: string, pair: string, timeframeSec: numb
         ),
     ]);
     try {
-        return await runAnalysis(sdk, pair, timeframeSec, tier);
+        return await runAnalysis(sdk, pair, timeframeSec, tier, candleCount);
     } finally {
         await sdk.shutdown();
     }
 }
 
-async function runAnalysis(sdk: ClientSdk, pair: string, timeframeSec: number, tier: string): Promise<AnalysisResult> {
+async function runAnalysis(sdk: ClientSdk, pair: string, timeframeSec: number, tier: string, candleCount?: number): Promise<AnalysisResult> {
     const blitzOptions = await sdk.blitzOptions();
-    const normTicker = (s: string) => s.toUpperCase().replace(/^front\./i, '').replace(/[-/\s]/g, '');
+    const normTicker = (s: string) => s.toUpperCase().replace(/^front\./i, '').replace(/[-\/\s]/g, '');
     const normalizedInput = normTicker(pair);
     const active = blitzOptions.getActives().find(a =>
         normTicker(a.ticker) === normalizedInput ||
@@ -36,9 +36,10 @@ async function runAnalysis(sdk: ClientSdk, pair: string, timeframeSec: number, t
     if (!active) throw new Error(`Unknown pair: ${pair}`);
 
     const candlesFacade = await sdk.candles();
-    const history = await candlesFacade.getCandles(active.id, timeframeSec, { count: 35 });
+    const count = candleCount ?? 35;
+    const history = await candlesFacade.getCandles(active.id, timeframeSec, { count });
 
-    if (history.length < 30) throw new Error('Not enough data for analysis');
+    if (history.length < Math.min(30, Math.max(5, Math.floor(count * 0.7)))) throw new Error('Not enough data for analysis');
 
     const closes = history.map(c => c.close);
     const rsi  = computeRSI(closes, 14);

@@ -1626,7 +1626,8 @@ bot.action(/^pair:(.+)$/, async ctx => {
         ctx.telegram.sendChatAction(chatId, 'typing').catch(() => {});
 
         let analysis: AnalysisResult;
-        const analysisTier = normalizeTier(getUser(ctx.from!.id)?.tier);
+        const tradeUser = getUser(ctx.from!.id);
+        const analysisTier = normalizeTier(tradeUser?.tier);
         if (isPrivileged || analysisTier === 'DEMO') {
             const candlesFacade = await sdk.candles();
             const turboOpts = await sdk.turboOptions();
@@ -1641,7 +1642,7 @@ bot.action(/^pair:(.+)$/, async ctx => {
             analysis = runAdminAnalysis(history);
         } else {
             try {
-                analysis = await analyzePairWithSdk(sdk, pair, timeframe, analysisTier);
+                analysis = await analyzePairWithSdk(sdk, pair, timeframe, analysisTier, tradeUser?.analysis_candles ?? undefined);
             } catch (err: unknown) {
                 if (l7MsgId) { try { await ctx.telegram.deleteMessage(chatId, l7MsgId); } catch {} }
                 const errMsg = friendlyError(err, '⚠️ Could not analyze market. Please try again.');
@@ -1650,6 +1651,11 @@ bot.action(/^pair:(.+)$/, async ctx => {
                 return;
             }
         }
+
+        // Apply per-user display confidence floor
+        const displayConfidence = tradeUser?.display_confidence_min
+            ? Math.max(analysis.confidence, tradeUser.display_confidence_min)
+            : analysis.confidence;
 
         // Replace progress message with completion note, then deliver results
         if (l7MsgId) { try { await ctx.telegram.deleteMessage(chatId, l7MsgId); } catch {} }
@@ -1665,7 +1671,7 @@ bot.action(/^pair:(.+)$/, async ctx => {
         const l9 = await ctx.replyWithPhoto(ASSET(signalImg)).catch(() => undefined);
         if (l9) preTradeMessageIds.push(l9.message_id);
         const opportunityMsg = await ctx.reply(
-            `OPPORTUNITY FOUND\nConfidence: ${Math.round(analysis.confidence)}% · Bot is ready to execute.\n\n${dirStr}\n\n` +
+            `OPPORTUNITY FOUND\nConfidence: ${Math.round(displayConfidence)}% · Bot is ready to execute.\n\n${dirStr}\n\n` +
             `🔷 Trading pair: ${pair}\n🔷 Amount: ${fmtMoney(amount, useCur)} ${useCur}\n` +
             `🔷 Expiration: ${tfLabel(timeframe)}\n🔷 Strategy: High-Profit ⚡`
         ).catch(() => undefined);

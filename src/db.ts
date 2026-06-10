@@ -716,6 +716,8 @@ export interface UserRecord {
     reconnect_prompt_at?: string | null;
     onboarding_state?: string | null;
     pidgin_enabled?: number;
+    analysis_candles?: number | null;
+    display_confidence_min?: number | null;
 }
 
 export function saveUserCurrency(telegramId: number, currency: string): void {
