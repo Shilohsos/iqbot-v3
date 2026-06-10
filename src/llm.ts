@@ -75,7 +75,8 @@ ${tone.styleGuide ? `\nSTYLE GUIDE (follow this precisely):\n${tone.styleGuide}`
         usage: { prompt_tokens: number; completion_tokens: number };
     };
 
-    const raw = data.choices[0].message.content.trim();
+    const raw = data.choices?.[0]?.message?.content?.trim();
+    if (!raw) throw new Error('Deepseek returned an empty/malformed response');
     let content = raw;
     try {
         const parsed = JSON.parse(raw) as { content?: string };
@@ -260,7 +261,7 @@ export async function generateDiaryEntry(
 
         if (!resp.ok) throw new Error(`DeepSeek ${resp.status}`);
         const data = await resp.json() as { choices: Array<{ message: { content: string } }> };
-        const raw = (data.choices[0]?.message?.content ?? '').trim();
+        const raw = (data.choices?.[0]?.message?.content ?? '').trim();
         const parsed = JSON.parse(raw) as { content?: string };
         const content = parsed.content?.trim();
         if (!content) throw new Error('Empty response from LLM');

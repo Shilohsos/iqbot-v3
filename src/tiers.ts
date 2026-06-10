@@ -96,7 +96,12 @@ const FALLBACK_RATES: Record<string, number> = {
     BRL: 0.19,      // ~BRL 5.3 = $1
 };
 
-export async function convertToUsd(amount: number, currency: string, sdk: ClientSdk): Promise<number> {
+/**
+ * Converts an amount to USD. Returns null when no rate is available — callers
+ * MUST skip balance-threshold decisions (tier promotion/demotion, giveaway
+ * eligibility) on null rather than treating it as $0.
+ */
+export async function convertToUsd(amount: number, currency: string, sdk: ClientSdk): Promise<number | null> {
     if (currency === 'USD') return amount;
 
     const cached = rateCache.get(currency);
@@ -122,8 +127,8 @@ export async function convertToUsd(amount: number, currency: string, sdk: Client
         return amount * fallbackRate;
     }
 
-    logger.warn('tiers', `no conversion rate available for ${currency}, returning 0`);
-    return 0;
+    logger.warn('tiers', `no conversion rate available for ${currency} — skipping USD conversion`);
+    return null;
 }
 
 export function autoPromoteTier(telegramId: number, realBalance: number, currentTier: string): string | null {

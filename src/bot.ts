@@ -156,6 +156,10 @@ function getUserSegment(telegramId: number): UserSegment {
 
 const nonActivatedResponseCount = new Map<number, number>();
 const MAX_NON_ACTIVATED_RESPONSES = 3;
+// Reset daily — otherwise a non-activated user who hits the cap is silenced
+// forever (the counter never cleared, so the bot ignored all their texts until
+// a restart). Daily reset gives them a fresh window each day.
+setInterval(() => nonActivatedResponseCount.clear(), 24 * 60 * 60 * 1000);
 
 // Resolve assets dir from env, else from the source layout (src/.. -> assets).
 // Warn loudly at startup if the directory doesn't exist so image sends don't
@@ -186,7 +190,8 @@ async function notifyAdmin(msg: string, parseMode?: any): Promise<void> {
         adminNotificationQueue.push({ msg, parseMode });
         return;
     }
-    try { await bot.telegram.sendMessage(getAdminId(), msg, { parse_mode: parseMode ?? 'Markdown' }); } catch {}
+    try { await bot.telegram.sendMessage(getAdminId(), msg, { parse_mode: parseMode ?? 'Markdown' }); }
+    catch (err) { console.error(`[notifyAdmin] send failed: ${err instanceof Error ? err.message : err}`); }
 }
 
 function flushAdminNotifications(): void {
@@ -220,10 +225,40 @@ bot.use(async (ctx, next) => {
     if (elapsed > 3000) console.log(`[slow] callback ${label}: ${elapsed}ms`);
 });
 
+// Admin gate: callback_data is client-supplied — anyone can craft an admin:* query
+// even though the buttons are only rendered for the admin. Block privileged
+// prefixes centrally; per-handler guards remain as defence in depth.
+// NOT gated (user-facing): giveaway:participate:*, promo:claim:*, marathon:leaderboard:*,
+// page:*, ui:*, onboard:*, wizard:*, mode/amt/cur/pair/tf/martingale/upsell/upgrade.
+const ADMIN_CALLBACK_PREFIXES = [
+    'admin:', 'member:', 'broadcast:', 'broadcast_btn:', 'broadcast_action:',
+    'bcast_cancel:', 'bcast_delay:', 'bcast_timer:',
+    'compose:', 'compose_tone:', 'compose_btn:', 'compose_delivery:', 'compose_topic:',
+    'diary:', 'activation:', 'trader_edit:', 'user_action:', 'user_detail:',
+    'giveaway_v2:', 'giveaway_activate:', 'giveaway_criteria:', 'giveaway_delete:',
+    'giveaway_end:', 'giveaway_participants:', 'giveaway_schedule:', 'giveaway_type:',
+    'giveaway_view:', 'giveaway_winners:', 'giveaway_winners_confirm:',
+    'giveaway:all', 'giveaway:24h',
+    'marathon_duration:', 'marathon_schedule:', 'promo_schedule:',
+    'llm:cat:', 'media:select:', 'token_tier:',
+];
+bot.use(async (ctx, next) => {
+    const data = (ctx.callbackQuery as { data?: string } | undefined)?.data;
+    if (data && ADMIN_CALLBACK_PREFIXES.some(p => data.startsWith(p)) && ctx.from?.id !== getAdminId()) {
+        console.warn(`[security] blocked admin callback "${data.slice(0, 40)}" from non-admin ${ctx.from?.id}`);
+        await ctx.answerCbQuery('⛔ Not authorized.').catch(() => {});
+        return;
+    }
+    return next();
+});
+
 const MAX_ROUNDS       = 6;
 const ROUND_COOLDOWN_MS = 5_000;
 
 function escapeMd(s: string): string { return s.replace(/[_*[\]()~`>#+=|{}.!-]/g, '\\$&'); }
+// For parse_mode:'Markdown' (legacy) — only _ * ` [ are escapable there; the V2-style
+// escape above would render literal backslashes before . ! - etc.
+function escapeMdLegacy(s: string): string { return s.replace(/[_*`[]/g, '\\$&'); }
 
 const CURRENCY_SYMBOLS: Record<string, string> = {
     USD: '$', NGN: '₦', EUR: '€', GBP: '£', JPY: '¥', AUD: 'A$', CAD: 'C$',
@@ -397,7 +432,16 @@ const pendingBroadcasts = new Map<number, {
     media?: { type: 'photo' | 'video'; fileId: string };
     button?: BroadcastButton;
     deleteAfterMs?: number;
+    createdAt?: number;
 }>();
+// Abandoned broadcast drafts (admin starts a flow, never sends) otherwise sit in
+// memory forever — sweep anything older than 1 hour.
+setInterval(() => {
+    const cutoff = Date.now() - 60 * 60 * 1000;
+    for (const [chatId, p] of pendingBroadcasts) {
+        if ((p.createdAt ?? 0) < cutoff) pendingBroadcasts.delete(chatId);
+    }
+}, 10 * 60 * 1000);
 
 interface ScheduledBroadcast {
     id: number;
@@ -860,7 +904,7 @@ async function sendStartMenu(ctx: Context): Promise<void> {
         const canParticipate = tier === 'PRO' || tier === 'MASTER';
         const giveawayCard = [
             `🎁 *LIVE GIVEAWAY*`,
-            `*${giveaway.title}*`,
+            `*${escapeMdLegacy(giveaway.title)}*`,
             prizeText,
             canParticipate ? `` : `\n🔒 Upgrade to PRO to participate`,
         ].filter(l => l !== '').join('\n');
@@ -886,13 +930,16 @@ async function sendStartMenu(ctx: Context): Promise<void> {
                 if (real && user.tier !== 'MASTER') {
                     const currency = real.currency ?? 'USD';
                     const usdAmount = await convertToUsd(real.amount, currency, sdk);
-                    const newTier = autoPromoteTier(telegramId, usdAmount, user.tier ?? 'DEMO');
-                    if (newTier && newTier !== user.tier) {
-                        const oldTier = user.tier;
-                        setUserTier(telegramId, newTier);
-                        user.tier = newTier;
-                        if (oldTier === 'DEMO') insertFunnelEvent('user_funded', JSON.stringify({ telegram_id: telegramId }));
-                        logger.info('bot', `auto-promoted user ${telegramId} from ${oldTier} to ${newTier} (balance: ${currency} ${real.amount.toFixed(2)} ≈ $${usdAmount.toFixed(2)})`);
+                    // null = no conversion rate — never promote/demote on an unknown balance
+                    if (usdAmount !== null) {
+                        const newTier = autoPromoteTier(telegramId, usdAmount, user.tier ?? 'DEMO');
+                        if (newTier && newTier !== user.tier) {
+                            const oldTier = user.tier;
+                            setUserTier(telegramId, newTier);
+                            user.tier = newTier;
+                            if (oldTier === 'DEMO') insertFunnelEvent('user_funded', JSON.stringify({ telegram_id: telegramId }));
+                            logger.info('bot', `auto-promoted user ${telegramId} from ${oldTier} to ${newTier} (balance: ${currency} ${real.amount.toFixed(2)} ≈ $${usdAmount.toFixed(2)})`);
+                        }
                     }
                 }
                 if (needsFetch) {
@@ -1524,9 +1571,8 @@ bot.action(/^pair:(.+)$/, async ctx => {
         if (l7MsgId) { try { await ctx.telegram.deleteMessage(chatId, l7MsgId); } catch {} }
         await ctx.telegram.deleteMessage(chatId, progressMsg.message_id).catch(() => {});
         if (await handlePossibleAuthExpiry(err, ctx, isAdmin)) return;
-        if (!isAdmin && ctx.from?.id) {
-            try { setSsidValid(ctx.from.id, 0); } catch {}
-        }
+        // Reaching here means the error was NOT auth-related (network/timeout) —
+        // leave ssid_valid untouched so transient failures don't flag valid sessions.
         await ctx.reply(
             '🔌 Could not connect to IQ Option.\n\n' +
             'Your session may have expired. Reconnect in 3 steps:\n' +
@@ -1890,7 +1936,7 @@ bot.action('ui:giveaways', async ctx => {
         if (g.event_type === 'promo_code') {
             header = `🏷️ *PROMO CODE*`;
             details = [
-                `*${g.title}*`,
+                `*${escapeMdLegacy(g.title)}*`,
                 g.description ?? '',
                 g.max_winners != null ? `${g.max_winners} claims available` : '',
             ].filter(Boolean).join('\n');
@@ -1901,7 +1947,7 @@ bot.action('ui:giveaways', async ctx => {
             const endsText = g.ends_at ? `Ends: ${g.ends_at.split(' ')[0]}` : '';
             header = `🏃 *MARATHON*`;
             details = [
-                `*${g.title}*`,
+                `*${escapeMdLegacy(g.title)}*`,
                 g.description ?? '',
                 prizeText,
                 `Top ${g.max_winners} traders win`,
@@ -1913,7 +1959,7 @@ bot.action('ui:giveaways', async ctx => {
             const prizeText = g.prize_pool != null ? `Prize: *$${g.prize_pool.toFixed(2)}*` : '';
             header = `🎁 *GIVEAWAY*`;
             details = [
-                `*${g.title}*`,
+                `*${escapeMdLegacy(g.title)}*`,
                 g.description ?? '',
                 prizeText,
             ].filter(Boolean).join('\n');
@@ -2009,8 +2055,9 @@ bot.command('balance', async ctx => {
         if (real && user && user.tier !== 'MASTER') {
             const currency = real.currency ?? 'USD';
             const usdAmount = await convertToUsd(real.amount, currency, sdk);
-            const newTier = autoPromoteTier(uid, usdAmount, user.tier ?? 'DEMO');
-            if (newTier && newTier !== user.tier) {
+            // null = no conversion rate — never promote/demote on an unknown balance
+            const newTier = usdAmount === null ? null : autoPromoteTier(uid, usdAmount, user.tier ?? 'DEMO');
+            if (usdAmount !== null && newTier && newTier !== user.tier) {
                 const oldTier = user.tier;
                 setUserTier(uid, newTier);
                 if (oldTier === 'DEMO') insertFunnelEvent('user_funded', JSON.stringify({ telegram_id: uid }));
@@ -2799,7 +2846,7 @@ bot.action('giveaway_v2:scheduled', async ctx => {
         await ctx.reply('📅 No scheduled giveaways.', { reply_markup: adminBackKeyboard() });
         return;
     }
-    const lines = giveaways.map(g => `• *${g.title}* — starts: ${g.starts_at ?? 'now'}`).join('\n');
+    const lines = giveaways.map(g => `• *${escapeMdLegacy(g.title)}* — starts: ${g.starts_at ?? 'now'}`).join('\n');
     await ctx.reply(`📅 *Scheduled Giveaways*\n\n${lines}`, { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
 });
 
@@ -3149,7 +3196,7 @@ bot.action(/^marathon:leaderboard:(\d+)$/, async ctx => {
 
     const board = getMarathonLeaderboard(giveawayId);
     if (board.length === 0) {
-        await ctx.reply(`🏃 *${event.title}*\n\nNo participants yet. Be the first to trade!`, { parse_mode: 'Markdown' });
+        await ctx.reply(`🏃 *${escapeMdLegacy(event.title)}*\n\nNo participants yet. Be the first to trade!`, { parse_mode: 'Markdown' });
         return;
     }
 
@@ -3169,7 +3216,7 @@ bot.action(/^marathon:leaderboard:(\d+)$/, async ctx => {
     });
 
     const userRank = board.find(e => e.telegram_id === telegramId);
-    let msg = `🏃 *${event.title} — Leaderboard*\n\n${lines.join('\n')}`;
+    let msg = `🏃 *${escapeMdLegacy(event.title)} — Leaderboard*\n\n${lines.join('\n')}`;
     if (userRank && userRank.rank > 10) {
         msg += `\n\n📍 *Your rank: #${userRank.rank}* (${userRank.trade_count} trades)`;
     }
@@ -3547,15 +3594,6 @@ bot.action('admin:golive', async ctx => {
         `🟢 Go Live broadcast sent.\n✅ Sent: ${sent} | ❌ Failed: ${failed}`,
         { reply_markup: adminBackKeyboard() }
     );
-});
-
-// ─── C1 Fix: admin:trade_connect ─────────────────────────────────────────────
-
-bot.action('admin:trade_connect', async ctx => {
-    await ctx.answerCbQuery();
-    const chatId = ctx.chat!.id;
-    connectSessions.set(chatId, { step: 'admin_email' });
-    await ctx.reply('👑 *Admin Trading Account Setup*\n\nEnter your IQ Option email:', { parse_mode: 'Markdown' });
 });
 
 // ─── Module 14: SSID Health ───────────────────────────────────────────────────
@@ -4034,7 +4072,7 @@ bot.on('text', async ctx => {
                         testuser: 'test user (Shara)',
                     };
                     const targetLabel = segLabelMap[target] ?? `${target} user(s)`;
-                    pendingBroadcasts.set(chatId, { message: text, targetIds });
+                    pendingBroadcasts.set(chatId, { message: text, targetIds, createdAt: Date.now() });
                     adminSessions.set(chatId, { ...as, step: 'broadcast_media' });
                     await ctx.reply(`📎 Send to *${targetIds.length}* ${targetLabel}.\n\nInclude an image or video? Send the file, or type "skip":`, { parse_mode: 'Markdown' });
                 } catch (err) {
@@ -4795,7 +4833,16 @@ bot.on('text', async ctx => {
     if (!isActivated) {
         const count = (nonActivatedResponseCount.get(ctx.from!.id) ?? 0) + 1;
         nonActivatedResponseCount.set(ctx.from!.id, count);
-        if (count > MAX_NON_ACTIVATED_RESPONSES) return;
+        if (count > MAX_NON_ACTIVATED_RESPONSES) {
+            // Tell them once why replies stopped instead of going dark mid-conversation
+            if (count === MAX_NON_ACTIVATED_RESPONSES + 1) {
+                await ctx.reply(
+                    "I'll pause here until your account is connected — tap below and we'll pick this right up. 💜",
+                    { reply_markup: { inline_keyboard: [[{ text: '🔗 Connect Account', callback_data: 'ui:connect' }]] } }
+                ).catch(() => {});
+            }
+            return;
+        }
     }
 
     if (!brainWiz) {
@@ -5254,13 +5301,16 @@ backgroundIntervals.push(setInterval(async () => {
                     const real = all.find(b => b.type === BalanceType.Real);
                     if (real) {
                         const usdAmount = await convertToUsd(real.amount, real.currency ?? 'USD', sdk);
-                        const newTier = autoPromoteTier(user.telegram_id, usdAmount, user.tier ?? 'DEMO');
-                        if (newTier && newTier !== user.tier) {
-                            const oldTier = user.tier;
-                            setUserTier(user.telegram_id, newTier);
-                            if (oldTier === 'DEMO') insertFunnelEvent('user_funded', JSON.stringify({ telegram_id: user.telegram_id }));
-                            if (newTier === 'DEMO' && oldTier !== 'DEMO') insertFunnelEvent('user_unfunded', JSON.stringify({ telegram_id: user.telegram_id }));
-                            logger.info('bot', `[periodic] tier changed ${user.telegram_id} ${oldTier} → ${newTier} ($${usdAmount.toFixed(2)})`);
+                        // null = no conversion rate — skip; a failed lookup must never demote a funded user
+                        if (usdAmount !== null) {
+                            const newTier = autoPromoteTier(user.telegram_id, usdAmount, user.tier ?? 'DEMO');
+                            if (newTier && newTier !== user.tier) {
+                                const oldTier = user.tier;
+                                setUserTier(user.telegram_id, newTier);
+                                if (oldTier === 'DEMO') insertFunnelEvent('user_funded', JSON.stringify({ telegram_id: user.telegram_id }));
+                                if (newTier === 'DEMO' && oldTier !== 'DEMO') insertFunnelEvent('user_unfunded', JSON.stringify({ telegram_id: user.telegram_id }));
+                                logger.info('bot', `[periodic] tier changed ${user.telegram_id} ${oldTier} → ${newTier} ($${usdAmount.toFixed(2)})`);
+                            }
                         }
                     }
                 } finally {

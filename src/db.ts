@@ -347,6 +347,10 @@ db.exec(`
 `);
 db.exec(`CREATE INDEX IF NOT EXISTS idx_scheduled_broadcasts_sent ON scheduled_broadcasts(sent, scheduled_at)`);
 db.exec(`CREATE INDEX IF NOT EXISTS idx_users_created_at ON users(created_at)`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_trades_telegram_id ON trades(telegram_id, created_at)`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_trades_created_at ON trades(created_at)`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_trades_martingale_run ON trades(martingale_run)`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_funnel_events_type ON funnel_events(event_type, created_at)`);
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS compose_tone (

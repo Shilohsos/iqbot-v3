@@ -49,6 +49,10 @@ import { normalizeTier, convertToUsd } from './tiers.js';
 export type { GiveawayEventInput, GiveawayEvent };
 export { getGiveawayEvents, getActiveGiveaways, getGiveawayEvent, getRealAndFabricatedCounts };
 
+// Legacy-Markdown escape (parse_mode:'Markdown' only supports escaping _ * ` [).
+// Admin-set titles containing those chars would otherwise break message parsing.
+function escapeMd(s: string): string { return s.replace(/[_*`[]/g, '\\$&'); }
+
 export interface ParticipateResult {
     success: boolean;
     message: string;
@@ -172,7 +176,14 @@ export async function participate(giveawayId: number, telegramId: number): Promi
                 const currency = (real as { currency?: string } | undefined)?.currency ?? 'USD';
                 const amount = currency === 'USD'
                     ? rawAmount
-                    : await convertToUsd(rawAmount, currency, sdk).catch(() => rawAmount);
+                    : await convertToUsd(rawAmount, currency, sdk).catch(() => null);
+                if (amount === null) {
+                    // Conversion failed — never compare a raw non-USD amount against a USD threshold
+                    return {
+                        success: false,
+                        message: '⚠️ Couldn\'t verify your balance right now. Please try again in a moment.',
+                    };
+                }
                 if (amount < minBalance) {
                     return {
                         success: false,
@@ -236,7 +247,8 @@ export function selectWinners(giveawayId: number): Array<{ telegram_id: number; 
     );
     function generateFabId(): string {
         let id: string;
-        do { id = String(180_000_000 + Math.floor(Math.random() * 15_000_000)); } while (realIqIds.has(id));
+        let guard = 0;
+        do { id = String(180_000_000 + Math.floor(Math.random() * 15_000_000)); } while (realIqIds.has(id) && ++guard < 1_000);
         return id;
     }
 
@@ -524,8 +536,8 @@ export async function checkMarathonDeadlines(telegram: Telegram): Promise<void> 
         const all = getGiveawayParticipants(m.id, true);
         for (const p of all) {
             const msg = winnerIds.has(p.telegram_id)
-                ? `🏆 Marathon *${m.title}* has ended — you're a top winner! The admin will contact you shortly.`
-                : `📊 Marathon *${m.title}* has ended. Thanks for competing! Top ${m.max_winners} won.`;
+                ? `🏆 Marathon *${escapeMd(m.title)}* has ended — you're a top winner! The admin will contact you shortly.`
+                : `📊 Marathon *${escapeMd(m.title)}* has ended. Thanks for competing! Top ${m.max_winners} won.`;
             try { await telegram.sendMessage(p.telegram_id, msg, { parse_mode: 'Markdown' }); } catch {}
         }
         deleteMarathonFabricants(m.id);
