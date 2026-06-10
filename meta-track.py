@@ -26,7 +26,6 @@ PIXEL_ID = "2115121012365333"
 TOKEN = os.getenv("META_ACCESS_TOKEN", "")
 API_URL = f"https://graph.facebook.com/v22.0/{PIXEL_ID}/events?access_token={TOKEN}"
 
-@app.route("/track", methods=["POST"])
 @app.route("/api/track", methods=["POST"])
 def track():
     data = request.get_json(silent=True) or {}
@@ -51,10 +50,14 @@ def track():
 
     # Build user_data — omit keys with empty values so Meta ignores missing params
     # rather than counting them as mismatches
-    user_data: dict = {
-        "client_ip_address": client_ip,
-        "client_user_agent": client_ua,
-    }
+    user_data: dict = {"client_user_agent": client_ua}
+
+    # Skip IP when caller explicitly opts out or when the IP is a loopback/private address
+    # (e.g. bot calling from localhost, or Cloudflare tunnel stripping the real IP)
+    skip_ip = data.get("skip_ip", False)
+    if not skip_ip and client_ip and client_ip not in ("127.0.0.1", "::1", ""):
+        user_data["client_ip_address"] = client_ip
+
     for field in ("fbc", "fbp", "em", "ph"):
         val = data.get(field, "")
         if val:
@@ -133,4 +136,4 @@ def health():
 if __name__ == "__main__":
     port = int(os.getenv("META_TRACK_PORT", "8766"))
     logger.info(f"meta tracking proxy on :{port}")
-    app.run(host="0.0.0.0", port=port, debug=False)
+    app.run(host="0.0.0.0", port=port, debug=False, threaded=True)

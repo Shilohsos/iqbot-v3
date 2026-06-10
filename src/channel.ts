@@ -2,7 +2,7 @@ import { Telegraf } from 'telegraf';
 import { insertFunnelEvent } from './db.js';
 
 const CHANNEL_ID    = parseInt(process.env.CHANNEL_ID ?? '-1002766084283', 10);
-const META_TRACK_URL = process.env.META_TRACK_URL ?? 'http://localhost:8766/track';
+const META_TRACK_URL = process.env.META_TRACK_URL ?? 'http://localhost:8766/api/track';
 
 export function setupChannelHandlers(bot: Telegraf): void {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -34,7 +34,7 @@ export function setupChannelHandlers(bot: Telegraf): void {
                     event_source_url: 'https://t.me/10xpremium',
                     event_id: eventId,
                     custom_data: { source: 'telegram_channel', telegram_id: userId, language_code: lang },
-                    skip_ip: true,
+                    skip_ip: false,
                 }),
             }).then(() => {
                 console.log(`[meta] CompleteRegistration sent for user ${userId}`);
