@@ -1954,20 +1954,43 @@ bot.action(/^stf:(\d+)$/, async ctx => {
     const now = new Date();
 
     const entryTime = new Date(now.getTime() + 60000);
-    const dirEmoji = analysis.direction === 'call' ? '🟢' : '🔴';
+    const dirEmoji = analysis.direction === 'call' ? '🟢' : '🟥';
     const dirLabel = analysis.direction.toUpperCase();
+    const dirStr = analysis.direction === 'call' ? 'BUY' : 'SELL';
     const tfLabelShort = tfLabel(timeframe);
-    // +2s grace so users can tap into IQ Option before monitoring starts
-    const GRACE_SECS = 2;
+    const GRACE_SECS = 2;  // 2s buffer so users can click into IQ Option
 
-    // ── Beginner-friendly template: no abbreviations, clear instructions ──
+    // Currency → flag emoji
+    const currencyFlags: Record<string, string> = {
+        EUR: '🇪🇺', USD: '🇺🇸', GBP: '🇬🇧', JPY: '🇯🇵', AUD: '🇦🇺',
+        NZD: '🇳🇿', CAD: '🇨🇦', CHF: '🇨🇭',
+    };
+    const pairFlags = (p: string): string => {
+        const m = p.match(/^(\w{3})(\w{3})/);
+        if (!m) return p;
+        const [_, b, q] = m;
+        return `${currencyFlags[b] || ''} ${b}/${q} ${currencyFlags[q] || ''}`;
+    };
+    const pairDisplay = pairFlags(pair) + ' (OTC)';
+
+    // Martingale level times
+    const lvlTime = (n: number) => fmtClock(new Date(entryTime.getTime() + n * timeframe * 1000));
+
+    // ── Premium template: detailed card with flags, levels, accuracy ──
     const renderCard = (status: string) => [
-        `📡 ${pair} Signal`,
+        `📡 10x Signal`,
         ``,
-        `${dirLabel} ${dirEmoji} · ${tfLabelShort} expiry · ${accuracy}% confidence`,
+        `🎯 Accuracy Level: ${accuracy}%`,
         ``,
-        `⏰ Enter trade at ${fmtClock(entryTime)}`,
-        `🔄 Smart Recovery: up to 4 attempts`,
+        `🎫 Trade: ${pairDisplay}`,
+        `⏳ Expiry: ${tfLabel(timeframe)}`,
+        `➡️ Entry: ${fmtClock(entryTime)}`,
+        `📈 Direction: ${dirStr} ${dirEmoji}`,
+        ``,
+        `↪️ Martingale Levels:`,
+        `• Level 1 → ${lvlTime(1)}`,
+        `• Level 2 → ${lvlTime(2)}`,
+        `• Level 3 → ${lvlTime(3)}`,
         ``,
         status,
     ].join('\n');
@@ -2014,7 +2037,7 @@ bot.action(/^stf:(\d+)$/, async ctx => {
 
         try {
             await ctx.telegram.editMessageText(chatId, cardMsg.message_id, undefined,
-                renderCard(`🟢 *ENTER NOW* — place your ${dirLabel} trade`),
+                renderCard(`🟢 *ENTER NOW* — place your ${dirStr} trade`),
                 { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [
                     [{ text: '🔙 Back', callback_data: 'ui:start' }],
                 ] } }
@@ -6101,7 +6124,7 @@ backgroundIntervals.push(setInterval(async () => {
                         // toSqlite stored "YYYY-MM-DD HH:MM:SS" (UTC). Convert to Unix seconds.
                         return Math.floor(new Date(s.replace(' ', 'T') + 'Z').getTime() / 1000);
                     };
-                    const prepSecs = sig.round === 0 ? 62 : 0;  // 60s prep + 2s grace before monitoring
+                    const prepSecs = sig.round === 0 ? 62 : 2;  // 60s prep + 2s grace; martingale: 2s grace only
                     const tradeEntryTs = parseSqliteTs(sig.entry_time) + prepSecs;
 
                     const candles = await refSdk.candles();
@@ -6134,21 +6157,31 @@ backgroundIntervals.push(setInterval(async () => {
                     updateSignalTrackResult(sig.id, status, result);
                     logger.info('signal-track', `signal #${sig.id} user ${sig.telegram_id} ${sig.pair} ${sig.direction} → ${status} (open=${openPrice}, close=${closePrice})`);
 
-                    const dirEmoji = sig.direction === 'call' ? '🟢' : '🔴';
+                    const dirEmoji = sig.direction === 'call' ? '🟢' : '🟥';
+                    const dirStr = sig.direction === 'call' ? 'BUY' : 'SELL';
                     const dirUp = sig.direction.toUpperCase();
                     const tfShort = tfLabel(sig.timeframe);
                     const attemptNum = sig.round + 1;
                     const maxAttempts = sig.max_rounds + 1;
-                    const attemptsLeft = sig.max_rounds - sig.round;
 
-                    // ── Beginner-friendly: simple language, clear actions ──
+                    // Pair flags for display
+                    const cFlags: Record<string, string> = {
+                        EUR: '🇪🇺', USD: '🇺🇸', GBP: '🇬🇧', JPY: '🇯🇵', AUD: '🇦🇺',
+                        NZD: '🇳🇿', CAD: '🇨🇦', CHF: '🇨🇭',
+                    };
+                    const pFlags = (p: string): string => {
+                        const m = p.match(/^(\w{3})(\w{3})/);
+                        return m ? `${cFlags[m[1]] || ''} ${m[1]}/${m[2]} ${cFlags[m[2]] || ''}` : p;
+                    };
+                    const pairDisp = pFlags(sig.pair) + ' (OTC)';
+
                     let notifyText: string;
                     let isFinal: boolean;
                     if (isWin) {
                         notifyText = [
-                            `📡 ${sig.pair}`,
+                            `📡 ${pairDisp}`,
                             ``,
-                            `${dirUp} ${dirEmoji} · ${tfShort} · Attempt ${attemptNum}/${maxAttempts}`,
+                            `${dirStr} ${dirEmoji} · ${tfShort} · Attempt ${attemptNum}/${maxAttempts}`,
                             ``,
                             `🟢 *Won!*`,
                             `Ready for the next signal.`,
@@ -6157,7 +6190,7 @@ backgroundIntervals.push(setInterval(async () => {
                     } else if (sig.round < sig.max_rounds) {
                         const nextRound = sig.round + 1;
                         const now = new Date();
-                        const nextExpiry = new Date(now.getTime() + sig.timeframe * 1000);
+                        const nextExpiry = new Date(now.getTime() + 2000 + sig.timeframe * 1000);  // +2s grace
                         insertSignalTrack({
                             telegram_id: sig.telegram_id, pair: sig.pair,
                             direction: sig.direction, timeframe: sig.timeframe,
@@ -6168,21 +6201,21 @@ backgroundIntervals.push(setInterval(async () => {
                             card_msg_id: sig.card_msg_id ?? undefined,
                         });
                         notifyText = [
-                            `📡 ${sig.pair}`,
+                            `📡 ${pairDisp}`,
                             ``,
-                            `${dirUp} ${dirEmoji} · ${tfShort} · Attempt ${attemptNum}/${maxAttempts}`,
+                            `${dirStr} ${dirEmoji} · ${tfShort} · Attempt ${attemptNum}/${maxAttempts}`,
                             ``,
                             `🔴 *Lost* — re-enter now!`,
-                            `Same direction (${dirUp}), double your amount.`,
+                            `Same direction (${dirStr}), double your amount.`,
                         ].join('\n');
                         isFinal = false;
                     } else {
                         notifyText = [
-                            `📡 ${sig.pair}`,
+                            `📡 ${pairDisp}`,
                             ``,
-                            `${dirUp} ${dirEmoji} · ${tfShort} · All ${maxAttempts} attempts done`,
+                            `${dirStr} ${dirEmoji} · ${tfShort} · All ${maxAttempts} attempts done`,
                             ``,
-                            `🔴 Signal finished`,
+                            `🔴 *Signal finished*`,
                             `Take a break — try again later.`,
                         ].join('\n');
                         isFinal = true;
