@@ -7,6 +7,14 @@ import { recoverMissedTradeResults } from './tradeRecovery.js';
 import { sdkPool } from './sdk-pool.js';
 import { getTierConfig, normalizeTier, autoPromoteTier, convertToUsd, TIER_CONFIGS } from './tiers.js';
 import {
+    resolveAccess, getProductConfig, hasAccess, getProduct,
+    AI_TRADING_MIN_USD, AUTO_TRADING_MIN_USD, FREE_SIGNALS_PER_DAY, ALL_PAIRS,
+    godModeStakePct, godModeTimeframe, godModeGaleRounds, martingaleWorstCase,
+} from './access.js';
+import { autoEngine, initAutoEngine } from './auto-trading.js';
+import {
+    setUserFundedBalance, getSignalUsage, incrementSignalUsage, getTotalSignalsToday,
+    upsertAutoSession, getAutoSession,
     getRecentTrades, getTradeStats, getTopTradersToday,
     getUser, saveUser, saveUsername, deleteUser, getAllUsers, getAllUserIds,
     getActiveTraderIds, getInactiveTraderIds, findUsersByUsername, findUsersByIqUserId,
@@ -847,7 +855,8 @@ async function sendStartMenu(ctx: Context): Promise<void> {
         const stats = getApprovalStats();
         await ctx.reply(
             `🛡️ *Admin Dashboard*\n\n` +
-            `👥 Users: ${stats.total} total | ✅ ${stats.approved} approved | ⏳ ${stats.pending} pending | 🔔 ${stats.manual} manual | ❌ ${stats.rejected} rejected`,
+            `👥 Users: ${stats.total} total | ✅ ${stats.approved} approved | ⏳ ${stats.pending} pending | 🔔 ${stats.manual} manual | ❌ ${stats.rejected} rejected\n` +
+            `📡 Signals used today: ${getTotalSignalsToday()}`,
             { parse_mode: 'Markdown', reply_markup: adminKeyboard() }
         );
         return;
@@ -891,9 +900,17 @@ async function sendStartMenu(ctx: Context): Promise<void> {
 
     // Approved — build rich menu
     const ss  = getUserSessionStats(telegramId);
-    const tier = normalizeTier(user.tier);
-    const tierEmoji = tier === 'MASTER' ? '👑' : tier === 'PRO' ? '⚡' : '🧪';
+    const access = getProduct(user.access_level);
+    const productLabel = getProductConfig(user.access_level).label;
+    const accessEmoji = access === 'auto_trading' ? '🚀' : access === 'ai_trading' ? '🤖' : '⚡';
     const pnlSign   = ss.pnl >= 0 ? '+' : '';
+
+    // Daily signal quota line — only shown to unfunded users on Signals access.
+    let signalsLine = '';
+    if (access === 'signals' && (user.funded_balance_usd ?? 0) <= 0) {
+        const { used } = getSignalUsage(telegramId);
+        signalsLine = `${Math.max(0, FREE_SIGNALS_PER_DAY - used)} signals remaining today`;
+    }
 
     const ssid = getSsidForUser(telegramId);
     const cached = ssid ? getUserBalanceCache(telegramId) : undefined;
@@ -902,36 +919,34 @@ async function sendStartMenu(ctx: Context): Promise<void> {
 
     const buildMenu = (balLine: string) => [
         `10x — Home`, ``,
-        `Tier: ${tierEmoji} ${tier}`,
+        `Access: ${accessEmoji} ${productLabel}`,
         balLine ? `Balance: ${balLine}` : '',
+        signalsLine,
         `Session: ${ss.trades} trade${ss.trades !== 1 ? 's' : ''} · ${pnlSign}$${Math.abs(ss.pnl).toFixed(2)}`,
         ``, `What now? 👇`,
     ].filter(l => l !== '').join('\n');
 
-    const sentMsg = await ctx.reply(buildMenu(cachedLine), { reply_markup: startKeyboard(user.tier ?? undefined) });
+    const sentMsg = await ctx.reply(buildMenu(cachedLine), { reply_markup: startKeyboard(user.access_level ?? undefined) });
 
     // Show active giveaway card if any
     const activeGiveaways = getActiveGiveaways();
     if (activeGiveaways.length > 0) {
         const giveaway = activeGiveaways[0];
         const prizeText = giveaway.prize_pool != null ? `\nPrize Pool: *$${giveaway.prize_pool.toFixed(2)}*` : '';
-        const canParticipate = tier === 'PRO' || tier === 'MASTER';
+        // All users can participate in giveaways now (directive §8.1).
         const giveawayCard = [
             `🎁 *LIVE GIVEAWAY*`,
             `*${escapeMdLegacy(giveaway.title)}*`,
             prizeText,
-            canParticipate ? `` : `\n🔒 Upgrade to PRO to participate`,
         ].filter(l => l !== '').join('\n');
-        const giveawayMarkup = canParticipate
-            ? { inline_keyboard: [[{ text: '🎯 Participate', callback_data: `giveaway:participate:${giveaway.id}` }]] }
-            : { inline_keyboard: [[{ text: '⚡ Upgrade to PRO', callback_data: 'ui:upgrade' }]] };
+        const giveawayMarkup = { inline_keyboard: [[{ text: '🎯 Participate', callback_data: `giveaway:participate:${giveaway.id}` }]] };
         await ctx.reply(giveawayCard, { parse_mode: 'Markdown', reply_markup: giveawayMarkup });
     }
 
     if (ssid) {
         const chatId = ctx.chat!.id;
         const msgId  = sentMsg.message_id;
-        const userTier = user.tier ?? undefined;
+        let accessForKbd = user.access_level ?? undefined;
         setImmediate(async () => {
             try {
                 const sdk = await sdkPool.get(telegramId, ssid!);
@@ -940,20 +955,22 @@ async function sendStartMenu(ctx: Context): Promise<void> {
                 const real = all.find(b => b.type === BalanceType.Real);
                 if (real?.currency) saveUserCurrency(telegramId, real.currency);
                 else if (demo?.currency) saveUserCurrency(telegramId, demo.currency);
-                // Auto-promote tier based on live balance (converted to USD)
-                if (real && user.tier !== 'MASTER') {
+                // Recompute product access from the funded (real) balance in USD.
+                if (real) {
                     const currency = real.currency ?? 'USD';
                     const usdAmount = await convertToUsd(real.amount, currency, sdk);
-                    // null = no conversion rate — never promote/demote on an unknown balance
+                    // null = no conversion rate — never re-gate on an unknown balance.
                     if (usdAmount !== null) {
-                        const newTier = autoPromoteTier(telegramId, usdAmount, user.tier ?? 'DEMO');
-                        if (newTier && newTier !== user.tier) {
-                            const oldTier = user.tier;
-                            setUserTier(telegramId, newTier);
-                            user.tier = newTier;
-                            if (oldTier === 'DEMO') insertFunnelEvent('user_funded', JSON.stringify({ telegram_id: telegramId }));
-                            logger.info('bot', `auto-promoted user ${telegramId} from ${oldTier} to ${newTier} (balance: ${currency} ${real.amount.toFixed(2)} ≈ $${usdAmount.toFixed(2)})`);
+                        const wasUnfunded = (user.funded_balance_usd ?? 0) <= 0;
+                        const newAccess = resolveAccess(usdAmount, getProduct(user.access_level));
+                        setUserFundedBalance(telegramId, usdAmount, newAccess);
+                        accessForKbd = newAccess;
+                        if (newAccess !== getProduct(user.access_level)) {
+                            logger.info('bot', `user ${telegramId} access → ${newAccess} (balance ${currency} ${real.amount.toFixed(2)} ≈ $${usdAmount.toFixed(2)})`);
                         }
+                        if (wasUnfunded && usdAmount > 0) insertFunnelEvent('user_funded', JSON.stringify({ telegram_id: telegramId }));
+                        user.access_level = newAccess;
+                        user.funded_balance_usd = usdAmount;
                     }
                 }
                 if (needsFetch) {
@@ -964,7 +981,7 @@ async function sendStartMenu(ctx: Context): Promise<void> {
                     if (newLine) {
                         setUserBalanceCache(telegramId, newLine);
                         await ctx.telegram.editMessageText(chatId, msgId, undefined, buildMenu(newLine),
-                            { reply_markup: startKeyboard(userTier) });
+                            { reply_markup: startKeyboard(accessForKbd) });
                     }
                 }
             } catch (err) {
@@ -1745,6 +1762,11 @@ bot.action('ui:trade', async ctx => {
     if (!await requireApproval(ctx)) return;
 
     const user = getUser(ctx.from!.id);
+    // AI Trading requires ai_trading access (funded $30+ or token). Admin bypasses.
+    if (ctx.from!.id !== getAdminId() && !hasAccess(user?.access_level, 'ai_trading')) {
+        await sendAiTradingLock(ctx);
+        return;
+    }
     const hasValidSsid = user?.ssid && user.ssid_valid !== 0;
     if (!hasValidSsid) {
         const isExpired = !!user?.ssid;
@@ -1760,6 +1782,429 @@ bot.action('ui:trade', async ctx => {
     try { const m = await ctx.replyWithPhoto(ASSET('L4.png')); state.lastImageMsgId = m.message_id; } catch {}
     wizardSessions.set(ctx.chat!.id, state);
     await ctx.reply('Trade live | Trade Demo', { reply_markup: tradeModeKeyboard() });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Product access — locks, Signals, Auto Trading, Auto God Mode
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const DEPOSIT_URL = 'https://iqoption.com/pwa/payments/deposit';
+const fmtClock = (d: Date) => d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+
+async function sendAiTradingLock(ctx: Context): Promise<void> {
+    await ctx.reply(
+        `🔒 *AI Trading* requires $${AI_TRADING_MIN_USD}+ funded.\n\n` +
+        `Fund your account or use an upgrade token to unlock semi-auto trading.`,
+        { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [
+            [{ text: '💳 Fund Account', url: DEPOSIT_URL }],
+            [{ text: '🎟 Use Upgrade Token', callback_data: 'ui:upgrade' }],
+            [{ text: '🔙 Back', callback_data: 'ui:start' }],
+        ] } }
+    );
+}
+
+async function sendAutoTradingLock(ctx: Context): Promise<void> {
+    await ctx.reply(
+        `🔒 *Auto Trading* requires $${AUTO_TRADING_MIN_USD}+ funded.\n\n` +
+        `Unlock full autonomous trading — the bot picks setups and trades for you.`,
+        { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [
+            [{ text: '💳 Fund Account', url: DEPOSIT_URL }],
+            [{ text: '🎟 Use Upgrade Token', callback_data: 'ui:upgrade' }],
+            [{ text: '🔙 Back', callback_data: 'ui:start' }],
+        ] } }
+    );
+}
+
+bot.action('lock:ai_trading', async ctx => { await ctx.answerCbQuery(); await sendAiTradingLock(ctx); });
+bot.action('lock:auto_trading', async ctx => { await ctx.answerCbQuery(); await sendAutoTradingLock(ctx); });
+
+// ─── Signals (analysis display only — directive §3) ───────────────────────────
+
+bot.action('ui:signals', async ctx => {
+    await ctx.answerCbQuery();
+    if (!await requireApproval(ctx)) return;
+    await runSignal(ctx);
+});
+bot.action('signals:another', async ctx => { await ctx.answerCbQuery().catch(() => {}); await runSignal(ctx); });
+
+async function runSignal(ctx: Context): Promise<void> {
+    const uid = ctx.from!.id;
+    const user = getUser(uid);
+    const funded = (user?.funded_balance_usd ?? 0) > 0;
+
+    if (!funded) {
+        const { used } = getSignalUsage(uid);
+        if (used >= FREE_SIGNALS_PER_DAY) {
+            await ctx.reply(
+                `📡 You've used all ${FREE_SIGNALS_PER_DAY} signals today.\n\nFund $10+ for *unlimited* signals.`,
+                { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [
+                    [{ text: '💳 Fund Account', url: DEPOSIT_URL }],
+                    [{ text: '🔙 Back', callback_data: 'ui:start' }],
+                ] } }
+            );
+            return;
+        }
+    }
+
+    const ssid = getSsidForUser(uid);
+    if (!ssid) {
+        await ctx.reply('⚠️ Connect your IQ Option account first.', {
+            reply_markup: { inline_keyboard: [[{ text: '🔗 Connect Account', callback_data: 'ui:connect' }]] },
+        });
+        return;
+    }
+
+    const pair = ALL_PAIRS[Math.floor(Math.random() * ALL_PAIRS.length)];
+    const timeframe = 60;
+    const progress = await ctx.reply(`📡 Scanning ${pair}…`);
+
+    let analysis: AnalysisResult;
+    try {
+        const sdk = await sdkPool.get(uid, ssid);
+        analysis = await analyzePairWithSdk(sdk, pair, timeframe, 'MASTER', user?.analysis_candles ?? undefined);
+    } catch (err) {
+        await ctx.telegram.editMessageText(ctx.chat!.id, progress.message_id, undefined,
+            friendlyError(err, '⚠️ Could not read the market. Try another signal.')).catch(() => {});
+        await ctx.reply('Try again 👇', { reply_markup: { inline_keyboard: [[{ text: 'Get Another Signal 🔄', callback_data: 'signals:another' }]] } });
+        return;
+    } finally {
+        sdkPool.release(uid);
+    }
+
+    const accuracy = Math.round(user?.display_confidence_min
+        ? Math.max(analysis.confidence, user.display_confidence_min)
+        : analysis.confidence);
+    const count = incrementSignalUsage(uid);
+    const counterLine = funded ? `— Signal #${count} today —` : `— Signal ${count}/${FREE_SIGNALS_PER_DAY} today —`;
+
+    const now = new Date();
+    const lvl = (n: number) => fmtClock(new Date(now.getTime() + n * timeframe * 1000));
+    const dirLine = analysis.direction === 'call' ? 'CALL 🟢' : 'PUT 🔴';
+    const card = [
+        `📡 *${pair} SIGNAL*`, ``,
+        `🎯 Accuracy: ${accuracy}%`, ``,
+        `⏳ Expiry: ${tfLabel(timeframe)}`,
+        `📈 Direction: ${dirLine}`,
+        `➡️ Entry: ${fmtClock(now)}`, ``,
+        `↪️ Smart Recovery:`,
+        `• Level 1 → ${lvl(1)}`,
+        `• Level 2 → ${lvl(2)}`,
+        `• Level 3 → ${lvl(3)}`, ``,
+        counterLine,
+    ].join('\n');
+
+    await ctx.telegram.deleteMessage(ctx.chat!.id, progress.message_id).catch(() => {});
+    await ctx.reply(card, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [
+        [{ text: 'Get Another Signal 🔄', callback_data: 'signals:another' }],
+        [{ text: '🔙 Back', callback_data: 'ui:start' }],
+    ] } });
+}
+
+// ─── Auto Trading (directive §5) ──────────────────────────────────────────────
+
+interface AutoWizState {
+    step: 'currency' | 'amount' | 'assets' | 'timeframe' | 'gale' | 'confirm';
+    currency?: string;
+    amount?: number;
+    assets: string[];
+    timeframe?: number;
+    gale?: number;
+}
+const autoWizSessions = makeSessionMap<AutoWizState>('autowiz');
+
+const AUTO_AMOUNTS: Record<string, number[]> = {
+    NGN: [1000, 2000, 5000, 10000],
+    DEFAULT: [10, 25, 50, 100],
+};
+
+function autoCurrencyKeyboard(): { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> } {
+    return { inline_keyboard: [
+        [{ text: '₦ NGN', callback_data: 'acur:NGN' }, { text: '$ USD', callback_data: 'acur:USD' }],
+        [{ text: '€ EUR', callback_data: 'acur:EUR' }, { text: '£ GBP', callback_data: 'acur:GBP' }],
+        [{ text: '❌ Cancel', callback_data: 'acancel' }],
+    ] };
+}
+
+function autoAmountKeyboard(currency: string): { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> } {
+    const syms: Record<string, string> = { NGN: '₦', EUR: '€', GBP: '£', USD: '$' };
+    const sym = syms[currency] ?? '$';
+    const vals = AUTO_AMOUNTS[currency] ?? AUTO_AMOUNTS.DEFAULT;
+    return { inline_keyboard: [
+        vals.map(v => ({ text: `${sym}${v.toLocaleString()}`, callback_data: `aamt:${v}` })),
+        [{ text: '❌ Cancel', callback_data: 'acancel' }],
+    ] };
+}
+
+function autoAssetKeyboard(selected: string[]): { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> } {
+    const rows: Array<Array<{ text: string; callback_data: string }>> = [];
+    for (let i = 0; i < ALL_PAIRS.length; i += 2) {
+        const row = [ALL_PAIRS[i], ALL_PAIRS[i + 1]].filter(Boolean).map(p => ({
+            text: selected.includes(p) ? `✅ ${p}` : p,
+            callback_data: `aasset:${p}`,
+        }));
+        rows.push(row);
+    }
+    rows.push([{ text: `Done (${selected.length}/3) ➡️`, callback_data: 'aassetdone' }]);
+    rows.push([{ text: '❌ Cancel', callback_data: 'acancel' }]);
+    return { inline_keyboard: rows };
+}
+
+function autoTimeframeKeyboard(): { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> } {
+    return { inline_keyboard: [
+        [{ text: '30s', callback_data: 'atf:30' }, { text: '1m', callback_data: 'atf:60' }, { text: '5m', callback_data: 'atf:300' }],
+        [{ text: '❌ Cancel', callback_data: 'acancel' }],
+    ] };
+}
+
+function autoGaleKeyboard(): { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> } {
+    return { inline_keyboard: [
+        [{ text: 'None', callback_data: 'agale:0' }, { text: '3 rounds', callback_data: 'agale:3' }, { text: '6 rounds', callback_data: 'agale:6' }],
+        [{ text: '❌ Cancel', callback_data: 'acancel' }],
+    ] };
+}
+
+async function sendAutoMenu(ctx: Context): Promise<void> {
+    const session = getAutoSession(ctx.from!.id);
+    const status = session?.status;
+    const running = status === 'running';
+    const statusLabel = running ? '▶️ Running' : status === 'paused' ? '⏸️ Paused' : '⏸️ Stopped';
+
+    const rows: Array<Array<{ text: string; callback_data: string }>> = [];
+    if (running) {
+        rows.push([{ text: '⏸️ Pause', callback_data: 'auto:pause' }, { text: '⏹️ Stop', callback_data: 'auto:stop' }]);
+    } else {
+        rows.push([{ text: '▶️ Start Auto Trading', callback_data: 'auto:start' }]);
+        if (status === 'paused') rows.push([{ text: '▶️ Resume', callback_data: 'auto:resume' }]);
+    }
+    rows.push([{ text: '⚡ Auto God Mode', callback_data: 'auto:god' }]);
+    rows.push([{ text: '📊 Performance', callback_data: 'auto:perf' }]);
+    rows.push([{ text: '🔙 Back', callback_data: 'ui:start' }]);
+
+    await ctx.reply(
+        `🚀 *Auto Trading*\n\nStatus: ${statusLabel}\n\nConfigure your auto trader below.`,
+        { parse_mode: 'Markdown', reply_markup: { inline_keyboard: rows } }
+    );
+}
+
+function requireAutoAccess(ctx: Context): boolean {
+    if (ctx.from!.id === getAdminId()) return true;
+    return hasAccess(getUser(ctx.from!.id)?.access_level, 'auto_trading');
+}
+
+bot.action('ui:auto', async ctx => {
+    await ctx.answerCbQuery();
+    if (!await requireApproval(ctx)) return;
+    if (!requireAutoAccess(ctx)) { await sendAutoTradingLock(ctx); return; }
+    await sendAutoMenu(ctx);
+});
+
+bot.action('auto:start', async ctx => {
+    await ctx.answerCbQuery();
+    if (!requireAutoAccess(ctx)) { await sendAutoTradingLock(ctx); return; }
+    if (!getSsidForUser(ctx.from!.id)) {
+        await ctx.reply('⚠️ Connect your IQ Option account first.', {
+            reply_markup: { inline_keyboard: [[{ text: '🔗 Connect Account', callback_data: 'ui:connect' }]] },
+        });
+        return;
+    }
+    autoWizSessions.set(ctx.chat!.id, { step: 'currency', assets: [] });
+    await ctx.reply('💰 Select your trading currency:', { reply_markup: autoCurrencyKeyboard() });
+});
+
+bot.action('acancel', async ctx => {
+    await ctx.answerCbQuery();
+    autoWizSessions.delete(ctx.chat!.id);
+    try { await ctx.editMessageText('❌ Auto Trading setup cancelled.'); } catch {}
+});
+
+bot.action(/^acur:(.+)$/, async ctx => {
+    await ctx.answerCbQuery();
+    const st = autoWizSessions.get(ctx.chat!.id);
+    if (!st || st.step !== 'currency') { await ctx.answerCbQuery('Session expired — start over.').catch(() => {}); return; }
+    st.currency = ctx.match[1];
+    st.step = 'amount';
+    autoWizSessions.set(ctx.chat!.id, st);
+    await ctx.editMessageText(`💰 Amount per trade (${st.currency}):`, { reply_markup: autoAmountKeyboard(st.currency) });
+});
+
+bot.action(/^aamt:(\d+)$/, async ctx => {
+    await ctx.answerCbQuery();
+    const st = autoWizSessions.get(ctx.chat!.id);
+    if (!st || st.step !== 'amount') { await ctx.answerCbQuery('Session expired — start over.').catch(() => {}); return; }
+    st.amount = parseInt(ctx.match[1], 10);
+    st.step = 'assets';
+    st.assets = [];
+    autoWizSessions.set(ctx.chat!.id, st);
+    await ctx.editMessageText('🎯 Pick *3 assets* for the bot to trade:', { parse_mode: 'Markdown', reply_markup: autoAssetKeyboard(st.assets) });
+});
+
+bot.action(/^aasset:(.+)$/, async ctx => {
+    await ctx.answerCbQuery();
+    const st = autoWizSessions.get(ctx.chat!.id);
+    if (!st || st.step !== 'assets') { await ctx.answerCbQuery('Session expired — start over.').catch(() => {}); return; }
+    const pair = ctx.match[1];
+    if (st.assets.includes(pair)) st.assets = st.assets.filter(p => p !== pair);
+    else if (st.assets.length < 3) st.assets.push(pair);
+    else { await ctx.answerCbQuery('You already picked 3. Tap one to deselect.').catch(() => {}); return; }
+    autoWizSessions.set(ctx.chat!.id, st);
+    try { await ctx.editMessageReplyMarkup(autoAssetKeyboard(st.assets)); } catch {}
+});
+
+bot.action('aassetdone', async ctx => {
+    const st = autoWizSessions.get(ctx.chat!.id);
+    if (!st || st.step !== 'assets') { await ctx.answerCbQuery('Session expired — start over.').catch(() => {}); return; }
+    if (st.assets.length !== 3) { await ctx.answerCbQuery('Pick exactly 3 assets.').catch(() => {}); return; }
+    await ctx.answerCbQuery();
+    st.step = 'timeframe';
+    autoWizSessions.set(ctx.chat!.id, st);
+    await ctx.editMessageText('⏱ Select timeframe:', { reply_markup: autoTimeframeKeyboard() });
+});
+
+bot.action(/^atf:(\d+)$/, async ctx => {
+    await ctx.answerCbQuery();
+    const st = autoWizSessions.get(ctx.chat!.id);
+    if (!st || st.step !== 'timeframe') { await ctx.answerCbQuery('Session expired — start over.').catch(() => {}); return; }
+    st.timeframe = parseInt(ctx.match[1], 10);
+    st.step = 'gale';
+    autoWizSessions.set(ctx.chat!.id, st);
+    await ctx.editMessageText('🔄 Smart Recovery rounds:', { reply_markup: autoGaleKeyboard() });
+});
+
+bot.action(/^agale:(\d+)$/, async ctx => {
+    await ctx.answerCbQuery();
+    const st = autoWizSessions.get(ctx.chat!.id);
+    if (!st || st.step !== 'gale') { await ctx.answerCbQuery('Session expired — start over.').catch(() => {}); return; }
+    st.gale = parseInt(ctx.match[1], 10);
+    st.step = 'confirm';
+    autoWizSessions.set(ctx.chat!.id, st);
+    await ctx.editMessageText(buildAutoConfirmText(st), { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [
+        [{ text: '▶️ Start Trading', callback_data: 'aconfirm' }],
+        [{ text: '❌ Cancel', callback_data: 'acancel' }],
+    ] } });
+});
+
+function buildAutoConfirmText(st: AutoWizState): string {
+    const worst = martingaleWorstCase(st.amount ?? 0, st.gale ?? 0);
+    return [
+        `🚀 *Auto Trading Configuration*`, ``,
+        `Currency: ${st.currency}`,
+        `Amount: ${st.amount} ${st.currency} per trade`,
+        `Assets: ${st.assets.join(', ')}`,
+        `Timeframe: ${tfLabel(st.timeframe ?? 60)}`,
+        `Smart Recovery: ${st.gale ? `${st.gale} rounds` : 'None'}`,
+        ``,
+        `⚠️ Worst-case per cycle (full recovery loss): ${worst.toFixed(0)} ${st.currency}`,
+        `Trades LIVE only · 1 position at a time.`,
+    ].join('\n');
+}
+
+bot.action('aconfirm', async ctx => {
+    await ctx.answerCbQuery();
+    const uid = ctx.from!.id;
+    const st = autoWizSessions.get(ctx.chat!.id);
+    if (!st || st.assets.length !== 3 || !st.currency || !st.amount || !st.timeframe) {
+        await ctx.answerCbQuery('Setup incomplete — start over.').catch(() => {});
+        return;
+    }
+    upsertAutoSession({
+        telegram_id: uid, currency: st.currency, amount: st.amount,
+        assets: st.assets, timeframe: st.timeframe, gale_rounds: st.gale ?? 3,
+    });
+    autoWizSessions.delete(ctx.chat!.id);
+    autoEngine.start(uid);
+    try { await ctx.editMessageText('🚀 Auto Trading started! You\'ll get a live status card as trades run.'); } catch {}
+});
+
+// ─── Auto God Mode (directive §6) ─────────────────────────────────────────────
+
+bot.action('auto:god', async ctx => {
+    await ctx.answerCbQuery();
+    if (!requireAutoAccess(ctx)) { await sendAutoTradingLock(ctx); return; }
+    const uid = ctx.from!.id;
+    const ssid = getSsidForUser(uid);
+    if (!ssid) {
+        await ctx.reply('⚠️ Connect your IQ Option account first.', {
+            reply_markup: { inline_keyboard: [[{ text: '🔗 Connect Account', callback_data: 'ui:connect' }]] },
+        });
+        return;
+    }
+    const progress = await ctx.reply('⚡ Analyzing your account…');
+    try {
+        const sdk = await sdkPool.get(uid, ssid);
+        const all = (await withTimeout(sdk.balances(), 15_000, 'balance')).getBalances();
+        const real = all.find(b => b.type === BalanceType.Real) ?? all.find(b => b.type === undefined);
+        if (!real) {
+            await ctx.telegram.editMessageText(ctx.chat!.id, progress.message_id, undefined,
+                '⚡ No live balance found. Fund your account to use God Mode.').catch(() => {});
+            return;
+        }
+        const currency = real.currency ?? 'USD';
+        const usd = (await convertToUsd(real.amount, currency, sdk)) ?? real.amount;
+        const pct = godModeStakePct(usd);
+        // Size the stake in the account's native currency (same proportion as USD %).
+        const stakeNative = Math.max(1, Math.round(real.amount * pct));
+        const stakeUsd = usd * pct;
+        const timeframe = godModeTimeframe(usd);
+        const gale = godModeGaleRounds(usd, stakeUsd);
+        // Pick 3 assets from precomputed win rates (no live 8-pair scan — directive §9.3).
+        const picks = getTopPicks();
+        const assets = picks.length >= 3 ? picks.slice(0, 3).map(p => p.pair) : ALL_PAIRS.slice(0, 3);
+
+        autoWizSessions.set(ctx.chat!.id, { step: 'confirm', currency, amount: stakeNative, assets, timeframe, gale });
+
+        const plan = [
+            `⚡ *Auto God Mode — Your Trading Plan*`, ``,
+            `💰 Account: ${real.amount.toLocaleString()} ${currency}`,
+            `📊 Recommended amount: ${stakeNative.toLocaleString()} ${currency}/trade (${(pct * 100).toFixed(1)}%)`,
+            `🎯 Recommended assets: ${assets.join(', ')}`,
+            `⏳ Recommended timeframe: ${tfLabel(timeframe)}`,
+            `🔄 Smart Recovery: ${gale ? `${gale} rounds` : 'None'}`,
+        ].join('\n');
+        await ctx.telegram.deleteMessage(ctx.chat!.id, progress.message_id).catch(() => {});
+        await ctx.reply(plan, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [
+            [{ text: '✅ Approve & Start', callback_data: 'aconfirm' }],
+            [{ text: '🔧 Customize', callback_data: 'auto:start' }],
+        ] } });
+    } catch (err) {
+        await ctx.telegram.editMessageText(ctx.chat!.id, progress.message_id, undefined,
+            friendlyError(err, '⚡ Could not analyze your account. Try again.')).catch(() => {});
+    } finally {
+        sdkPool.release(uid);
+    }
+});
+
+// ─── Auto Trading controls ────────────────────────────────────────────────────
+
+bot.action('auto:pause', async ctx => {
+    await ctx.answerCbQuery('Pausing after current trade…');
+    autoEngine.pause(ctx.from!.id);
+    await sendAutoMenu(ctx);
+});
+bot.action('auto:resume', async ctx => {
+    await ctx.answerCbQuery();
+    if (!requireAutoAccess(ctx)) { await sendAutoTradingLock(ctx); return; }
+    autoEngine.resume(ctx.from!.id);
+    await sendAutoMenu(ctx);
+});
+bot.action('auto:stop', async ctx => {
+    await ctx.answerCbQuery('Stopping after current trade…');
+    autoEngine.stop(ctx.from!.id);
+    await sendAutoMenu(ctx);
+});
+bot.action('auto:perf', async ctx => {
+    await ctx.answerCbQuery();
+    const s = getAutoSession(ctx.from!.id);
+    if (!s) { await ctx.reply('No Auto Trading session yet.', { reply_markup: backKeyboard() }); return; }
+    const sign = s.pnl >= 0 ? '+' : '';
+    await ctx.reply(
+        `📊 *Auto Trading Performance*\n\n` +
+        `Status: ${s.status}\n` +
+        `Trades: ${s.trades_done}\n` +
+        `P&L: ${sign}${s.pnl.toFixed(2)} ${s.currency}\n` +
+        `Assets: ${(JSON.parse(s.assets) as string[]).join(', ')}\n` +
+        `Timeframe: ${tfLabel(s.timeframe)} · Recovery: ${s.gale_rounds}`,
+        { parse_mode: 'Markdown', reply_markup: backKeyboard() }
+    );
 });
 
 bot.action('ui:history', async ctx => {
@@ -5236,6 +5681,15 @@ ensurePolling().catch(err => {
 logger.info('bot', 'iqbot-v3 running');
 recoverMissedTradeResults().catch(err => {
     console.error('[RECOVERY] Failed to recover missed trades:', err);
+});
+// Auto Trading engine: inject the Telegram sender and resume any running sessions.
+initAutoEngine({
+    sendMessage: (chatId, text, extra) => bot.telegram.sendMessage(chatId, text, extra as never),
+    editMessageText: (chatId, msgId, _inline, text, extra) =>
+        bot.telegram.editMessageText(chatId, msgId, undefined, text, extra as never),
+});
+autoEngine.restoreAll().catch(err => {
+    console.error('[AUTO] Failed to restore auto-trading sessions:', err);
 });
 startAutoBroadcast(bot);
 seedFundingCycle();

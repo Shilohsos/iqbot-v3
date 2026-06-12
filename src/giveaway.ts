@@ -129,14 +129,7 @@ export async function participate(giveawayId: number, telegramId: number): Promi
     const user = getUser(telegramId);
     if (!user) return { success: false, message: '❌ User not found.' };
 
-    const tier = normalizeTier(user.tier);
-    if (tier === 'DEMO') {
-        return {
-            success: false,
-            message: '❌ Only Pro and Master traders can participate in giveaways.\n\nUpgrade your tier to join!',
-            replyMarkup: { inline_keyboard: [[{ text: '⚡ Upgrade to PRO', callback_data: 'ui:upgrade' }]] },
-        };
-    }
+    // All users can participate in giveaways now (directive §8.1) — no tier gate.
 
     const existing = getGiveawayParticipant(giveawayId, telegramId);
     if (existing) {
@@ -482,14 +475,7 @@ export async function claimPromoCode(
     const user = getUser(telegramId);
     if (!user) return { success: false, message: '❌ User not found.' };
 
-    const tier = normalizeTier(user.tier);
-    if (tier === 'DEMO') {
-        return {
-            success: false,
-            message: '❌ Only Pro and Master traders can claim promo codes.\n\nUpgrade to claim!',
-            replyMarkup: { inline_keyboard: [[{ text: '⚡ Upgrade to PRO', callback_data: 'ui:upgrade' }]] },
-        };
-    }
+    // All users can claim promo codes now (directive §8.1) — no tier gate.
 
     const code = event.criteria_value ?? '';
 

@@ -1,5 +1,3 @@
-import { getTierConfig } from './tiers.js';
-
 export const OTC_PAIRS = [
     'EURUSD-OTC', 'GBPUSD-OTC', 'EURJPY-OTC', 'GBPJPY-OTC',
     'AUDUSD-OTC', 'USDCAD-OTC', 'EURGBP-OTC', 'USDCHF-OTC',
@@ -56,15 +54,11 @@ const ALL_PAIRS = [
     'AUDUSD-OTC', 'USDCAD-OTC', 'EURGBP-OTC', 'USDCHF-OTC',
 ];
 
-export function timeframeKeyboard(tier?: string): IKMarkup {
-    const allowed = getTierConfig(tier).allowedTimeframes;
+// `tier` params are retained for call-site compatibility but no longer gate
+// anything — all timeframes and pairs are available to every product now.
+export function timeframeKeyboard(_tier?: string): IKMarkup {
     const labels: Record<number, string> = { 30: '30s', 60: '1m', 300: '5m' };
-    const row: Btn[] = ALL_TIMEFRAMES.map(s => {
-        const label = labels[s] ?? `${s}s`;
-        return allowed.includes(s)
-            ? { text: label, callback_data: `tf:${s}` }
-            : { text: `🔒 ${label}`, callback_data: `upgrade:tf:${s}` };
-    });
+    const row: Btn[] = ALL_TIMEFRAMES.map(s => ({ text: labels[s] ?? `${s}s`, callback_data: `tf:${s}` }));
     return {
         inline_keyboard: [
             row,
@@ -73,25 +67,16 @@ export function timeframeKeyboard(tier?: string): IKMarkup {
     };
 }
 
-export function pairKeyboard(page = 0, tier?: string): IKMarkup {
-    const allowed = new Set(getTierConfig(tier).pairs);
+export function pairKeyboard(page = 0, _tier?: string): IKMarkup {
     const PAGE_SIZE = 6;
     const start = page * PAGE_SIZE;
     const pagePairs = ALL_PAIRS.slice(start, start + PAGE_SIZE);
     const rows: Btn[][] = [];
 
     for (let i = 0; i < pagePairs.length; i += 2) {
-        const row: Btn[] = [
-            allowed.has(pagePairs[i])
-                ? { text: pagePairs[i], callback_data: `pair:${pagePairs[i]}` }
-                : { text: `🔒 ${pagePairs[i]}`, callback_data: `upgrade:pair:${pagePairs[i]}` },
-        ];
+        const row: Btn[] = [{ text: pagePairs[i], callback_data: `pair:${pagePairs[i]}` }];
         if (pagePairs[i + 1]) {
-            row.push(
-                allowed.has(pagePairs[i + 1])
-                    ? { text: pagePairs[i + 1], callback_data: `pair:${pagePairs[i + 1]}` }
-                    : { text: `🔒 ${pagePairs[i + 1]}`, callback_data: `upgrade:pair:${pagePairs[i + 1]}` }
-            );
+            row.push({ text: pagePairs[i + 1], callback_data: `pair:${pagePairs[i + 1]}` });
         }
         rows.push(row);
     }
