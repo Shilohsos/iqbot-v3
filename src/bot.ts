@@ -1949,35 +1949,28 @@ bot.action(/^stf:(\d+)$/, async ctx => {
     const accuracy = Math.round(user?.display_confidence_min
         ? Math.max(analysis.confidence, user.display_confidence_min)
         : analysis.confidence);
-    const count = incrementSignalUsage(uid);
+    incrementSignalUsage(uid);
     incrementTotalSignalCount(uid);
-    const counterLine = funded ? `— Signal #${count} today —` : `— Signal ${count}/${FREE_SIGNALS_PER_DAY} today —`;
-    const badge = isPremium ? ' ★ PREMIUM ★' : '';
     const now = new Date();
 
     const entryTime = new Date(now.getTime() + 60000);
-    const lvlExpiry = (n: number) => fmtClock(new Date(entryTime.getTime() + n * timeframe * 1000));
-    const dirLine = analysis.direction === 'call' ? 'CALL 🟢' : 'PUT 🔴';
+    const dirEmoji = analysis.direction === 'call' ? '🟢' : '🔴';
+    const dirLabel = analysis.direction.toUpperCase();
+    const tfLabelShort = tfLabel(timeframe);
 
-    // The signal card is the ONE message — its footer is a live status line that
-    // the prep countdown and the tracking loop edit in place (directive: one message).
-    const baseCard = [
-        `📡 *${pair} SIGNAL*${badge}`, ``,
-        `🎯 Accuracy: ${accuracy}%`, ``,
-        `⏳ Expiry: ${tfLabel(timeframe)}`,
-        `📈 Direction: ${dirLine}`,
-        `➡️ Entry: ${fmtClock(entryTime)}`, ``,
-        `↪️ Smart Recovery:`,
-        `• Level 1 → ${lvlExpiry(1)}`,
-        `• Level 2 → ${lvlExpiry(2)}`,
-        `• Level 3 → ${lvlExpiry(3)}`, ``,
-        counterLine,
-    ];
-    const renderCard = (status: string) => [...baseCard, ``, status].join('\n');
+    // ── Match AI Trading style: compact header → key stats → status footer ──
+    const renderCard = (status: string) => [
+        `📡 Signal — ${pair}`,
+        ``,
+        `Dir: ${dirLabel} ${dirEmoji} · TF: ${tfLabelShort} · Acc: ${accuracy}%`,
+        `Entry: ${fmtClock(entryTime)} · Recovery: 4 rounds`,
+        ``,
+        status,
+    ].join('\n');
 
-    // Initial card — no "New Signal" button during the live flow, only Back.
+    // Initial card — no "New Signal" button, only Back.
     const cardMsg = await ctx.reply(
-        renderCard(`⏳ *Preparation* — 1:00 · activates at ${fmtClock(entryTime)}`),
+        renderCard(`⏳ *Preparation* — 1:00`),
         { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [
             [{ text: '🔙 Back', callback_data: 'ui:start' }],
         ] } }
@@ -2006,9 +1999,8 @@ bot.action(/^stf:(\d+)$/, async ctx => {
             try {
                 const sec = remaining % 60;
                 const timeStr = `0:${sec.toString().padStart(2, '0')}`;
-                const activTime = fmtClock(new Date(entryTime.getTime() - remaining * 1000 + 60000));
                 await ctx.telegram.editMessageText(chatId, cardMsg.message_id, undefined,
-                    renderCard(`⏳ *Preparation* — ${timeStr} · activates at ${activTime}`),
+                    renderCard(`⏳ *Preparation* — ${timeStr}`),
                     { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [
                         [{ text: '🔙 Back', callback_data: 'ui:start' }],
                     ] } }
@@ -2018,7 +2010,7 @@ bot.action(/^stf:(\d+)$/, async ctx => {
 
         try {
             await ctx.telegram.editMessageText(chatId, cardMsg.message_id, undefined,
-                renderCard(`✅ *Signal Active!* — entry now, ${dirLine}. Open IQ Option and take the trade.`),
+                renderCard(`✅ *Active* — take the trade now`),
                 { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [
                     [{ text: '🔙 Back', callback_data: 'ui:start' }],
                 ] } }
@@ -6138,15 +6130,24 @@ backgroundIntervals.push(setInterval(async () => {
                     updateSignalTrackResult(sig.id, status, result);
                     logger.info('signal-track', `signal #${sig.id} user ${sig.telegram_id} ${sig.pair} ${sig.direction} → ${status} (open=${openPrice}, close=${closePrice})`);
 
+                    const dirEmoji = sig.direction === 'call' ? '🟢' : '🔴';
                     const dirUp = sig.direction.toUpperCase();
+                    const tfShort = tfLabel(sig.timeframe);
                     const roundLabel = `Round ${sig.round + 1}/${sig.max_rounds + 1}`;
+                    const roundsLeft = sig.max_rounds - sig.round;
 
-                    // Martingale auto-progression: insert next round record on loss,
-                    // carrying the card message id so it keeps editing the SAME card.
+                    // ── Match AI Trading style ──────────────────────────────
                     let notifyText: string;
                     let isFinal: boolean;
                     if (isWin) {
-                        notifyText = `📡 *${sig.pair} SIGNAL*\n\n🟢 *WON* — ${dirUp} hit (${roundLabel}).\n\nReady for your next signal!`;
+                        notifyText = [
+                            `📡 Signal — ${sig.pair}`,
+                            `Dir: ${dirUp} ${dirEmoji} · TF: ${tfShort} · ${roundLabel}`,
+                            `Recovery: ${roundsLeft} rounds left`,
+                            ``,
+                            `🟢 *WON*`,
+                            `Ready for your next signal.`,
+                        ].join('\n');
                         isFinal = true;
                     } else if (sig.round < sig.max_rounds) {
                         const nextRound = sig.round + 1;
@@ -6162,17 +6163,24 @@ backgroundIntervals.push(setInterval(async () => {
                             card_msg_id: sig.card_msg_id ?? undefined,
                         });
                         notifyText = [
-                            `📡 *${sig.pair} SIGNAL*`, ``,
-                            `🔴 *LOST* — ${dirUp} moved against (${roundLabel})`, ``,
-                            `⚠️ *RE-ENTER NOW*`,
-                            `• Asset: ${sig.pair}`,
-                            `• Direction: ${dirUp}`,
-                            `• Amount: 2× your last entry`,
-                            `• Expiry: ${tfLabel(sig.timeframe)}`,
+                            `📡 Signal — ${sig.pair}`,
+                            `Dir: ${dirUp} ${dirEmoji} · TF: ${tfShort} · ${roundLabel}`,
+                            `Recovery: ${roundsLeft} rounds left`,
+                            ``,
+                            `🔴 *LOST* — Re-enter now`,
+                            `Asset: ${sig.pair} · Direction: ${dirUp}`,
+                            `Amount: 2× last entry · Expiry: ${tfShort}`,
                         ].join('\n');
                         isFinal = false;
                     } else {
-                        notifyText = `📡 *${sig.pair} SIGNAL*\n\n🔴 *LOST* — all ${sig.max_rounds + 1} rounds exhausted.\n\nTake a break and try a fresh signal.`;
+                        notifyText = [
+                            `📡 Signal — ${sig.pair}`,
+                            `Dir: ${dirUp} ${dirEmoji} · TF: ${tfShort}`,
+                            `All ${sig.max_rounds + 1} rounds exhausted`,
+                            ``,
+                            `🔴 Signal Finished`,
+                            `Take a break — try a fresh signal.`,
+                        ].join('\n');
                         isFinal = true;
                     }
 
