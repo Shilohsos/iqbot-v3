@@ -1867,6 +1867,13 @@ interface SignalWizState {
 }
 const signalWizSessions = makeSessionMap<SignalWizState>('sigwiz');
 
+// Track active prep countdowns so they can be cancelled when tracking takes over the card.
+const prepCountdowns = new Map<number, { cancel: () => void }>();
+function cancelPrepCountdown(uid: number) {
+    const c = prepCountdowns.get(uid);
+    if (c) { c.cancel(); prepCountdowns.delete(uid); }
+}
+
 bot.action('ui:signals', async ctx => {
     await ctx.answerCbQuery();
     if (!await requireApproval(ctx)) return;
@@ -2046,6 +2053,7 @@ bot.action(/^stf:(\d+)$/, async ctx => {
     // Cancel any prior active tracking, then track this one with the card message id
     // so the tracking loop can edit the same message (directive: in-place edits).
     cancelActiveSignalTracks(uid);
+    cancelPrepCountdown(uid);
     const toSqlite = (d: Date) => d.toISOString().replace('T', ' ').slice(0, 19);
     // Expiry = 60s prep + 2s grace + timeframe. Grace gives users time to click into
     // IQ Option after "Active" appears before candle monitoring starts.
@@ -2060,29 +2068,39 @@ bot.action(/^stf:(\d+)$/, async ctx => {
     });
 
     // ─── 3. 1-minute preparation countdown — edits the card in place ──────────
+    let prepCancelled = false;
+    prepCountdowns.set(uid, { cancel: () => { prepCancelled = true; } });
     void (async () => {
-        for (let remaining = 50; remaining >= 0; remaining -= 10) {
+        for (let remaining = 50; remaining >= 0 && !prepCancelled; remaining -= 10) {
             await new Promise(r => setTimeout(r, 10000));
+            if (prepCancelled) break;
+            const sec = remaining % 60;
+            const timeStr = `0:${sec.toString().padStart(2, '0')}`;
             try {
-                const sec = remaining % 60;
-                const timeStr = `0:${sec.toString().padStart(2, '0')}`;
                 await ctx.telegram.editMessageText(chatId, cardMsg.message_id, undefined,
                     renderCard(`⏳ *Preparing...* — ${timeStr}`),
                     { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [
                         [{ text: '🔙 Back', callback_data: 'ui:start' }],
                     ] } }
                 );
-            } catch {}
+            } catch (e) {
+                logger.warn('prep-countdown', `edit failed (${timeStr ?? '?'}): ${e instanceof Error ? e.message : e}`);
+            }
         }
 
-        try {
-            await ctx.telegram.editMessageText(chatId, cardMsg.message_id, undefined,
-                renderCard(`🟢 *ENTER NOW* — place your ${dirStr} trade`),
-                { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [
-                    [{ text: '🔙 Back', callback_data: 'ui:start' }],
-                ] } }
-            );
-        } catch {}
+        if (!prepCancelled) {
+            try {
+                await ctx.telegram.editMessageText(chatId, cardMsg.message_id, undefined,
+                    renderCard(`🟢 *ENTER NOW* — place your ${dirStr} trade`),
+                    { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [
+                        [{ text: '🔙 Back', callback_data: 'ui:start' }],
+                    ] } }
+                );
+            } catch (e) {
+                logger.warn('prep-countdown', `ENTER NOW edit failed: ${e instanceof Error ? e.message : e}`);
+            }
+        }
+        prepCountdowns.delete(uid);
     })();
 });
 
@@ -6252,6 +6270,8 @@ backgroundIntervals.push(setInterval(async () => {
 
                     // Edit the card in place; fall back to a new message if no card id
                     // is stored or the edit fails (e.g. message deleted by the user).
+                    // Cancel any running prep countdown so it doesn't overwrite this result.
+                    cancelPrepCountdown(sig.telegram_id);
                     let edited = false;
                     if (sig.card_chat_id && sig.card_msg_id) {
                         try {
