@@ -90,6 +90,43 @@ export function pairKeyboard(page = 0, _tier?: string): IKMarkup {
     return { inline_keyboard: rows };
 }
 
+/** Pair selection for the Signals wizard (uses spair:/spage: prefixes). */
+export function signalPairKeyboard(page = 0): IKMarkup {
+    const PAGE_SIZE = 6;
+    const start = page * PAGE_SIZE;
+    const pagePairs = ALL_PAIRS.slice(start, start + PAGE_SIZE);
+    const rows: Btn[][] = [];
+
+    for (let i = 0; i < pagePairs.length; i += 2) {
+        const row: Btn[] = [{ text: pagePairs[i], callback_data: `spair:${pagePairs[i]}` }];
+        if (pagePairs[i + 1]) {
+            row.push({ text: pagePairs[i + 1], callback_data: `spair:${pagePairs[i + 1]}` });
+        }
+        rows.push(row);
+    }
+
+    const navRow: Btn[] = [];
+    if (start > 0) navRow.push({ text: '⬅️ Back', callback_data: `spage:${page - 1}` });
+    if (start + PAGE_SIZE < ALL_PAIRS.length) navRow.push({ text: 'More ➡️', callback_data: `spage:${page + 1}` });
+    if (navRow.length) rows.push(navRow);
+
+    rows.push([{ text: '❌ Cancel', callback_data: 'signals:cancel' }]);
+    return { inline_keyboard: rows };
+}
+
+/** Timeframe selection for the Signals wizard (uses stf: prefix). */
+export function signalTimeframeKeyboard(pair: string): IKMarkup {
+    const labels: Record<number, string> = { 30: '30s', 60: '1m', 300: '5m' };
+    const row: Btn[] = ALL_TIMEFRAMES.map(s => ({ text: labels[s] ?? `${s}s`, callback_data: `stf:${s}` }));
+    return {
+        inline_keyboard: [
+            row,
+            [{ text: '⬅️ Back to assets', callback_data: 'ui:signals' }],
+            [{ text: '❌ Cancel', callback_data: 'signals:cancel' }],
+        ],
+    };
+}
+
 export function tfLabel(timeframeSec: number): string {
     if (timeframeSec === 30) return '30s';
     if (timeframeSec === 60) return '1m';

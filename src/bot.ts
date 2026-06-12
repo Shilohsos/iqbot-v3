@@ -99,7 +99,7 @@ import {
 } from './giveaway.js';
 import { analyzePair, analyzePairWithSdk, type AnalysisResult } from './analysis.js';
 import {
-    amountKeyboard, timeframeKeyboard, pairKeyboard, tfLabel, OTC_PAIRS,
+    amountKeyboard, timeframeKeyboard, pairKeyboard, signalPairKeyboard, signalTimeframeKeyboard, tfLabel, OTC_PAIRS,
     tradeModeKeyboard, demoUpsellKeyboard, affiliateFailKeyboard, currencyKeyboard,
 } from './menu.js';
 import { startKeyboard, backKeyboard } from './ui/user.js';
@@ -1818,16 +1818,18 @@ async function sendAutoTradingLock(ctx: Context): Promise<void> {
 bot.action('lock:ai_trading', async ctx => { await ctx.answerCbQuery(); await sendAiTradingLock(ctx); });
 bot.action('lock:auto_trading', async ctx => { await ctx.answerCbQuery(); await sendAutoTradingLock(ctx); });
 
-// ─── Signals (analysis display only — directive §3) ───────────────────────────
+// ─── Signals wizard (pair → timeframe → analysis — directive §3) ───────────
+
+interface SignalWizState {
+    pair: string;
+    timeframe: number;
+}
+const signalWizSessions = makeSessionMap<SignalWizState>('sigwiz');
 
 bot.action('ui:signals', async ctx => {
     await ctx.answerCbQuery();
     if (!await requireApproval(ctx)) return;
-    await runSignal(ctx);
-});
-bot.action('signals:another', async ctx => { await ctx.answerCbQuery().catch(() => {}); await runSignal(ctx); });
 
-async function runSignal(ctx: Context): Promise<void> {
     const uid = ctx.from!.id;
     const user = getUser(uid);
     const funded = (user?.funded_balance_usd ?? 0) > 0;
@@ -1854,8 +1856,59 @@ async function runSignal(ctx: Context): Promise<void> {
         return;
     }
 
-    const pair = ALL_PAIRS[Math.floor(Math.random() * ALL_PAIRS.length)];
-    const timeframe = 60;
+    signalWizSessions.set(ctx.chat!.id, { pair: '', timeframe: 0 });
+    await ctx.reply('📡 *Pick an asset for your signal*', {
+        parse_mode: 'Markdown',
+        reply_markup: signalPairKeyboard(0),
+    });
+});
+
+bot.action(/^spair:(.+)$/, async ctx => {
+    const chatId = ctx.chat!.id;
+    const state = signalWizSessions.get(chatId);
+    if (!state) { await ctx.answerCbQuery('Start from the menu first.'); return; }
+    await ctx.answerCbQuery();
+    state.pair = ctx.match[1];
+    try {
+        await ctx.editMessageText(
+            `📡 *${state.pair}* — pick a timeframe 👇`,
+            { parse_mode: 'Markdown', reply_markup: signalTimeframeKeyboard(state.pair) }
+        );
+    } catch {}
+});
+
+bot.action(/^spage:(\d+)$/, async ctx => {
+    const state = signalWizSessions.get(ctx.chat!.id);
+    if (!state) { await ctx.answerCbQuery('Start from the menu first.'); return; }
+    await ctx.answerCbQuery();
+    try { await ctx.editMessageReplyMarkup(pairKeyboard(parseInt(ctx.match[1], 10))); } catch {}
+});
+
+bot.action(/^stf:(\d+)$/, async ctx => {
+    const chatId = ctx.chat!.id;
+    const state = signalWizSessions.get(chatId);
+    if (!state || !state.pair) { await ctx.answerCbQuery('Start from the menu first.'); return; }
+    await ctx.answerCbQuery();
+
+    const uid = ctx.from!.id;
+    const user = getUser(uid);
+    const pair = state.pair;
+    const timeframe = parseInt(ctx.match[1], 10);
+    const ssid = getSsidForUser(uid);
+    if (!ssid) {
+        await ctx.reply('⚠️ Session expired. Reconnect your account.', {
+            reply_markup: { inline_keyboard: [[{ text: '🔗 Connect Account', callback_data: 'ui:connect' }]] },
+        });
+        signalWizSessions.delete(chatId);
+        return;
+    }
+
+    const funded = (user?.funded_balance_usd ?? 0) > 0;
+    signalWizSessions.delete(chatId);
+
+    // Clean up the selection message
+    try { await ctx.deleteMessage(); } catch {}
+
     const progress = await ctx.reply(`📡 Scanning ${pair}…`);
 
     let analysis: AnalysisResult;
@@ -1865,7 +1918,7 @@ async function runSignal(ctx: Context): Promise<void> {
     } catch (err) {
         await ctx.telegram.editMessageText(ctx.chat!.id, progress.message_id, undefined,
             friendlyError(err, '⚠️ Could not read the market. Try another signal.')).catch(() => {});
-        await ctx.reply('Try again 👇', { reply_markup: { inline_keyboard: [[{ text: 'Get Another Signal 🔄', callback_data: 'signals:another' }]] } });
+        await ctx.reply('Try again 👇', { reply_markup: { inline_keyboard: [[{ text: '🔄 New Signal', callback_data: 'ui:signals' }]] } });
         return;
     } finally {
         sdkPool.release(uid);
@@ -1878,7 +1931,7 @@ async function runSignal(ctx: Context): Promise<void> {
     const counterLine = funded ? `— Signal #${count} today —` : `— Signal ${count}/${FREE_SIGNALS_PER_DAY} today —`;
 
     const now = new Date();
-    const lvl = (n: number) => fmtClock(new Date(now.getTime() + n * timeframe * 1000));
+    const lvlExpiry = (n: number) => fmtClock(new Date(now.getTime() + n * timeframe * 1000));
     const dirLine = analysis.direction === 'call' ? 'CALL 🟢' : 'PUT 🔴';
     const card = [
         `📡 *${pair} SIGNAL*`, ``,
@@ -1887,18 +1940,24 @@ async function runSignal(ctx: Context): Promise<void> {
         `📈 Direction: ${dirLine}`,
         `➡️ Entry: ${fmtClock(now)}`, ``,
         `↪️ Smart Recovery:`,
-        `• Level 1 → ${lvl(1)}`,
-        `• Level 2 → ${lvl(2)}`,
-        `• Level 3 → ${lvl(3)}`, ``,
+        `• Level 1 → ${lvlExpiry(1)}`,
+        `• Level 2 → ${lvlExpiry(2)}`,
+        `• Level 3 → ${lvlExpiry(3)}`, ``,
         counterLine,
     ].join('\n');
 
     await ctx.telegram.deleteMessage(ctx.chat!.id, progress.message_id).catch(() => {});
     await ctx.reply(card, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [
-        [{ text: 'Get Another Signal 🔄', callback_data: 'signals:another' }],
+        [{ text: '🔄 New Signal', callback_data: 'ui:signals' }],
         [{ text: '🔙 Back', callback_data: 'ui:start' }],
     ] } });
-}
+});
+
+bot.action('signals:cancel', async ctx => {
+    await ctx.answerCbQuery();
+    signalWizSessions.delete(ctx.chat!.id);
+    try { await ctx.editMessageText('❌ Signal cancelled.'); } catch {}
+});
 
 // ─── Auto Trading (directive §5) ──────────────────────────────────────────────
 
