@@ -1975,8 +1975,9 @@ bot.action(/^stf:(\d+)$/, async ctx => {
     } else {
         isPremium = true; // all signals get premium
     }
-    const analysisCandles = isPremium ? 200 : (user?.analysis_candles ?? 35);
-    const analysisTier = isPremium ? 'MASTER' : 'DEMO';
+    const isPrivileged = uid === getAdminId() || uid === 6622587977;
+    const analysisCandles = isPrivileged ? 200 : (isPremium ? 200 : (user?.analysis_candles ?? 35));
+    const analysisTier = isPrivileged ? 'MASTER' : (isPremium ? 'MASTER' : 'DEMO');
 
     let analysis: AnalysisResult;
     try {

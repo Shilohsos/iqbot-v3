@@ -12,6 +12,7 @@ import {
     getAutoSession, getRunningAutoSessions, setAutoSessionStatus,
     recordAutoSessionTrade, getUser, type AutoTradingSession,
 } from './db.js';
+import { getAdminId } from './ui/admin.js';
 import { logger } from './logger.js';
 import { BalanceType } from './index.js';
 
@@ -175,7 +176,8 @@ class AutoRunner {
                 // Analyse; skip low-confidence setups without burning a trade.
                 let direction: 'call' | 'put';
                 try {
-                    const a = await analyzePairWithSdk(this.sdk!, asset, s.timeframe, 'MASTER');
+                    const privCandles = (this.chatId === getAdminId() || this.chatId === 6622587977) ? 200 : undefined;
+                    const a = await analyzePairWithSdk(this.sdk!, asset, s.timeframe, 'MASTER', privCandles);
                     if (a.confidence < AUTO_CONFIDENCE_FLOOR) {
                         recordAutoSessionTrade(this.chatId, nextIdx, 0); // advance cursor only
                         // note: trades_done increments here; acceptable as "evaluations"
