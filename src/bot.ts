@@ -6125,7 +6125,10 @@ backgroundIntervals.push(setInterval(async () => {
                         notifyText = `🔴 *SIGNAL LOST.* All ${sig.max_rounds + 1} rounds exhausted.\n\nTake a break and try a fresh signal.`;
                     }
 
-                    try { await bot.telegram.sendMessage(sig.telegram_id, notifyText, { parse_mode: 'Markdown' }); } catch (e) {
+                    try { await bot.telegram.sendMessage(sig.telegram_id, notifyText, { 
+                        parse_mode: 'Markdown',
+                        reply_markup: { inline_keyboard: [[{ text: '🔄 New Signal', callback_data: 'ui:signals' }]] },
+                    }); } catch (e) {
                         logger.warn('signal-track', `sendMessage failed for user ${sig.telegram_id}: ${e instanceof Error ? e.message : e}`);
                     }
                 } catch (err) {
