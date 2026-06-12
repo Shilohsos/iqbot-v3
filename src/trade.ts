@@ -7,7 +7,7 @@ import {
     type Position,
 } from './index.js';
 import { WS_URL, PLATFORM_ID, IQ_HOST } from './protocol.js';
-import { insertTrade } from './db.js';
+import { db } from './db.js';
 
 export interface TradeRequest {
     pair: string;
@@ -40,6 +40,7 @@ const normTicker = (s: string) => s.toUpperCase().replace(/^front\./i, '').repla
  * All timeframes (30s / 60s / 300s) execute via BlitzOptions.
  */
 export async function executeTradeWithSdk(sdk: ClientSdk, trade: TradeRequest): Promise<TradeResult> {
+    let optionId: number | undefined;
     try {
         // sdk.positions() is cached after the first call — safe to call every round.
         const positions = await sdk.positions();
@@ -72,6 +73,17 @@ export async function executeTradeWithSdk(sdk: ClientSdk, trade: TradeRequest): 
 
         const dir = trade.direction === 'call' ? BlitzOptionsDirection.Call : BlitzOptionsDirection.Put;
         const option = await blitzOptions.buy(active, dir, targetSize, trade.amount, selectedBalance);
+        optionId = option.id;
+
+        // Persist in-flight immediately — so a restart doesn't orphan the trade.
+        const nowSql = new Date().toISOString();
+        if (trade.telegramId != null) {
+            db.prepare(`INSERT OR IGNORE INTO users (telegram_id, created_at, last_used) VALUES (?, datetime('now'), datetime('now'))`)
+                .run(trade.telegramId);
+        }
+        db.prepare(`INSERT INTO trades (telegram_id, pair, direction, amount, status, trade_id, created_at)
+                     VALUES (?, ?, ?, ?, 'in_flight', ?, ?)`)
+            .run(trade.telegramId ?? null, trade.pair, trade.direction, trade.amount, optionId, nowSql);
 
         const result = await waitForResult(positions, option.id, targetSize + 90);
         const tradeResult: TradeResult = {
@@ -82,21 +94,18 @@ export async function executeTradeWithSdk(sdk: ClientSdk, trade: TradeRequest): 
             amount: trade.amount,
         };
 
-        insertTrade({
-            telegram_id: trade.telegramId,
-            pair: tradeResult.pair,
-            direction: tradeResult.direction,
-            amount: tradeResult.amount,
-            status: tradeResult.status,
-            pnl: tradeResult.pnl,
-            trade_id: tradeResult.tradeId,
-            error: tradeResult.error,
-            martingale_run: trade.martingaleRunId,
-            external_id: result.externalId,
-        });
+        // Update the in-flight row with the final outcome.
+        db.prepare(`UPDATE trades SET status = ?, pnl = ?, external_id = ?, error = NULL
+                     WHERE trade_id = ? AND status = 'in_flight'`)
+            .run(tradeResult.status, tradeResult.pnl, result.externalId ?? null, optionId);
 
         return tradeResult;
     } catch (err: unknown) {
+        // Mark any in-flight row as ERROR so recovery doesn't leave it dangling.
+        if (optionId != null) {
+            db.prepare(`UPDATE trades SET status = 'ERROR', error = ? WHERE trade_id = ? AND status = 'in_flight'`)
+                .run(err instanceof Error ? err.message : String(err), optionId);
+        }
         if (isTimeoutError(err)) {
             return errorResult(trade, 'IQ Option timed out');
         }

@@ -1,5 +1,6 @@
-import { db } from './db.js';
+import { db, getUser } from './db.js';
 import { createSdk } from './trade.js';
+import type { Telegraf } from 'telegraf';
 
 interface UnresolvedTrade {
     trade_id: number;
@@ -11,14 +12,19 @@ interface UnresolvedTrade {
     amount: number;
 }
 
-export async function recoverMissedTradeResults(): Promise<void> {
+export async function recoverMissedTradeResults(bot: Telegraf): Promise<void> {
     const fifteenMinutesAgo = new Date(Date.now() - 15 * 60 * 1000).toISOString();
+
+    // Clean up stale in-flight trades that are too old to recover.
+    db.prepare(`UPDATE trades SET status = 'LOSS', error = 'unresolved_restart'
+                 WHERE status = 'in_flight' AND created_at < ?`)
+        .run(fifteenMinutesAgo);
 
     const rows = db.prepare(`
         SELECT t.trade_id, t.external_id, t.telegram_id, u.ssid, t.pair, t.direction, t.amount
         FROM trades t
         JOIN users u ON u.telegram_id = t.telegram_id
-        WHERE t.status = 'TIMEOUT'
+        WHERE (t.status = 'TIMEOUT' OR t.status = 'in_flight')
           AND t.created_at >= ?
           AND u.ssid IS NOT NULL
           AND u.ssid != ''
@@ -40,6 +46,9 @@ export async function recoverMissedTradeResults(): Promise<void> {
                 continue;
             }
 
+            let recoveredStatus: string | null = null;
+            let recoveredPnl = 0;
+
             try {
                 const positions = await sdk.positions();
 
@@ -51,7 +60,8 @@ export async function recoverMissedTradeResults(): Promise<void> {
                         const status = reason === 'win' ? 'WIN' : reason === 'equal' ? 'TIE' : 'LOSS';
                         db.prepare(`UPDATE trades SET status = ?, pnl = ?, error = NULL WHERE trade_id = ?`)
                             .run(status, pnl, row.trade_id);
-                        resolved.push(`#${row.trade_id}: ${status} ($${pnl})`);
+                        recoveredStatus = status;
+                        recoveredPnl = pnl;
                     }
                 } else {
                     const opened = positions.getOpenedPositions();
@@ -62,11 +72,29 @@ export async function recoverMissedTradeResults(): Promise<void> {
                         const status = reason === 'win' ? 'WIN' : reason === 'equal' ? 'TIE' : 'LOSS';
                         db.prepare(`UPDATE trades SET status = ?, pnl = ?, external_id = ?, error = NULL WHERE trade_id = ?`)
                             .run(status, pnl, match.externalId ?? null, row.trade_id);
-                        resolved.push(`#${row.trade_id}: ${status} ($${pnl})`);
+                        recoveredStatus = status;
+                        recoveredPnl = pnl;
                     }
                 }
             } finally {
                 await sdk.shutdown();
+            }
+
+            if (recoveredStatus) {
+                resolved.push(`#${row.trade_id}: ${recoveredStatus} ($${recoveredPnl})`);
+
+                // Notify the user their trade result was recovered.
+                const emoji = recoveredStatus === 'WIN' ? '✅' : recoveredStatus === 'LOSS' ? '❌' : '🤝';
+                const currency = getUser(row.telegram_id)?.currency || 'USD';
+                const pnlStr = recoveredPnl >= 0 ? `+${recoveredPnl.toFixed(2)}` : recoveredPnl.toFixed(2);
+                try {
+                    await bot.telegram.sendMessage(row.telegram_id,
+                        `${emoji} Trade recovered: ${row.pair} ${row.direction.toUpperCase()} — ${recoveredStatus}\n` +
+                        `Amount: ${row.amount.toFixed(2)} ${currency} | PnL: ${pnlStr} ${currency}`,
+                    );
+                } catch {
+                    // User may have blocked the bot — not critical.
+                }
             }
         } catch {
             // Individual trade recovery failure — don't block the rest

@@ -636,7 +636,7 @@ export interface TradeRecord {
     pair: string;
     direction: string;
     amount: number;
-    status: 'WIN' | 'LOSS' | 'TIE' | 'TIMEOUT' | 'ERROR';
+    status: 'WIN' | 'LOSS' | 'TIE' | 'TIMEOUT' | 'ERROR' | 'in_flight';
     pnl: number;
     trade_id?: number;
     error?: string;

@@ -5878,7 +5878,7 @@ ensurePolling().catch(err => {
     process.exit(1);
 });
 logger.info('bot', 'iqbot-v3 running');
-recoverMissedTradeResults().catch(err => {
+recoverMissedTradeResults(bot).catch(err => {
     console.error('[RECOVERY] Failed to recover missed trades:', err);
 });
 // Auto Trading engine: inject the Telegram sender and resume any running sessions.
@@ -6221,8 +6221,8 @@ backgroundIntervals.push(setInterval(async () => {
                             `${dirStr} ${dirEmoji} · ${tfShort} · All ${maxAttempts} attempts done`,
                             ``,
                             `🔴 *Signal finished*`,
-                            `Take a break — try again later.`,
-                        ].join('\n');
+                            `Lost this one — try again now 👇`,
+                        ].join('\\n');
                         isFinal = true;
                     }
 

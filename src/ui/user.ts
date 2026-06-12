@@ -21,13 +21,13 @@ export function startKeyboard(accessLevel?: string): IKMarkup {
         : { text: '🔒 Auto Trading', callback_data: 'lock:auto_trading' };
 
     const rows: Btn[][] = [
-        [{ text: '⚡ Signals', callback_data: 'ui:signals' }, aiBtn, autoBtn],
+        [{ text: '⚡ Signals', callback_data: 'ui:signals' }, aiBtn],
+        [autoBtn],
         [
             { text: '🎁 Giveaways', callback_data: 'ui:giveaways' },
             { text: 'History 📆', callback_data: 'ui:history' },
             { text: 'Leaderboard 🏆', callback_data: 'ui:leaderboard' },
         ],
-        [{ text: '⚙️ Smart Recovery Settings', callback_data: 'ui:martingale_settings' }],
         [
             { text: '❓ Help & FAQ', callback_data: 'ui:help' },
             { text: '🔋 Support', url: supportUrl },
