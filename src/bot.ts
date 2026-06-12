@@ -6093,20 +6093,38 @@ backgroundIntervals.push(setInterval(async () => {
                         continue;
                     }
 
+                    // ── Deterministic candle lookup: request the exact candle that
+                    // spans the trade period using the stored entry time.
+                    // Round 0 includes a 60s prep countdown before entry.
+                    // Martingale rounds (round > 0) start immediately (no prep).
+                    const parseSqliteTs = (s: string): number => {
+                        // toSqlite stored "YYYY-MM-DD HH:MM:SS" (UTC). Convert to Unix seconds.
+                        return Math.floor(new Date(s.replace(' ', 'T') + 'Z').getTime() / 1000);
+                    };
+                    const prepSecs = sig.round === 0 ? 60 : 0;  // prep countdown only for initial signal
+                    const tradeEntryTs = parseSqliteTs(sig.entry_time) + prepSecs;
+
                     const candles = await refSdk.candles();
-                    const history = await candles.getCandles(active.id, sig.timeframe, { count: 2 });
-                    if (history.length < 2) {
-                        updateSignalTrackResult(sig.id, 'lost', 'no_data');
-                        logger.warn('signal-track', `signal #${sig.id}: no candle data for ${sig.pair}`);
-                        continue;
+                    const history = await candles.getCandles(active.id, sig.timeframe, {
+                        from: tradeEntryTs - 1,  // -1s buffer: ensure candle is found despite sub-second drift
+                        count: 1,
+                    });
+                    if (history.length < 1) {
+                        // Retry without from anchor (rare: candle not yet available)
+                        const retry = await candles.getCandles(active.id, sig.timeframe, { count: 2 });
+                        if (retry.length < 2) {
+                            updateSignalTrackResult(sig.id, 'lost', 'no_data');
+                            logger.warn('signal-track', `signal #${sig.id}: no candle data for ${sig.pair}`);
+                            continue;
+                        }
+                        retry.sort((a, b) => a.from - b.from);
+                        history.splice(0, history.length, retry[retry.length - 1]);
                     }
 
-                    // Compare open vs close of the SAME candle (the most recent completed),
-                    // exactly like IQ Option does. Using different candle indices (0 vs 1)
-                    // would compare prices from different time windows — wrong result.
-                    const lastIdx = history.length - 1;
-                    const openPrice = history[lastIdx].open;
-                    const closePrice = history[lastIdx].close;
+                    // Single candle that covers the trade period: entry → expiry
+                    const tradeCandle = history[0];
+                    const openPrice = tradeCandle.open;
+                    const closePrice = tradeCandle.close;
                     const wentUp = closePrice > openPrice;
 
                     const isWin = sig.direction === 'call' ? wentUp : !wentUp;
