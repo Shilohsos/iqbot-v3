@@ -2349,7 +2349,6 @@ bot.action(/^agale:(\d+)$/, async ctx => {
 });
 
 function buildAutoConfirmText(st: AutoWizState): string {
-    const worst = martingaleWorstCase(st.amount ?? 0, st.gale ?? 0);
     return [
         `🚀 *Auto Trading Configuration*`, ``,
         `Currency: ${st.currency}`,
@@ -2358,9 +2357,8 @@ function buildAutoConfirmText(st: AutoWizState): string {
         `Timeframe: ${tfLabel(st.timeframe ?? 60)}`,
         `Smart Recovery: ${st.gale ? `${st.gale} rounds` : 'None'}`,
         ``,
-        `⚠️ Worst-case per cycle (full recovery loss): ${worst.toFixed(0)} ${st.currency}`,
         `Trades LIVE only · 1 position at a time.`,
-    ].join('\n');
+    ].join('\\n');
 }
 
 bot.action('aconfirm', async ctx => {
