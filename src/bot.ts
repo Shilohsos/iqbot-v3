@@ -6163,24 +6163,27 @@ backgroundIntervals.push(setInterval(async () => {
                     const tradeEntryTs = parseSqliteTs(sig.entry_time) + prepSecs;
 
                     const candles = await refSdk.candles();
-                    const history = await candles.getCandles(active.id, sig.timeframe, {
-                        from: tradeEntryTs - 1,  // -1s buffer: ensure candle is found despite sub-second drift
-                        count: 1,
-                    });
+                    // Request 2 candles — a single count:1 with a large timeframe (e.g. 300s)
+                    // can return a stale candle that started long before the trade entry
+                    // and just completed, giving a false early result. Two candles let us
+                    // pick the one whose from timestamp actually covers the trade window.
+                    let history = await candles.getCandles(active.id, sig.timeframe, { count: 2 });
                     if (history.length < 1) {
-                        // Retry without from anchor (rare: candle not yet available)
-                        const retry = await candles.getCandles(active.id, sig.timeframe, { count: 2 });
-                        if (retry.length < 2) {
-                            updateSignalTrackResult(sig.id, 'lost', 'no_data');
-                            logger.warn('signal-track', `signal #${sig.id}: no candle data for ${sig.pair}`);
-                            continue;
+                        updateSignalTrackResult(sig.id, 'lost', 'no_data');
+                        logger.warn('signal-track', `signal #${sig.id}: no candle data for ${sig.pair}`);
+                        continue;
+                    }
+                    // Sort by from timestamp, pick the candle whose window contains the trade entry
+                    history.sort((a, b) => a.from - b.from);
+                    let tradeCandle = history[history.length - 1]; // default: most recent
+                    for (const c of history) {
+                        if (c.from <= tradeEntryTs && tradeEntryTs < c.from + sig.timeframe) {
+                            tradeCandle = c;
+                            break;
                         }
-                        retry.sort((a, b) => a.from - b.from);
-                        history.splice(0, history.length, retry[retry.length - 1]);
                     }
 
                     // Single candle that covers the trade period: entry → expiry
-                    const tradeCandle = history[0];
                     const openPrice = tradeCandle.open;
                     const closePrice = tradeCandle.close;
                     const wentUp = closePrice > openPrice;
