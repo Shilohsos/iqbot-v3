@@ -6048,12 +6048,16 @@ backgroundIntervals.push(setInterval(async () => {
     }
 }, 600_000));
 
-// ─── Signal result tracking (checks expired signals every 15s) ───────────────
+// ─── Signal result tracking (checks expired signals every 5s) ───────────────
 // Uses the SDK of the user whose signal expired (their SSID is fresh since they
 // just generated a signal). Market data is not user-specific so the same SDK
 // can check candles for all expired signals in this tick.
 
+let trackingBusy = false;  // prevent overlapping ticks (setInterval race)
+
 backgroundIntervals.push(setInterval(async () => {
+    if (trackingBusy) return;  // skip if previous tick still running
+    trackingBusy = true;
     try {
         const expired = getExpiredActiveSignals();
         if (expired.length === 0) return;
@@ -6206,6 +6210,8 @@ backgroundIntervals.push(setInterval(async () => {
         }
     } catch (err) {
         logger.error('signal-track', `loop error: ${err instanceof Error ? err.message : err}`);
+    } finally {
+        trackingBusy = false;
     }
 }, 5000));  // check every 5s for instant tracking
 
