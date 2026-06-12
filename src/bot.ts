@@ -6151,41 +6151,23 @@ backgroundIntervals.push(setInterval(async () => {
                         continue;
                     }
 
-                    // ── Deterministic candle lookup: request the exact candle that
-                    // spans the trade period using the stored entry time.
-                    // Round 0 includes a 60s prep countdown before entry.
-                    // Martingale rounds (round > 0) start immediately (no prep).
-                    const parseSqliteTs = (s: string): number => {
-                        // toSqlite stored "YYYY-MM-DD HH:MM:SS" (UTC). Convert to Unix seconds.
-                        return Math.floor(new Date(s.replace(' ', 'T') + 'Z').getTime() / 1000);
-                    };
-                    const prepSecs = sig.round === 0 ? 62 : 2;  // 60s prep + 2s grace; martingale: 2s grace only
-                    const tradeEntryTs = parseSqliteTs(sig.entry_time) + prepSecs;
+                    // ── Candle lookup: request 2 most recent candles,
 
                     const candles = await refSdk.candles();
-                    // Request 2 candles — a single count:1 with a large timeframe (e.g. 300s)
-                    // can return a stale candle that started long before the trade entry
-                    // and just completed, giving a false early result. Two candles let us
-                    // pick the one whose from timestamp actually covers the trade window.
+                    // Request 2 candles — getCandles may return the currently-open
+                    // candle with a live "close" price. Filter to completed candles
+                    // only, then take the most recent one as the best available price
+                    // data point at expiry time.
                     let history = await candles.getCandles(active.id, sig.timeframe, { count: 2 });
-                    if (history.length < 1) {
-                        updateSignalTrackResult(sig.id, 'lost', 'no_data');
-                        logger.warn('signal-track', `signal #${sig.id}: no candle data for ${sig.pair}`);
-                        continue;
-                    }
-                    // Sort by from timestamp, pick the candle whose window contains the trade entry.
-                    // Only consider COMPLETED candles (from + timeframe <= now) — the SDK may
-                    // return the currently-open candle with a live "close" price that is not final.
-                    history.sort((a, b) => a.from - b.from);
                     const nowSec = Math.floor(Date.now() / 1000);
                     const completed = history.filter(c => c.from + sig.timeframe <= nowSec);
-                    let tradeCandle = completed.length > 0 ? completed[completed.length - 1] : history[history.length - 1];
-                    for (const c of completed) {
-                        if (c.from <= tradeEntryTs && tradeEntryTs < c.from + sig.timeframe) {
-                            tradeCandle = c;
-                            break;
-                        }
+                    if (completed.length === 0) {
+                        updateSignalTrackResult(sig.id, 'lost', 'no_data');
+                        logger.warn('signal-track', `signal #${sig.id}: no completed candle for ${sig.pair}`);
+                        continue;
                     }
+                    completed.sort((a, b) => a.from - b.from);
+                    const tradeCandle = completed[completed.length - 1];
 
                     // Single candle that covers the trade period: entry → expiry
                     const openPrice = tradeCandle.open;
