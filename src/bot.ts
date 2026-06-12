@@ -1955,25 +1955,13 @@ bot.action(/^stf:(\d+)$/, async ctx => {
     const badge = isPremium ? ' ★ PREMIUM ★' : '';
     const now = new Date();
 
-    // Cancel any prior active tracking for this user before inserting new one
-    cancelActiveSignalTracks(uid);
-
-    // Track this signal for result checking at expiry (SQLite datetime format: no T/Z)
-    const toSqlite = (d: Date) => d.toISOString().replace('T', ' ').slice(0, 19);
-    const signalExpiry = new Date(now.getTime() + timeframe * 1000);
-    insertSignalTrack({
-        telegram_id: uid, pair, direction: analysis.direction,
-        timeframe, entry_time: toSqlite(now),
-        expiry_time: toSqlite(signalExpiry),
-        round: 0, max_rounds: 3,
-        entry_price: analysis.entryPrice ?? null,
-    });
-
     const entryTime = new Date(now.getTime() + 60000);
     const lvlExpiry = (n: number) => fmtClock(new Date(entryTime.getTime() + n * timeframe * 1000));
     const dirLine = analysis.direction === 'call' ? 'CALL 🟢' : 'PUT 🔴';
 
-    const card = [
+    // The signal card is the ONE message — its footer is a live status line that
+    // the prep countdown and the tracking loop edit in place (directive: one message).
+    const baseCard = [
         `📡 *${pair} SIGNAL*${badge}`, ``,
         `🎯 Accuracy: ${accuracy}%`, ``,
         `⏳ Expiry: ${tfLabel(timeframe)}`,
@@ -1984,19 +1972,32 @@ bot.action(/^stf:(\d+)$/, async ctx => {
         `• Level 2 → ${lvlExpiry(2)}`,
         `• Level 3 → ${lvlExpiry(3)}`, ``,
         counterLine,
-    ].join('\n');
+    ];
+    const renderCard = (status: string) => [...baseCard, ``, status].join('\n');
 
-    await ctx.reply(card, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [
-        [{ text: '🔄 New Signal', callback_data: 'ui:signals' }],
-        [{ text: '🔙 Back', callback_data: 'ui:start' }],
-    ] } });
-
-    // ─── 3. 1-minute preparation countdown (fire-and-forget) ──────────
-    const prepMsg = await ctx.reply(
-        `⏳ *Signal Preparation* — 1:00\n\nSignal activates at ${fmtClock(entryTime)}`,
-        { parse_mode: 'Markdown' }
+    // Initial card — no "New Signal" button during the live flow, only Back.
+    const cardMsg = await ctx.reply(
+        renderCard(`⏳ *Preparation* — 1:00 · activates at ${fmtClock(entryTime)}`),
+        { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [
+            [{ text: '🔙 Back', callback_data: 'ui:start' }],
+        ] } }
     );
 
+    // Cancel any prior active tracking, then track this one with the card message id
+    // so the tracking loop can edit the same message (directive: in-place edits).
+    cancelActiveSignalTracks(uid);
+    const toSqlite = (d: Date) => d.toISOString().replace('T', ' ').slice(0, 19);
+    const signalExpiry = new Date(now.getTime() + timeframe * 1000);
+    insertSignalTrack({
+        telegram_id: uid, pair, direction: analysis.direction,
+        timeframe, entry_time: toSqlite(now),
+        expiry_time: toSqlite(signalExpiry),
+        round: 0, max_rounds: 3,
+        entry_price: analysis.entryPrice ?? null,
+        card_chat_id: chatId, card_msg_id: cardMsg.message_id,
+    });
+
+    // ─── 3. 1-minute preparation countdown — edits the card in place ──────────
     void (async () => {
         for (let remaining = 50; remaining >= 0; remaining -= 10) {
             await new Promise(r => setTimeout(r, 10000));
@@ -2004,17 +2005,21 @@ bot.action(/^stf:(\d+)$/, async ctx => {
                 const sec = remaining % 60;
                 const timeStr = `0:${sec.toString().padStart(2, '0')}`;
                 const activTime = fmtClock(new Date(entryTime.getTime() - remaining * 1000 + 60000));
-                await ctx.telegram.editMessageText(chatId, prepMsg.message_id, undefined,
-                    `⏳ *Signal Preparation* — ${timeStr}\n\nSignal activates at ${activTime}`,
-                    { parse_mode: 'Markdown' }
+                await ctx.telegram.editMessageText(chatId, cardMsg.message_id, undefined,
+                    renderCard(`⏳ *Preparation* — ${timeStr} · activates at ${activTime}`),
+                    { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [
+                        [{ text: '🔙 Back', callback_data: 'ui:start' }],
+                    ] } }
                 );
             } catch {}
         }
 
         try {
-            await ctx.telegram.editMessageText(chatId, prepMsg.message_id, undefined,
-                `✅ *Signal Active!*\n\nEntry at ${fmtClock(entryTime)}\nDirection: ${dirLine}\n\nOpen IQ Option and take the trade now.`,
-                { parse_mode: 'Markdown' }
+            await ctx.telegram.editMessageText(chatId, cardMsg.message_id, undefined,
+                renderCard(`✅ *Signal Active!* — entry now, ${dirLine}. Open IQ Option and take the trade.`),
+                { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [
+                    [{ text: '🔙 Back', callback_data: 'ui:start' }],
+                ] } }
             );
         } catch {}
     })();
@@ -6105,10 +6110,16 @@ backgroundIntervals.push(setInterval(async () => {
                     updateSignalTrackResult(sig.id, status, result);
                     logger.info('signal-track', `signal #${sig.id} user ${sig.telegram_id} ${sig.pair} ${sig.direction} → ${status} (open=${openPrice}, close=${closePrice})`);
 
-                    // Martingale auto-progression: insert next round record on loss
+                    const dirUp = sig.direction.toUpperCase();
+                    const roundLabel = `Round ${sig.round + 1}/${sig.max_rounds + 1}`;
+
+                    // Martingale auto-progression: insert next round record on loss,
+                    // carrying the card message id so it keeps editing the SAME card.
                     let notifyText: string;
+                    let isFinal: boolean;
                     if (isWin) {
-                        notifyText = `🟢 *SIGNAL WON!* ${sig.pair} ${sig.direction.toUpperCase()} hit.\n\nReady for your next signal!`;
+                        notifyText = `📡 *${sig.pair} SIGNAL*\n\n🟢 *WON* — ${dirUp} hit (${roundLabel}).\n\nReady for your next signal!`;
+                        isFinal = true;
                     } else if (sig.round < sig.max_rounds) {
                         const nextRound = sig.round + 1;
                         const now = new Date();
@@ -6119,17 +6130,39 @@ backgroundIntervals.push(setInterval(async () => {
                             entry_time: toSqlite(now), expiry_time: toSqlite(nextExpiry),
                             round: nextRound, max_rounds: sig.max_rounds,
                             entry_price: null,
+                            card_chat_id: sig.card_chat_id ?? undefined,
+                            card_msg_id: sig.card_msg_id ?? undefined,
                         });
-                        notifyText = `🔴 *SIGNAL LOST.* ${sig.pair} ${sig.direction.toUpperCase()} moved against.\n\nLevel ${nextRound + 1} martingale queued — stay in the trade.`;
+                        notifyText = `📡 *${sig.pair} SIGNAL*\n\n🔴 *LOST* — ${dirUp} moved against (${roundLabel}).\n\nRound ${nextRound + 1}/${sig.max_rounds + 1} queued — stay in the trade.`;
+                        isFinal = false;
                     } else {
-                        notifyText = `🔴 *SIGNAL LOST.* All ${sig.max_rounds + 1} rounds exhausted.\n\nTake a break and try a fresh signal.`;
+                        notifyText = `📡 *${sig.pair} SIGNAL*\n\n🔴 *LOST* — all ${sig.max_rounds + 1} rounds exhausted.\n\nTake a break and try a fresh signal.`;
+                        isFinal = true;
                     }
 
-                    try { await bot.telegram.sendMessage(sig.telegram_id, notifyText, { 
-                        parse_mode: 'Markdown',
-                        reply_markup: { inline_keyboard: [[{ text: '🔄 New Signal', callback_data: 'ui:signals' }]] },
-                    }); } catch (e) {
-                        logger.warn('signal-track', `sendMessage failed for user ${sig.telegram_id}: ${e instanceof Error ? e.message : e}`);
+                    // Only the final result carries the "New Signal" button.
+                    const keyboard = isFinal
+                        ? { inline_keyboard: [[{ text: '🔄 New Signal', callback_data: 'ui:signals' }], [{ text: '🔙 Back', callback_data: 'ui:start' }]] }
+                        : { inline_keyboard: [[{ text: '🔙 Back', callback_data: 'ui:start' }]] };
+
+                    // Edit the card in place; fall back to a new message if no card id
+                    // is stored or the edit fails (e.g. message deleted by the user).
+                    let edited = false;
+                    if (sig.card_chat_id && sig.card_msg_id) {
+                        try {
+                            await bot.telegram.editMessageText(sig.card_chat_id, sig.card_msg_id, undefined,
+                                notifyText, { parse_mode: 'Markdown', reply_markup: keyboard });
+                            edited = true;
+                        } catch (e) {
+                            logger.warn('signal-track', `editMessageText failed for user ${sig.telegram_id}: ${e instanceof Error ? e.message : e}`);
+                        }
+                    }
+                    if (!edited) {
+                        try {
+                            await bot.telegram.sendMessage(sig.telegram_id, notifyText, { parse_mode: 'Markdown', reply_markup: keyboard });
+                        } catch (e) {
+                            logger.warn('signal-track', `sendMessage failed for user ${sig.telegram_id}: ${e instanceof Error ? e.message : e}`);
+                        }
                     }
                 } catch (err) {
                     logger.warn('signal-track', `error checking signal ${sig.id}: ${err instanceof Error ? err.message : err}`);

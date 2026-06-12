@@ -208,9 +208,20 @@ db.exec(`
     entry_price  REAL,
     status       TEXT    NOT NULL DEFAULT 'active',   -- active | won | lost
     result       TEXT,
+    card_chat_id INTEGER,                              -- chat where the signal card lives
+    card_msg_id  INTEGER,                              -- message_id of the signal card
     created_at   TEXT    NOT NULL DEFAULT (datetime('now'))
   )
 `);
+
+// signal_tracking lazy migration — add card message columns for existing DBs
+try {
+    const stCols = (db.prepare("PRAGMA table_info(signal_tracking)").all() as { name: string }[]).map(r => r.name);
+    if (!stCols.includes('card_chat_id'))
+        db.exec('ALTER TABLE signal_tracking ADD COLUMN card_chat_id INTEGER');
+    if (!stCols.includes('card_msg_id'))
+        db.exec('ALTER TABLE signal_tracking ADD COLUMN card_msg_id INTEGER');
+} catch {}
 
 // ─── Templates, media library, onboarding tracking ───────────────────────────
 
@@ -815,6 +826,8 @@ export interface SignalTrackRecord {
     entry_price: number | null;
     status: 'active' | 'won' | 'lost';
     result: string | null;
+    card_chat_id?: number | null;
+    card_msg_id?: number | null;
     created_at?: string;
 }
 
@@ -1065,14 +1078,17 @@ export function insertSignalTrack(r: {
     telegram_id: number; pair: string; direction: string;
     timeframe: number; entry_time: string; expiry_time: string;
     round: number; max_rounds: number; entry_price: number | null;
-}): void {
-    db.prepare(`
+    card_chat_id?: number; card_msg_id?: number;
+}): number {
+    const info = db.prepare(`
         INSERT INTO signal_tracking
             (telegram_id, pair, direction, timeframe, entry_time, expiry_time,
-             round, max_rounds, entry_price)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+             round, max_rounds, entry_price, card_chat_id, card_msg_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(r.telegram_id, r.pair, r.direction, r.timeframe, r.entry_time,
-           r.expiry_time, r.round, r.max_rounds, r.entry_price);
+           r.expiry_time, r.round, r.max_rounds, r.entry_price,
+           r.card_chat_id ?? null, r.card_msg_id ?? null);
+    return Number(info.lastInsertRowid);
 }
 
 export function getExpiredActiveSignals(): SignalTrackRecord[] {
