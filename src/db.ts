@@ -1173,8 +1173,7 @@ export function getTokens(): TokenRecord[] {
 
 export function updateLeaderboardAuto(telegramId: number, pnl: number): void {
     if (pnl <= 0) return;
-    const user = db.prepare('SELECT tier FROM users WHERE telegram_id = ?').get(telegramId) as { tier: string } | undefined;
-    if (!user || user.tier?.toUpperCase() !== 'PRO') return;
+    // All users can appear on the leaderboard now (directive §8.2) — no tier gate.
     const today = new Date().toISOString().split('T')[0];
     db.prepare(`
         INSERT INTO leaderboard (telegram_id, auto_profit, date)
