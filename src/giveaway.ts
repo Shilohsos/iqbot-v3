@@ -44,7 +44,7 @@ import {
 import { db } from './db.js';
 import { sdkPool } from './sdk-pool.js';
 import { BalanceType } from './index.js';
-import { normalizeTier, convertToUsd } from './tiers.js';
+import { convertToUsd } from './access.js';
 
 export type { GiveawayEventInput, GiveawayEvent };
 export { getGiveawayEvents, getActiveGiveaways, getGiveawayEvent, getRealAndFabricatedCounts };
@@ -96,9 +96,7 @@ export async function activateGiveaway(giveawayId: number): Promise<void> {
     const criteriaText = formatCriteriaDescription(event.criteria_type, event.criteria_value);
 
     for (const u of users) {
-        const tier = normalizeTier(u.tier);
-        const canParticipate = tier === 'PRO' || tier === 'MASTER';
-
+        // All users can participate now (directive §8.1).
         const lines = [
             `🎁 *LIVE GIVEAWAY*`,
             ``,
@@ -107,12 +105,10 @@ export async function activateGiveaway(giveawayId: number): Promise<void> {
             prizePoolText ? `Prize Pool: ${prizePoolText}` : '',
             criteriaText,
             ``,
-            canParticipate ? `Tap below to participate 👇` : `🔒 Upgrade to PRO to participate`,
+            `Tap below to participate 👇`,
         ].filter(Boolean);
 
-        const markup = canParticipate
-            ? { inline_keyboard: [[{ text: '🎯 Participate', callback_data: `giveaway:participate:${giveawayId}` }]] }
-            : { inline_keyboard: [[{ text: '⚡ Upgrade to PRO', callback_data: 'ui:upgrade' }]] };
+        const markup = { inline_keyboard: [[{ text: '🎯 Participate', callback_data: `giveaway:participate:${giveawayId}` }]] };
 
         insertNotification(u.telegram_id, lines.join('\n'), { replyMarkup: JSON.stringify(markup) });
     }
@@ -388,9 +384,7 @@ export async function activatePromoCode(giveawayId: number): Promise<void> {
         : getApprovedUsersWithTier();
 
     for (const u of users) {
-        const tier = normalizeTier(u.tier);
-        const canClaim = tier === 'PRO' || tier === 'MASTER';
-
+        // All users can claim promo codes now (directive §8.1).
         const lines = [
             `🏷️ *NEW PROMO CODE*`,
             ``,
@@ -398,19 +392,14 @@ export async function activatePromoCode(giveawayId: number): Promise<void> {
             event.description ?? '',
             event.max_winners != null ? `Limited: ${event.max_winners} claims available` : '',
             ``,
-            canClaim ? `Tap below to claim your code 👇` : `🔒 Upgrade to PRO to claim`,
+            `Tap below to claim your code 👇`,
         ].filter(Boolean);
 
         const fundUrl = process.env.FUNDING_URL ?? 'https://iqoption.com/pwa/payments/deposit';
-        const markup = canClaim
-            ? { inline_keyboard: [
-                [{ text: '🎁 Claim Code', callback_data: `promo:claim:${giveawayId}` }],
-                [{ text: '💰 Fund Account', url: fundUrl }],
-              ]}
-            : { inline_keyboard: [
-                [{ text: '⚡ Upgrade to PRO', callback_data: 'ui:upgrade' }],
-                [{ text: '💰 Fund Account', url: fundUrl }],
-              ]};
+        const markup = { inline_keyboard: [
+            [{ text: '🎁 Claim Code', callback_data: `promo:claim:${giveawayId}` }],
+            [{ text: '💰 Fund Account', url: fundUrl }],
+        ]};
 
         insertNotification(u.telegram_id, lines.join('\n'), { replyMarkup: JSON.stringify(markup) });
     }
@@ -440,9 +429,7 @@ export async function activateMarathon(giveawayId: number): Promise<void> {
     const endsLine = event.ends_at ? `Ends: ${event.ends_at.split(' ')[0]}` : '';
 
     for (const u of users) {
-        const tier = normalizeTier(u.tier);
-        const canJoin = tier === 'PRO' || tier === 'MASTER';
-
+        // All users can join marathons now (directive §8.1).
         const lines = [
             `🏃 *LIVE MARATHON*`,
             ``,
@@ -452,12 +439,10 @@ export async function activateMarathon(giveawayId: number): Promise<void> {
             `Top ${event.max_winners} traders win`,
             endsLine,
             ``,
-            canJoin ? `Trade the most to win! 👇` : `🔒 Upgrade to PRO to join`,
+            `Trade the most to win! 👇`,
         ].filter(Boolean);
 
-        const markup = canJoin
-            ? { inline_keyboard: [[{ text: '🏃 Join Marathon', callback_data: `giveaway:participate:${giveawayId}` }]] }
-            : { inline_keyboard: [[{ text: '⚡ Upgrade to PRO', callback_data: 'ui:upgrade' }]] };
+        const markup = { inline_keyboard: [[{ text: '🏃 Join Marathon', callback_data: `giveaway:participate:${giveawayId}` }]] };
 
         insertNotification(u.telegram_id, lines.join('\n'), { replyMarkup: JSON.stringify(markup) });
     }

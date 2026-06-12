@@ -892,7 +892,7 @@ export function getUsersWithSsid(): UserRecord[] {
 export function getBroadcastTargetIds(): number[] {
     const adminId = parseInt(process.env.ADMIN_USER_ID ?? '1615652240', 10);
     return (db.prepare(
-        "SELECT telegram_id FROM users WHERE ssid IS NOT NULL AND ssid != '' AND tier IN ('PRO','MASTER') AND telegram_id != ?"
+        "SELECT telegram_id FROM users WHERE ssid IS NOT NULL AND ssid != '' AND (funded_balance_usd > 0 OR access_level IN ('ai_trading','auto_trading')) AND telegram_id != ?"
     ).all(adminId) as { telegram_id: number }[]).map(r => r.telegram_id);
 }
 
@@ -912,10 +912,6 @@ export function setReconnectPrompt(telegramId: number, msgId: number | null): vo
 export function clearReconnectPrompt(telegramId: number): void {
     db.prepare('UPDATE users SET reconnect_prompt_msg_id = NULL, reconnect_prompt_at = NULL WHERE telegram_id = ?')
         .run(telegramId);
-}
-
-export function setUserTier(telegramId: number, tier: string): void {
-    db.prepare('UPDATE users SET tier = ? WHERE telegram_id = ?').run(tier, telegramId);
 }
 
 // ── Product access model ───────────────────────────────────────────────────────
@@ -2493,7 +2489,7 @@ export function getFundingCycleDueUsers(): Array<{ telegram_id: number }> {
 }
 
 export function getDemoUsersWithTrades(): Array<{ telegram_id: number }> {
-    return db.prepare(`SELECT DISTINCT u.telegram_id FROM users u INNER JOIN daily_demo_tracking ddt ON ddt.telegram_id = u.telegram_id WHERE u.tier NOT IN ('PRO', 'MASTER') AND u.ssid_valid = 1 AND ddt.trade_count > 0`).all() as any;
+    return db.prepare(`SELECT DISTINCT u.telegram_id FROM users u INNER JOIN daily_demo_tracking ddt ON ddt.telegram_id = u.telegram_id WHERE COALESCE(u.funded_balance_usd,0) <= 0 AND (u.access_level IS NULL OR u.access_level = 'signals') AND u.ssid_valid = 1 AND ddt.trade_count > 0`).all() as any;
 }
 
 export function getLastTradeTime(telegramId: number): Date | null {
@@ -2593,7 +2589,7 @@ export function getDemoTraders(): UserRecord[] {
         JOIN onboarding_tracking ot ON u.telegram_id = ot.telegram_id
         WHERE u.ssid IS NOT NULL AND u.ssid != ''
           AND u.approval_status = 'approved'
-          AND (u.tier IS NULL OR u.tier = 'DEMO')
+          AND COALESCE(u.funded_balance_usd,0) <= 0 AND (u.access_level IS NULL OR u.access_level = 'signals')
           AND ot.demo_trade_count >= 1
     `).all() as UserRecord[];
 }
@@ -2679,7 +2675,7 @@ export function getAllSequenceMediaKeys(): { template_key: string; media_type: s
 
 export function getTierDistribution(): { tier: string; count: number; pct: number }[] {
     const rows = db.prepare(
-        "SELECT COALESCE(tier,'DEMO') AS tier, COUNT(*) AS count FROM users GROUP BY tier ORDER BY count DESC"
+        "SELECT COALESCE(access_level,'signals') AS tier, COUNT(*) AS count FROM users GROUP BY access_level ORDER BY count DESC"
     ).all() as { tier: string; count: number }[];
     const total = rows.reduce((s, r) => s + r.count, 0);
     return rows.map(r => ({ ...r, pct: total > 0 ? Math.round((r.count / total) * 100) : 0 }));
@@ -2687,20 +2683,20 @@ export function getTierDistribution(): { tier: string; count: number; pct: numbe
 
 export function getFundedUserCount(): number {
     const row = db.prepare(
-        "SELECT COUNT(*) AS cnt FROM users WHERE ssid IS NOT NULL AND tier IN ('PRO','MASTER')"
+        "SELECT COUNT(*) AS cnt FROM users WHERE ssid IS NOT NULL AND (funded_balance_usd > 0 OR access_level IN ('ai_trading','auto_trading'))"
     ).get() as { cnt: number };
     return row.cnt;
 }
 
 export function getFundedUserIds(): number[] {
     return (db.prepare(
-        "SELECT telegram_id FROM users WHERE ssid IS NOT NULL AND ssid != '' AND tier IN ('PRO','MASTER')"
+        "SELECT telegram_id FROM users WHERE ssid IS NOT NULL AND ssid != '' AND (funded_balance_usd > 0 OR access_level IN ('ai_trading','auto_trading'))"
     ).all() as { telegram_id: number }[]).map(r => r.telegram_id);
 }
 
 export function getNonFundedUserIds(): number[] {
     return (db.prepare(
-        "SELECT telegram_id FROM users WHERE ssid IS NOT NULL AND ssid != '' AND approval_status = 'approved' AND (tier IS NULL OR tier = 'DEMO')"
+        "SELECT telegram_id FROM users WHERE ssid IS NOT NULL AND ssid != '' AND approval_status = 'approved' AND COALESCE(funded_balance_usd,0) <= 0 AND (access_level IS NULL OR access_level = 'signals')"
     ).all() as { telegram_id: number }[]).map(r => r.telegram_id);
 }
 
@@ -2735,7 +2731,7 @@ export function getMarketPulseStats(): Record<string, number | string> {
     const demoToday     = (db.prepare('SELECT COALESCE(SUM(trade_count), 0) AS c FROM daily_demo_tracking WHERE date = ?').get(today) as { c: number }).c;
     const usersAtLimit  = (db.prepare('SELECT COUNT(*) AS c FROM daily_demo_tracking WHERE date = ? AND trade_count >= 10').get(today) as { c: number }).c;
     const totalConnects = (db.prepare('SELECT COUNT(*) AS c FROM users WHERE ssid_valid = 1').get() as { c: number }).c;
-    const fundedUsers   = (db.prepare("SELECT COUNT(*) AS c FROM users WHERE tier IN ('PRO', 'MASTER')").get() as { c: number }).c;
+    const fundedUsers   = (db.prepare("SELECT COUNT(*) AS c FROM users WHERE (funded_balance_usd > 0 OR access_level IN ('ai_trading','auto_trading'))").get() as { c: number }).c;
     const recentTrades  = (db.prepare("SELECT COUNT(*) AS c FROM trades WHERE created_at >= datetime('now', '-24 hours')").get() as { c: number }).c;
     return {
         total_users:    totalUsers,
