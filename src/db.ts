@@ -138,6 +138,8 @@ if (!finalUserCols.includes('signals_date'))
     db.exec('ALTER TABLE users ADD COLUMN signals_date TEXT');
 if (!finalUserCols.includes('funded_balance_usd'))
     db.exec('ALTER TABLE users ADD COLUMN funded_balance_usd REAL NOT NULL DEFAULT 0');
+if (!finalUserCols.includes('total_signals_used'))
+    db.exec('ALTER TABLE users ADD COLUMN total_signals_used INTEGER NOT NULL DEFAULT 0');
 
 // onboarding_tracking lazy migration — add last_followup_msg_id for existing DBs
 try {
@@ -761,6 +763,7 @@ export interface UserRecord {
     signals_used_today?: number | null;
     signals_date?: string | null;
     funded_balance_usd?: number | null;
+    total_signals_used?: number | null;
 }
 
 export interface AutoTradingSession {
@@ -952,6 +955,19 @@ export function incrementSignalUsage(telegramId: number): number {
     const { used } = getSignalUsage(telegramId);
     const next = used + 1;
     db.prepare('UPDATE users SET signals_used_today = ? WHERE telegram_id = ?').run(next, telegramId);
+    return next;
+}
+
+/** Lifetime total signals a user has generated (never resets). */
+export function getTotalSignalCount(telegramId: number): number {
+    const row = db.prepare('SELECT total_signals_used FROM users WHERE telegram_id = ?')
+        .get(telegramId) as { total_signals_used: number } | undefined;
+    return row?.total_signals_used ?? 0;
+}
+
+export function incrementTotalSignalCount(telegramId: number): number {
+    const next = getTotalSignalCount(telegramId) + 1;
+    db.prepare('UPDATE users SET total_signals_used = ? WHERE telegram_id = ?').run(next, telegramId);
     return next;
 }
 

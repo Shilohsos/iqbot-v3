@@ -12,7 +12,7 @@ import {
 } from './access.js';
 import { autoEngine, initAutoEngine } from './auto-trading.js';
 import {
-    setUserFundedBalance, getSignalUsage, incrementSignalUsage, getTotalSignalsToday,
+    setUserFundedBalance, getSignalUsage, incrementSignalUsage, getTotalSignalCount, incrementTotalSignalCount, getTotalSignalsToday,
     upsertAutoSession, getAutoSession,
     getRecentTrades, getTradeStats, getTopTradersToday,
     getUser, saveUser, saveUsername, deleteUser, getAllUsers, getAllUserIds,
@@ -1905,18 +1905,30 @@ bot.action(/^stf:(\d+)$/, async ctx => {
 
     const funded = (user?.funded_balance_usd ?? 0) > 0;
     signalWizSessions.delete(chatId);
-
-    // Clean up the selection message
     try { await ctx.deleteMessage(); } catch {}
 
-    const progress = await ctx.reply(`📡 Scanning ${pair}…`);
+    // ─── 1. Analysis animation (2-3s — makes the bot feel alive) ───────
+    const animMsg = await ctx.reply('📡 *Analyzing market data…*', { parse_mode: 'Markdown' });
+    await new Promise(r => setTimeout(r, 1000));
+    await ctx.telegram.editMessageText(chatId, animMsg.message_id, undefined,
+        '🔍 *Scanning live prices for signals…*', { parse_mode: 'Markdown' }).catch(() => {});
+    await new Promise(r => setTimeout(r, 1000));
+    await ctx.telegram.editMessageText(chatId, animMsg.message_id, undefined,
+        '📊 *Calculating optimal entry…*', { parse_mode: 'Markdown' }).catch(() => {});
+    await new Promise(r => setTimeout(r, 1000));
+
+    // ─── 2. Premium analysis for first 10 lifetime signals ─────────────
+    const totalSignals = getTotalSignalCount(uid);
+    const isPremium = totalSignals < 10;
+    const analysisCandles = isPremium ? 200 : (user?.analysis_candles ?? 35);
+    const analysisTier = isPremium ? 'MASTER' : 'DEMO';
 
     let analysis: AnalysisResult;
     try {
         const sdk = await sdkPool.get(uid, ssid);
-        analysis = await analyzePairWithSdk(sdk, pair, timeframe, 'MASTER', user?.analysis_candles ?? undefined);
+        analysis = await analyzePairWithSdk(sdk, pair, timeframe, analysisTier, analysisCandles);
     } catch (err) {
-        await ctx.telegram.editMessageText(ctx.chat!.id, progress.message_id, undefined,
+        await ctx.telegram.editMessageText(chatId, animMsg.message_id, undefined,
             friendlyError(err, '⚠️ Could not read the market. Try another signal.')).catch(() => {});
         await ctx.reply('Try again 👇', { reply_markup: { inline_keyboard: [[{ text: '🔄 New Signal', callback_data: 'ui:signals' }]] } });
         return;
@@ -1924,21 +1936,26 @@ bot.action(/^stf:(\d+)$/, async ctx => {
         sdkPool.release(uid);
     }
 
+    await ctx.telegram.deleteMessage(chatId, animMsg.message_id).catch(() => {});
+
     const accuracy = Math.round(user?.display_confidence_min
         ? Math.max(analysis.confidence, user.display_confidence_min)
         : analysis.confidence);
     const count = incrementSignalUsage(uid);
+    incrementTotalSignalCount(uid);
     const counterLine = funded ? `— Signal #${count} today —` : `— Signal ${count}/${FREE_SIGNALS_PER_DAY} today —`;
-
+    const badge = isPremium ? ' ★ PREMIUM ★' : '';
     const now = new Date();
-    const lvlExpiry = (n: number) => fmtClock(new Date(now.getTime() + n * timeframe * 1000));
+    const entryTime = new Date(now.getTime() + 60000);
+    const lvlExpiry = (n: number) => fmtClock(new Date(entryTime.getTime() + n * timeframe * 1000));
     const dirLine = analysis.direction === 'call' ? 'CALL 🟢' : 'PUT 🔴';
+
     const card = [
-        `📡 *${pair} SIGNAL*`, ``,
+        `📡 *${pair} SIGNAL*${badge}`, ``,
         `🎯 Accuracy: ${accuracy}%`, ``,
         `⏳ Expiry: ${tfLabel(timeframe)}`,
         `📈 Direction: ${dirLine}`,
-        `➡️ Entry: ${fmtClock(now)}`, ``,
+        `➡️ Entry: ${fmtClock(entryTime)}`, ``,
         `↪️ Smart Recovery:`,
         `• Level 1 → ${lvlExpiry(1)}`,
         `• Level 2 → ${lvlExpiry(2)}`,
@@ -1946,11 +1963,36 @@ bot.action(/^stf:(\d+)$/, async ctx => {
         counterLine,
     ].join('\n');
 
-    await ctx.telegram.deleteMessage(ctx.chat!.id, progress.message_id).catch(() => {});
     await ctx.reply(card, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [
         [{ text: '🔄 New Signal', callback_data: 'ui:signals' }],
         [{ text: '🔙 Back', callback_data: 'ui:start' }],
     ] } });
+
+    // ─── 3. 1-minute preparation countdown ───────────────────────────
+    const prepMsg = await ctx.reply(
+        `⏳ *Signal Preparation* — 1:00\n\nSignal activates at ${fmtClock(entryTime)}`,
+        { parse_mode: 'Markdown' }
+    );
+
+    for (let remaining = 50; remaining >= 0; remaining -= 10) {
+        await new Promise(r => setTimeout(r, 10000));
+        try {
+            const sec = remaining % 60;
+            const timeStr = `0:${sec.toString().padStart(2, '0')}`;
+            const activTime = fmtClock(new Date(entryTime.getTime() - remaining * 1000 + 60000));
+            await ctx.telegram.editMessageText(chatId, prepMsg.message_id, undefined,
+                `⏳ *Signal Preparation* — ${timeStr}\n\nSignal activates at ${activTime}`,
+                { parse_mode: 'Markdown' }
+            );
+        } catch {}
+    }
+
+    try {
+        await ctx.telegram.editMessageText(chatId, prepMsg.message_id, undefined,
+            `✅ *Signal Active!*\n\nEntry at ${fmtClock(entryTime)}\nDirection: ${dirLine}\n\nOpen IQ Option and take the trade now.`,
+            { parse_mode: 'Markdown' }
+        );
+    } catch {}
 });
 
 bot.action('signals:cancel', async ctx => {
