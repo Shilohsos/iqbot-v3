@@ -138,6 +138,8 @@ if (!finalUserCols.includes('signals_date'))
     db.exec('ALTER TABLE users ADD COLUMN signals_date TEXT');
 if (!finalUserCols.includes('funded_balance_usd'))
     db.exec('ALTER TABLE users ADD COLUMN funded_balance_usd REAL NOT NULL DEFAULT 0');
+if (!finalUserCols.includes('total_signals_used'))
+    db.exec('ALTER TABLE users ADD COLUMN total_signals_used INTEGER NOT NULL DEFAULT 0');
 
 // onboarding_tracking lazy migration — add last_followup_msg_id for existing DBs
 try {
@@ -188,6 +190,25 @@ db.exec(`
     last_error          TEXT,
     started_at          TEXT    NOT NULL DEFAULT (datetime('now')),
     last_trade_at       TEXT
+  )
+`);
+
+// Signal tracking — result checking at expiry, martingale progression
+db.exec(`
+  CREATE TABLE IF NOT EXISTS signal_tracking (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    telegram_id  INTEGER NOT NULL,
+    pair         TEXT    NOT NULL,
+    direction    TEXT    NOT NULL,
+    timeframe    INTEGER NOT NULL,
+    entry_time   TEXT    NOT NULL,
+    expiry_time  TEXT    NOT NULL,
+    round        INTEGER NOT NULL DEFAULT 0,
+    max_rounds   INTEGER NOT NULL DEFAULT 3,
+    entry_price  REAL,
+    status       TEXT    NOT NULL DEFAULT 'active',   -- active | won | lost
+    result       TEXT,
+    created_at   TEXT    NOT NULL DEFAULT (datetime('now'))
   )
 `);
 
@@ -761,6 +782,7 @@ export interface UserRecord {
     signals_used_today?: number | null;
     signals_date?: string | null;
     funded_balance_usd?: number | null;
+    total_signals_used?: number | null;
 }
 
 export interface AutoTradingSession {
@@ -778,6 +800,22 @@ export interface AutoTradingSession {
     last_error?: string | null;
     started_at?: string;
     last_trade_at?: string | null;
+}
+
+export interface SignalTrackRecord {
+    id: number;
+    telegram_id: number;
+    pair: string;
+    direction: string;
+    timeframe: number;
+    entry_time: string;
+    expiry_time: string;
+    round: number;
+    max_rounds: number;
+    entry_price: number | null;
+    status: 'active' | 'won' | 'lost';
+    result: string | null;
+    created_at?: string;
 }
 
 export function saveUserCurrency(telegramId: number, currency: string): void {
@@ -955,6 +993,19 @@ export function incrementSignalUsage(telegramId: number): number {
     return next;
 }
 
+/** Lifetime total signals a user has generated (never resets). */
+export function getTotalSignalCount(telegramId: number): number {
+    const row = db.prepare('SELECT total_signals_used FROM users WHERE telegram_id = ?')
+        .get(telegramId) as { total_signals_used: number } | undefined;
+    return row?.total_signals_used ?? 0;
+}
+
+export function incrementTotalSignalCount(telegramId: number): number {
+    const next = getTotalSignalCount(telegramId) + 1;
+    db.prepare('UPDATE users SET total_signals_used = ? WHERE telegram_id = ?').run(next, telegramId);
+    return next;
+}
+
 /** Total signals consumed across all users today — for the admin panel. */
 export function getTotalSignalsToday(): number {
     const today = new Date().toISOString().slice(0, 10);
@@ -1006,6 +1057,50 @@ export function recordAutoSessionTrade(telegramId: number, nextAssetIndex: numbe
             pnl = pnl + ?, last_trade_at = datetime('now')
         WHERE telegram_id = ?
     `).run(nextAssetIndex, pnlDelta, telegramId);
+}
+
+// ── Signal tracking ──────────────────────────────────────────────────────────
+
+export function insertSignalTrack(r: {
+    telegram_id: number; pair: string; direction: string;
+    timeframe: number; entry_time: string; expiry_time: string;
+    round: number; max_rounds: number; entry_price: number | null;
+}): void {
+    db.prepare(`
+        INSERT INTO signal_tracking
+            (telegram_id, pair, direction, timeframe, entry_time, expiry_time,
+             round, max_rounds, entry_price)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(r.telegram_id, r.pair, r.direction, r.timeframe, r.entry_time,
+           r.expiry_time, r.round, r.max_rounds, r.entry_price);
+}
+
+export function getExpiredActiveSignals(): SignalTrackRecord[] {
+    return db.prepare(
+        "SELECT * FROM signal_tracking WHERE status = 'active' AND expiry_time <= datetime('now')"
+    ).all() as SignalTrackRecord[];
+}
+
+export function updateSignalTrackResult(id: number, status: 'won' | 'lost', result: string): void {
+    db.prepare('UPDATE signal_tracking SET status = ?, result = ? WHERE id = ?')
+        .run(status, result, id);
+}
+
+export function getActiveSignalTrack(telegramId: number): SignalTrackRecord | undefined {
+    return db.prepare(
+        "SELECT * FROM signal_tracking WHERE telegram_id = ? AND status = 'active' ORDER BY id DESC LIMIT 1"
+    ).get(telegramId) as SignalTrackRecord | undefined;
+}
+
+export function cancelActiveSignalTracks(telegramId: number): void {
+    db.prepare("UPDATE signal_tracking SET status = 'lost', result = 'cancelled' WHERE telegram_id = ? AND status = 'active'")
+        .run(telegramId);
+}
+
+export function getAllActiveSignalTracks(): SignalTrackRecord[] {
+    return db.prepare(
+        "SELECT * FROM signal_tracking WHERE status = 'active' ORDER BY expiry_time ASC"
+    ).all() as SignalTrackRecord[];
 }
 
 export function getAllUsers(): UserRecord[] {

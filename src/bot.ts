@@ -12,8 +12,9 @@ import {
 } from './access.js';
 import { autoEngine, initAutoEngine } from './auto-trading.js';
 import {
-    setUserFundedBalance, getSignalUsage, incrementSignalUsage, getTotalSignalsToday,
+    setUserFundedBalance, getSignalUsage, incrementSignalUsage, getTotalSignalCount, incrementTotalSignalCount, getTotalSignalsToday,
     upsertAutoSession, getAutoSession,
+    insertSignalTrack, getExpiredActiveSignals, updateSignalTrackResult, getAllActiveSignalTracks, cancelActiveSignalTracks,
     getRecentTrades, getTradeStats, getTopTradersToday,
     getUser, saveUser, saveUsername, deleteUser, getAllUsers, getAllUserIds,
     getActiveTraderIds, getInactiveTraderIds, findUsersByUsername, findUsersByIqUserId,
@@ -99,7 +100,7 @@ import {
 } from './giveaway.js';
 import { analyzePair, analyzePairWithSdk, type AnalysisResult } from './analysis.js';
 import {
-    amountKeyboard, timeframeKeyboard, pairKeyboard, tfLabel, OTC_PAIRS,
+    amountKeyboard, timeframeKeyboard, pairKeyboard, signalPairKeyboard, signalTimeframeKeyboard, tfLabel, OTC_PAIRS,
     tradeModeKeyboard, demoUpsellKeyboard, affiliateFailKeyboard, currencyKeyboard,
 } from './menu.js';
 import { startKeyboard, backKeyboard } from './ui/user.js';
@@ -450,7 +451,7 @@ interface BroadcastButton {
 const pendingBroadcasts = new Map<number, {
     message: string;
     targetIds: number[];
-    media?: { type: 'photo' | 'video'; fileId: string };
+    media?: Array<{ type: 'photo' | 'video' | 'video_note'; fileId: string }>;
     button?: BroadcastButton;
     deleteAfterMs?: number;
     createdAt?: number;
@@ -469,7 +470,7 @@ interface ScheduledBroadcast {
     message: string;
     targetIds: number[];
     button?: BroadcastButton;
-    media?: { type: 'photo' | 'video'; fileId: string };
+    media?: Array<{ type: 'photo' | 'video' | 'video_note'; fileId: string }>;
     deleteAfterMs: number;
     scheduledAt: Date;
     sent: boolean;
@@ -520,7 +521,7 @@ const BALANCE_CACHE_TTL = 5 * 60 * 1000;
 const pendingDeliveries = new Map<number, Array<{
     message: string;
     button?: BroadcastButton;
-    media?: { type: 'photo' | 'video'; fileId: string };
+    media?: Array<{ type: 'photo' | 'video' | 'video_note'; fileId: string }>;
     deleteAfterMs: number;
 }>>();
 
@@ -547,10 +548,27 @@ async function flushPendingDeliveries(userId: number): Promise<void> {
                     : { text: p.button.text, callback_data: p.button.value },
             ]] } : undefined;
             let m;
-            if (p.media?.type === 'photo') {
-                m = await bot.telegram.sendPhoto(userId, p.media.fileId, { caption: p.message, ...(rm ? { reply_markup: rm } : {}) });
-            } else if (p.media?.type === 'video') {
-                m = await bot.telegram.sendVideo(userId, p.media.fileId, { caption: p.message, ...(rm ? { reply_markup: rm } : {}) });
+            if (p.media && p.media.length > 1) {
+                const tgMedia = p.media.map((med, i) => ({
+                    type: med.type as 'photo' | 'video' | 'video_note',
+                    media: med.fileId,
+                    ...(i === 0 ? { caption: p.message, parse_mode: 'Markdown' as const } : {}),
+                }));
+                m = (await bot.telegram.sendMediaGroup(userId, tgMedia as any))[0];
+                if (p.button) {
+                    await bot.telegram.sendMessage(userId, '📌', { reply_markup: rm }).catch(() => {});
+                }
+            } else if (p.media?.[0]?.type === 'photo') {
+                m = await bot.telegram.sendPhoto(userId, p.media[0].fileId, { caption: p.message, ...(rm ? { reply_markup: rm } : {}) });
+            } else if (p.media?.[0]?.type === 'video') {
+                m = await bot.telegram.sendVideo(userId, p.media[0].fileId, { caption: p.message, ...(rm ? { reply_markup: rm } : {}) });
+            } else if (p.media?.[0]?.type === 'video_note') {
+                m = await bot.telegram.sendVideoNote(userId, p.media[0].fileId);
+                if (p.message.trim()) {
+                    await bot.telegram.sendMessage(userId, p.message, rm ? { reply_markup: rm } : undefined).catch(() => {});
+                } else if (rm) {
+                    await bot.telegram.sendMessage(userId, '📌', { reply_markup: rm }).catch(() => {});
+                }
             } else {
                 m = await bot.telegram.sendMessage(userId, p.message, rm ? { reply_markup: rm } : undefined);
             }
@@ -576,7 +594,7 @@ async function dispatchBroadcastPayload(payload: {
     message: string;
     targetIds: number[];
     button?: BroadcastButton;
-    media?: { type: 'photo' | 'video'; fileId: string };
+    media?: Array<{ type: 'photo' | 'video' | 'video_note'; fileId: string }>;
     deleteAfterMs: number;
 }): Promise<{ sent: number; deferred: number }> {
     const testUserId = getTestUserId();
@@ -607,10 +625,27 @@ async function dispatchBroadcastPayload(payload: {
                 continue;
             }
             let m;
-            if (media?.type === 'photo') {
-                m = await bot.telegram.sendPhoto(uid, media.fileId, { caption: message, ...(replyMarkup ? { reply_markup: replyMarkup } : {}) });
-            } else if (media?.type === 'video') {
-                m = await bot.telegram.sendVideo(uid, media.fileId, { caption: message, ...(replyMarkup ? { reply_markup: replyMarkup } : {}) });
+            if (media && media.length > 1) {
+                const tgMedia = media.map((med, i) => ({
+                    type: med.type as 'photo' | 'video' | 'video_note',
+                    media: med.fileId,
+                    ...(i === 0 ? { caption: message, parse_mode: 'Markdown' as const } : {}),
+                }));
+                m = (await bot.telegram.sendMediaGroup(uid, tgMedia as any))[0];
+                if (replyMarkup) {
+                    await bot.telegram.sendMessage(uid, '📌', { reply_markup: replyMarkup }).catch(() => {});
+                }
+            } else if (media?.[0]?.type === 'photo') {
+                m = await bot.telegram.sendPhoto(uid, media[0].fileId, { caption: message, ...(replyMarkup ? { reply_markup: replyMarkup } : {}) });
+            } else if (media?.[0]?.type === 'video') {
+                m = await bot.telegram.sendVideo(uid, media[0].fileId, { caption: message, ...(replyMarkup ? { reply_markup: replyMarkup } : {}) });
+            } else if (media?.[0]?.type === 'video_note') {
+                m = await bot.telegram.sendVideoNote(uid, media[0].fileId);
+                if (message.trim()) {
+                    await bot.telegram.sendMessage(uid, message, replyMarkup ? { reply_markup: replyMarkup } : undefined).catch(() => {});
+                } else if (replyMarkup) {
+                    await bot.telegram.sendMessage(uid, '📌', { reply_markup: replyMarkup }).catch(() => {});
+                }
             } else {
                 m = await bot.telegram.sendMessage(uid, message, replyMarkup ? { reply_markup: replyMarkup } : undefined);
             }
@@ -680,7 +715,7 @@ function rehydrateScheduledBroadcasts(): void {
                 message: row.message,
                 targetIds: row.targetIds,
                 button: row.button as BroadcastButton | undefined,
-                media: row.media as { type: 'photo' | 'video'; fileId: string } | undefined,
+                media: row.media as Array<{ type: 'photo' | 'video'; fileId: string }> | undefined,
                 deleteAfterMs: row.deleteAfterMs,
                 scheduledAt,
                 sent: false,
@@ -1784,16 +1819,18 @@ async function sendAutoTradingLock(ctx: Context): Promise<void> {
 bot.action('lock:ai_trading', async ctx => { await ctx.answerCbQuery(); await sendAiTradingLock(ctx); });
 bot.action('lock:auto_trading', async ctx => { await ctx.answerCbQuery(); await sendAutoTradingLock(ctx); });
 
-// ─── Signals (analysis display only — directive §3) ───────────────────────────
+// ─── Signals wizard (pair → timeframe → analysis — directive §3) ───────────
+
+interface SignalWizState {
+    pair: string;
+    timeframe: number;
+}
+const signalWizSessions = makeSessionMap<SignalWizState>('sigwiz');
 
 bot.action('ui:signals', async ctx => {
     await ctx.answerCbQuery();
     if (!await requireApproval(ctx)) return;
-    await runSignal(ctx);
-});
-bot.action('signals:another', async ctx => { await ctx.answerCbQuery().catch(() => {}); await runSignal(ctx); });
 
-async function runSignal(ctx: Context): Promise<void> {
     const uid = ctx.from!.id;
     const user = getUser(uid);
     const funded = (user?.funded_balance_usd ?? 0) > 0;
@@ -1820,51 +1857,174 @@ async function runSignal(ctx: Context): Promise<void> {
         return;
     }
 
-    const pair = ALL_PAIRS[Math.floor(Math.random() * ALL_PAIRS.length)];
-    const timeframe = 60;
-    const progress = await ctx.reply(`📡 Scanning ${pair}…`);
+    signalWizSessions.set(ctx.chat!.id, { pair: '', timeframe: 0 });
+    await ctx.reply('📡 *Pick an asset for your signal*', {
+        parse_mode: 'Markdown',
+        reply_markup: signalPairKeyboard(0),
+    });
+});
+
+bot.action(/^spair:(.+)$/, async ctx => {
+    const chatId = ctx.chat!.id;
+    const state = signalWizSessions.get(chatId);
+    if (!state) { await ctx.answerCbQuery('Start from the menu first.'); return; }
+    await ctx.answerCbQuery();
+    state.pair = ctx.match[1];
+    try {
+        await ctx.editMessageText(
+            `📡 *${state.pair}* — pick a timeframe 👇`,
+            { parse_mode: 'Markdown', reply_markup: signalTimeframeKeyboard(state.pair) }
+        );
+    } catch {}
+});
+
+bot.action(/^spage:(\d+)$/, async ctx => {
+    const state = signalWizSessions.get(ctx.chat!.id);
+    if (!state) { await ctx.answerCbQuery('Start from the menu first.'); return; }
+    await ctx.answerCbQuery();
+    try { await ctx.editMessageReplyMarkup(pairKeyboard(parseInt(ctx.match[1], 10))); } catch {}
+});
+
+bot.action(/^stf:(\d+)$/, async ctx => {
+    const chatId = ctx.chat!.id;
+    const state = signalWizSessions.get(chatId);
+    if (!state || !state.pair) { await ctx.answerCbQuery('Start from the menu first.'); return; }
+    await ctx.answerCbQuery();
+
+    const uid = ctx.from!.id;
+    const user = getUser(uid);
+    const pair = state.pair;
+    const timeframe = parseInt(ctx.match[1], 10);
+    const ssid = getSsidForUser(uid);
+    if (!ssid) {
+        await ctx.reply('⚠️ Session expired. Reconnect your account.', {
+            reply_markup: { inline_keyboard: [[{ text: '🔗 Connect Account', callback_data: 'ui:connect' }]] },
+        });
+        signalWizSessions.delete(chatId);
+        return;
+    }
+
+    const funded = (user?.funded_balance_usd ?? 0) > 0;
+    signalWizSessions.delete(chatId);
+    try { await ctx.deleteMessage(); } catch {}
+
+    // ─── 1. Analysis animation (2-3s — makes the bot feel alive) ───────
+    const animMsg = await ctx.reply('📡 *Analyzing market data…*', { parse_mode: 'Markdown' });
+    await new Promise(r => setTimeout(r, 1000));
+    await ctx.telegram.editMessageText(chatId, animMsg.message_id, undefined,
+        '🔍 *Scanning live prices for signals…*', { parse_mode: 'Markdown' }).catch(() => {});
+    await new Promise(r => setTimeout(r, 1000));
+    await ctx.telegram.editMessageText(chatId, animMsg.message_id, undefined,
+        '📊 *Calculating optimal entry…*', { parse_mode: 'Markdown' }).catch(() => {});
+    await new Promise(r => setTimeout(r, 1000));
+
+    // ─── 2. Premium analysis gating ─────────────────────────────────
+    // Unfunded (demo): all signals get premium (to hook them).
+    // Funded: first 5 signals get premium, then auto-downgrade (drain strategy).
+    let isPremium: boolean;
+    if (funded) {
+        const { used } = getSignalUsage(uid);
+        isPremium = used < 5; // signals 1-5 get premium
+    } else {
+        isPremium = true; // all signals get premium
+    }
+    const analysisCandles = isPremium ? 200 : (user?.analysis_candles ?? 35);
+    const analysisTier = isPremium ? 'MASTER' : 'DEMO';
 
     let analysis: AnalysisResult;
     try {
         const sdk = await sdkPool.get(uid, ssid);
-        analysis = await analyzePairWithSdk(sdk, pair, timeframe, 'MASTER', user?.analysis_candles ?? undefined);
+        analysis = await analyzePairWithSdk(sdk, pair, timeframe, analysisTier, analysisCandles);
     } catch (err) {
-        await ctx.telegram.editMessageText(ctx.chat!.id, progress.message_id, undefined,
+        await ctx.telegram.editMessageText(chatId, animMsg.message_id, undefined,
             friendlyError(err, '⚠️ Could not read the market. Try another signal.')).catch(() => {});
-        await ctx.reply('Try again 👇', { reply_markup: { inline_keyboard: [[{ text: 'Get Another Signal 🔄', callback_data: 'signals:another' }]] } });
+        await ctx.reply('Try again 👇', { reply_markup: { inline_keyboard: [[{ text: '🔄 New Signal', callback_data: 'ui:signals' }]] } });
         return;
     } finally {
         sdkPool.release(uid);
     }
 
+    await ctx.telegram.deleteMessage(chatId, animMsg.message_id).catch(() => {});
+
     const accuracy = Math.round(user?.display_confidence_min
         ? Math.max(analysis.confidence, user.display_confidence_min)
         : analysis.confidence);
     const count = incrementSignalUsage(uid);
+    incrementTotalSignalCount(uid);
     const counterLine = funded ? `— Signal #${count} today —` : `— Signal ${count}/${FREE_SIGNALS_PER_DAY} today —`;
-
+    const badge = isPremium ? ' ★ PREMIUM ★' : '';
     const now = new Date();
-    const lvl = (n: number) => fmtClock(new Date(now.getTime() + n * timeframe * 1000));
+
+    // Cancel any prior active tracking for this user before inserting new one
+    cancelActiveSignalTracks(uid);
+
+    // Track this signal for result checking at expiry (SQLite datetime format: no T/Z)
+    const toSqlite = (d: Date) => d.toISOString().replace('T', ' ').slice(0, 19);
+    const signalExpiry = new Date(now.getTime() + timeframe * 1000);
+    insertSignalTrack({
+        telegram_id: uid, pair, direction: analysis.direction,
+        timeframe, entry_time: toSqlite(now),
+        expiry_time: toSqlite(signalExpiry),
+        round: 0, max_rounds: 3,
+        entry_price: analysis.entryPrice ?? null,
+    });
+
+    const entryTime = new Date(now.getTime() + 60000);
+    const lvlExpiry = (n: number) => fmtClock(new Date(entryTime.getTime() + n * timeframe * 1000));
     const dirLine = analysis.direction === 'call' ? 'CALL 🟢' : 'PUT 🔴';
+
     const card = [
-        `📡 *${pair} SIGNAL*`, ``,
+        `📡 *${pair} SIGNAL*${badge}`, ``,
         `🎯 Accuracy: ${accuracy}%`, ``,
         `⏳ Expiry: ${tfLabel(timeframe)}`,
         `📈 Direction: ${dirLine}`,
-        `➡️ Entry: ${fmtClock(now)}`, ``,
+        `➡️ Entry: ${fmtClock(entryTime)}`, ``,
         `↪️ Smart Recovery:`,
-        `• Level 1 → ${lvl(1)}`,
-        `• Level 2 → ${lvl(2)}`,
-        `• Level 3 → ${lvl(3)}`, ``,
+        `• Level 1 → ${lvlExpiry(1)}`,
+        `• Level 2 → ${lvlExpiry(2)}`,
+        `• Level 3 → ${lvlExpiry(3)}`, ``,
         counterLine,
     ].join('\n');
 
-    await ctx.telegram.deleteMessage(ctx.chat!.id, progress.message_id).catch(() => {});
     await ctx.reply(card, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [
-        [{ text: 'Get Another Signal 🔄', callback_data: 'signals:another' }],
+        [{ text: '🔄 New Signal', callback_data: 'ui:signals' }],
         [{ text: '🔙 Back', callback_data: 'ui:start' }],
     ] } });
-}
+
+    // ─── 3. 1-minute preparation countdown (fire-and-forget) ──────────
+    const prepMsg = await ctx.reply(
+        `⏳ *Signal Preparation* — 1:00\n\nSignal activates at ${fmtClock(entryTime)}`,
+        { parse_mode: 'Markdown' }
+    );
+
+    void (async () => {
+        for (let remaining = 50; remaining >= 0; remaining -= 10) {
+            await new Promise(r => setTimeout(r, 10000));
+            try {
+                const sec = remaining % 60;
+                const timeStr = `0:${sec.toString().padStart(2, '0')}`;
+                const activTime = fmtClock(new Date(entryTime.getTime() - remaining * 1000 + 60000));
+                await ctx.telegram.editMessageText(chatId, prepMsg.message_id, undefined,
+                    `⏳ *Signal Preparation* — ${timeStr}\n\nSignal activates at ${activTime}`,
+                    { parse_mode: 'Markdown' }
+                );
+            } catch {}
+        }
+
+        try {
+            await ctx.telegram.editMessageText(chatId, prepMsg.message_id, undefined,
+                `✅ *Signal Active!*\n\nEntry at ${fmtClock(entryTime)}\nDirection: ${dirLine}\n\nOpen IQ Option and take the trade now.`,
+                { parse_mode: 'Markdown' }
+            );
+        } catch {}
+    })();
+});
+
+bot.action('signals:cancel', async ctx => {
+    await ctx.answerCbQuery();
+    signalWizSessions.delete(ctx.chat!.id);
+    try { await ctx.editMessageText('❌ Signal cancelled.'); } catch {}
+});
 
 // ─── Auto Trading (directive §5) ──────────────────────────────────────────────
 
@@ -4350,9 +4510,19 @@ bot.on('photo', async ctx => {
     if (as.step !== 'broadcast_media') return;
     const pending = pendingBroadcasts.get(chatId);
     if (!pending) { await ctx.reply('❌ Session expired.'); return; }
-    pendingBroadcasts.set(chatId, { ...pending, media: { type: 'photo', fileId: photo.file_id } });
-    adminSessions.delete(chatId);
-    await ctx.reply('📎 Image received! Include a link button?', { reply_markup: broadcastLinkKeyboard() });
+    const existingMedia = pending.media ?? [];
+    const fileId = photo.file_id;
+    if (!existingMedia.some(m => m.fileId === fileId)) {
+        existingMedia.push({ type: 'photo', fileId });
+    }
+    pendingBroadcasts.set(chatId, { ...pending, media: existingMedia });
+    adminSessions.set(chatId, { ...as, step: 'broadcast_media' }); // stay in step
+    const count = existingMedia.length;
+    await ctx.reply(
+        `📎 Image ${count} attached${count > 1 ? ` (${count} total)` : ''}.\n` +
+        `Send more images, type *done* to continue, or *skip* for no images.`,
+        { parse_mode: 'Markdown' }
+    );
 });
 
 bot.on('video', async ctx => {
@@ -4371,9 +4541,49 @@ bot.on('video', async ctx => {
     if (as.step !== 'broadcast_media') return;
     const pending = pendingBroadcasts.get(chatId);
     if (!pending) { await ctx.reply('❌ Session expired.'); return; }
-    pendingBroadcasts.set(chatId, { ...pending, media: { type: 'video', fileId: ctx.message.video.file_id } });
-    adminSessions.delete(chatId);
-    await ctx.reply('📹 Video received! Include a link button?', { reply_markup: broadcastLinkKeyboard() });
+    const existingMedia = pending.media ?? [];
+    const fileId = ctx.message.video.file_id;
+    if (!existingMedia.some(m => m.fileId === fileId)) {
+        existingMedia.push({ type: 'video' as const, fileId });
+    }
+    pendingBroadcasts.set(chatId, { ...pending, media: existingMedia });
+    adminSessions.set(chatId, { ...as, step: 'broadcast_media' }); // stay in step
+    const count = existingMedia.length;
+    await ctx.reply(
+        `🎬 Video ${count} attached${count > 1 ? ` (${count} total)` : ''}.\n` +
+        `Send more images/videos, type *done* to continue, or *skip* for no media.`,
+        { parse_mode: 'Markdown' }
+    );
+});
+
+// Video note handler (round/circle videos, forwarded or recorded)
+bot.on('video_note', async ctx => {
+    if (ctx.from?.id !== getAdminId()) return;
+    const chatId = ctx.chat.id;
+    const as = adminSessions.get(chatId);
+    if (!as) return;
+    if (as.step === 'media_upload' && as.mediaLibraryKey) {
+        setSequenceMedia(as.mediaLibraryKey, 'video', ctx.message.video_note.file_id);
+        adminSessions.delete(chatId);
+        await ctx.reply('✅ Video note saved for `' + as.mediaLibraryKey + '`.', { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
+        return;
+    }
+    if (as.step !== 'broadcast_media') return;
+    const pending = pendingBroadcasts.get(chatId);
+    if (!pending) { await ctx.reply('❌ Session expired.'); return; }
+    const existingMedia = pending.media ?? [];
+    const fileId = ctx.message.video_note.file_id;
+    if (!existingMedia.some(m => m.fileId === fileId)) {
+        existingMedia.push({ type: 'video_note' as const, fileId });
+    }
+    pendingBroadcasts.set(chatId, { ...pending, media: existingMedia });
+    adminSessions.set(chatId, { ...as, step: 'broadcast_media' });
+    const count = existingMedia.length;
+    await ctx.reply(
+        `🎬 Video note ${count} attached${count > 1 ? ` (${count} total)` : ''}.\\n` +
+        `Send more images/videos, type *done* to continue, or *skip* for no media.`,
+        { parse_mode: 'Markdown' }
+    );
 });
 
 // ─── User ID brain route (repeated failures) ──────────────────────────────────
@@ -4495,7 +4705,7 @@ bot.on('text', async ctx => {
                     const targetLabel = segLabelMap[target] ?? `${target} user(s)`;
                     pendingBroadcasts.set(chatId, { message: text, targetIds, createdAt: Date.now() });
                     adminSessions.set(chatId, { ...as, step: 'broadcast_media' });
-                    await ctx.reply(`📎 Send to *${targetIds.length}* ${targetLabel}.\n\nInclude an image or video? Send the file, or type "skip":`, { parse_mode: 'Markdown' });
+                    await ctx.reply(`📎 Send to *${targetIds.length}* ${targetLabel}.\n\nSend image(s)/video(s), or type "done" to finish, or "skip" for no media:`, { parse_mode: 'Markdown' });
                 } catch (err) {
                     console.error('[broadcast] broadcast_message error:', err);
                     await ctx.reply('❌ Broadcast setup failed. Check server logs.', { reply_markup: adminBackKeyboard() });
@@ -4505,11 +4715,14 @@ bot.on('text', async ctx => {
 
             if (as.step === 'broadcast_media') {
                 if (text.toLowerCase() === 'skip') {
-                    // adminSessions already deleted at top — proceed to link prompt
+                    // No media — proceed to link prompt
+                    await ctx.reply('Include a link button?', { reply_markup: broadcastLinkKeyboard() });
+                } else if (text.toLowerCase() === 'done') {
+                    // Done adding media — proceed to link prompt
                     await ctx.reply('Include a link button?', { reply_markup: broadcastLinkKeyboard() });
                 } else {
                     adminSessions.set(chatId, as); // restore for retry
-                    await ctx.reply('❌ Please send an image/video file, or type "skip" to continue without media.');
+                    await ctx.reply('❌ Please send an image/video file, or type "done" to finish, or "skip" for no media.');
                 }
                 return;
             }
@@ -5827,6 +6040,86 @@ backgroundIntervals.push(setInterval(async () => {
         console.error('[keepalive] getMe failed:', err instanceof Error ? err.message : err);
     }
 }, 600_000));
+
+// ─── Signal result tracking (checks expired signals every 30s) ───────────────
+// Uses sdkPool with a stable 'signal_admin' key to avoid creating a new SDK
+// connection every tick (directive §8 — admin SDK efficiency).
+
+const SIGNAL_ADMIN_KEY = 0; // sentinel pool key for the admin SSID slot
+
+backgroundIntervals.push(setInterval(async () => {
+    try {
+        const expired = getExpiredActiveSignals();
+        if (expired.length === 0) return;
+
+        const adminSsid = process.env.IQ_SSID;
+        if (!adminSsid) return;
+
+        let sdk: Awaited<ReturnType<typeof sdkPool.get>> | null = null;
+        try {
+            sdk = await sdkPool.get(SIGNAL_ADMIN_KEY, adminSsid);
+        } catch {
+            return; // skip tick if SDK unavailable
+        }
+
+        try {
+            const blitz = await sdk.blitzOptions();
+            const actives = blitz.getActives();
+            const norm = (s: string) => s.toUpperCase().replace(/^front\./i, '').replace(/[-\/\s]/g, '');
+            const toSqlite = (d: Date) => d.toISOString().replace('T', ' ').slice(0, 19);
+
+            for (const sig of expired) {
+                try {
+                    const active = actives.find(a => norm(a.ticker) === norm(sig.pair));
+                    if (!active) { updateSignalTrackResult(sig.id, 'lost', 'unknown_pair'); continue; }
+
+                    const candles = await sdk.candles();
+                    const history = await candles.getCandles(active.id, sig.timeframe, { count: 2 });
+                    if (history.length < 2) { updateSignalTrackResult(sig.id, 'lost', 'no_data'); continue; }
+
+                    const openPrice = history[0].open;
+                    const closePrice = history[1].close;
+                    const wentUp = closePrice > openPrice;
+
+                    const isWin = sig.direction === 'call' ? wentUp : !wentUp;
+                    const status = isWin ? 'won' : 'lost';
+                    const result = isWin ? 'price_moved_favor' : 'price_moved_against';
+
+                    updateSignalTrackResult(sig.id, status, result);
+
+                    // Martingale auto-progression: insert next round record on loss
+                    let notifyText: string;
+                    if (isWin) {
+                        notifyText = `🟢 *SIGNAL WON!* ${sig.pair} ${sig.direction.toUpperCase()} hit.\n\nReady for your next signal!`;
+                    } else if (sig.round < sig.max_rounds) {
+                        const nextRound = sig.round + 1;
+                        const now = new Date();
+                        const nextExpiry = new Date(now.getTime() + sig.timeframe * 1000);
+                        insertSignalTrack({
+                            telegram_id: sig.telegram_id, pair: sig.pair,
+                            direction: sig.direction, timeframe: sig.timeframe,
+                            entry_time: toSqlite(now), expiry_time: toSqlite(nextExpiry),
+                            round: nextRound, max_rounds: sig.max_rounds,
+                            entry_price: null,
+                        });
+                        notifyText = `🔴 *SIGNAL LOST.* ${sig.pair} ${sig.direction.toUpperCase()} moved against.\n\nLevel ${nextRound + 1} martingale queued — stay in the trade.`;
+                    } else {
+                        notifyText = `🔴 *SIGNAL LOST.* All ${sig.max_rounds + 1} rounds exhausted.\n\nTake a break and try a fresh signal.`;
+                    }
+
+                    try { await bot.telegram.sendMessage(sig.telegram_id, notifyText, { parse_mode: 'Markdown' }); } catch {}
+                } catch (err) {
+                    logger.warn('signal-track', `error checking signal ${sig.id}: ${err instanceof Error ? err.message : err}`);
+                    updateSignalTrackResult(sig.id, 'lost', 'check_error');
+                }
+            }
+        } finally {
+            sdkPool.release(SIGNAL_ADMIN_KEY);
+        }
+    } catch (err) {
+        logger.error('signal-track', `loop error: ${err instanceof Error ? err.message : err}`);
+    }
+}, 30000));
 
 // ─── Admin Analysis (single-timeframe, 6-indicator, 70 candles) ───────────────
 
