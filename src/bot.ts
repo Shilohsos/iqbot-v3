@@ -2161,23 +2161,52 @@ async function sendAutoMenu(ctx: Context): Promise<void> {
     const session = getAutoSession(ctx.from!.id);
     const status = session?.status;
     const running = status === 'running';
-    const statusLabel = running ? '▶️ Running' : status === 'paused' ? '⏸️ Paused' : '⏸️ Stopped';
+    const statusLabel = running ? '🟢 Live' : status === 'paused' ? '🟡 Paused' : '⚪ Inactive';
 
     const rows: Array<Array<{ text: string; callback_data: string }>> = [];
-    if (running) {
-        rows.push([{ text: '⏸️ Pause', callback_data: 'auto:pause' }, { text: '⏹️ Stop', callback_data: 'auto:stop' }]);
-    } else {
-        rows.push([{ text: '▶️ Start Auto Trading', callback_data: 'auto:start' }]);
-        if (status === 'paused') rows.push([{ text: '▶️ Resume', callback_data: 'auto:resume' }]);
-    }
-    rows.push([{ text: '⚡ Auto God Mode', callback_data: 'auto:god' }]);
-    rows.push([{ text: '📊 Performance', callback_data: 'auto:perf' }]);
-    rows.push([{ text: '🔙 Back', callback_data: 'ui:start' }]);
 
-    await ctx.reply(
-        `🚀 *Auto Trading*\n\nStatus: ${statusLabel}\n\nConfigure your auto trader below.`,
-        { parse_mode: 'Markdown', reply_markup: { inline_keyboard: rows } }
-    );
+    if (session && (running || status === 'paused')) {
+        // Show live session summary in the message, not just a label
+        const assets = (JSON.parse(session.assets) as string[]).join(' · ');
+        const sign = session.pnl >= 0 ? '+' : '';
+        const body = [
+            `🚀 *Auto Trading*`,
+            ``,
+            `Status: ${statusLabel}`,
+            `Balance: ${session.amount.toLocaleString()} ${session.currency}/trade`,
+            `Assets: ${assets}`,
+            `TF: ${tfLabel(session.timeframe)} · Recovery: ${session.gale_rounds} rounds`,
+            `Trades: ${session.trades_done} · P&L: ${sign}${session.pnl.toFixed(2)} ${session.currency}`,
+        ].join('\n');
+
+        if (running) {
+            rows.push([{ text: '⏸️ Pause', callback_data: 'auto:pause' }, { text: '⏹️ Stop', callback_data: 'auto:stop' }]);
+        } else {
+            rows.push([{ text: '▶️ Resume', callback_data: 'auto:resume' }, { text: '⏹️ Stop', callback_data: 'auto:stop' }]);
+        }
+        rows.push([{ text: '📊 Performance', callback_data: 'auto:perf' }]);
+        rows.push([{ text: '⚡ Reconfigure (God Mode)', callback_data: 'auto:god' }]);
+        rows.push([{ text: '🔙 Back', callback_data: 'ui:start' }]);
+
+        await ctx.reply(body, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: rows } });
+    } else {
+        // No active session — show start options
+        const body = [
+            `🚀 *Auto Trading*`,
+            ``,
+            `Let the bot trade for you — fully automated.`,
+            `Pick your assets, set your rules, walk away.`,
+            ``,
+            `⚡ *God Mode* analyzes your account and picks`,
+            `the optimal setup in one tap.`,
+        ].join('\n');
+
+        rows.push([{ text: '🚀 Start Auto Trading', callback_data: 'auto:start' }]);
+        rows.push([{ text: '⚡ Auto God Mode', callback_data: 'auto:god' }]);
+        rows.push([{ text: '🔙 Back', callback_data: 'ui:start' }]);
+
+        await ctx.reply(body, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: rows } });
+    }
 }
 
 function requireAutoAccess(ctx: Context): boolean {
@@ -6223,7 +6252,7 @@ backgroundIntervals.push(setInterval(async () => {
                             ``,
                             `🔴 *Signal finished*`,
                             `Lost this one — try again now 👇`,
-                        ].join('\\n');
+                        ].join('\n');
                         isFinal = true;
                     }
 

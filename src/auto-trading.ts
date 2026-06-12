@@ -73,13 +73,18 @@ class AutoRunner {
         if (!s) return;
         const idx = (s.current_asset_index % this.assets.length) + 1;
         const sign = s.pnl >= 0 ? '+' : '';
+        const pnlFormatted = `${sign}${s.pnl.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${s.currency}`;
+        const asset = this.assets[s.current_asset_index % this.assets.length];
+        const statusEmoji = s.status === 'running' ? '🟢 Live' : s.status === 'paused' ? '🟡 Paused' : '⚪ Stopped';
         const text = [
-            `🚀 Auto Trading — ${s.status === 'running' ? 'Running' : s.status === 'paused' ? 'Paused ⏸' : 'Stopped'}`,
-            `Asset: ${this.assets[s.current_asset_index % this.assets.length]} (${idx}/${this.assets.length}) · TF ${tfLabel(s.timeframe)} · Recovery ${s.gale_rounds}`,
-            `Trades: ${s.trades_done}   P&L: ${sign}${s.pnl.toFixed(2)} ${s.currency}`,
-            last ? `Last: ${last}` : '',
+            `🚀 *Auto Trading* · ${statusEmoji}`,
+            ``,
+            `${asset} (${idx}/${this.assets.length}) · ${tfLabel(s.timeframe)} · ${s.gale_rounds}-round recovery`,
+            `Trades: ${s.trades_done}   P&L: ${pnlFormatted}`,
+            last ? `_${last}_` : '',
         ].filter(Boolean).join('\n');
         const extra = {
+            parse_mode: 'Markdown',
             reply_markup: { inline_keyboard: [[
                 { text: '⏸ Pause', callback_data: 'auto:pause' },
                 { text: '⏹ Stop', callback_data: 'auto:stop' },
