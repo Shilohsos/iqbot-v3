@@ -1987,7 +1987,9 @@ bot.action(/^stf:(\d+)$/, async ctx => {
     // so the tracking loop can edit the same message (directive: in-place edits).
     cancelActiveSignalTracks(uid);
     const toSqlite = (d: Date) => d.toISOString().replace('T', ' ').slice(0, 19);
-    const signalExpiry = new Date(now.getTime() + timeframe * 1000);
+    // Signal expires after 60s prep + timeframe. This way the tracking loop
+    // only checks the candle AFTER the trade actually entered and expired.
+    const signalExpiry = new Date(now.getTime() + 60000 + timeframe * 1000);
     insertSignalTrack({
         telegram_id: uid, pair, direction: analysis.direction,
         timeframe, entry_time: toSqlite(now),
@@ -6099,8 +6101,12 @@ backgroundIntervals.push(setInterval(async () => {
                         continue;
                     }
 
-                    const openPrice = history[0].open;
-                    const closePrice = history[1].close;
+                    // Compare open vs close of the SAME candle (the most recent completed),
+                    // exactly like IQ Option does. Using different candle indices (0 vs 1)
+                    // would compare prices from different time windows — wrong result.
+                    const lastIdx = history.length - 1;
+                    const openPrice = history[lastIdx].open;
+                    const closePrice = history[lastIdx].close;
                     const wentUp = closePrice > openPrice;
 
                     const isWin = sig.direction === 'call' ? wentUp : !wentUp;
