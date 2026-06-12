@@ -6139,7 +6139,15 @@ backgroundIntervals.push(setInterval(async () => {
                             card_chat_id: sig.card_chat_id ?? undefined,
                             card_msg_id: sig.card_msg_id ?? undefined,
                         });
-                        notifyText = `📡 *${sig.pair} SIGNAL*\n\n🔴 *LOST* — ${dirUp} moved against (${roundLabel}).\n\nRound ${nextRound + 1}/${sig.max_rounds + 1} queued — stay in the trade.`;
+                        notifyText = [
+                            `📡 *${sig.pair} SIGNAL*`, ``,
+                            `🔴 *LOST* — ${dirUp} moved against (${roundLabel})`, ``,
+                            `⚠️ *RE-ENTER NOW*`,
+                            `• Asset: ${sig.pair}`,
+                            `• Direction: ${dirUp}`,
+                            `• Amount: 2× your last entry`,
+                            `• Expiry: ${tfLabel(sig.timeframe)}`,
+                        ].join('\n');
                         isFinal = false;
                     } else {
                         notifyText = `📡 *${sig.pair} SIGNAL*\n\n🔴 *LOST* — all ${sig.max_rounds + 1} rounds exhausted.\n\nTake a break and try a fresh signal.`;
@@ -6181,7 +6189,7 @@ backgroundIntervals.push(setInterval(async () => {
     } catch (err) {
         logger.error('signal-track', `loop error: ${err instanceof Error ? err.message : err}`);
     }
-}, 15000));
+}, 5000));  // check every 5s for instant tracking
 
 // ─── Admin Analysis (single-timeframe, 6-indicator, 70 candles) ───────────────
 
