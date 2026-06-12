@@ -450,7 +450,7 @@ interface BroadcastButton {
 const pendingBroadcasts = new Map<number, {
     message: string;
     targetIds: number[];
-    media?: { type: 'photo' | 'video'; fileId: string };
+    media?: Array<{ type: 'photo' | 'video' | 'video_note'; fileId: string }>;
     button?: BroadcastButton;
     deleteAfterMs?: number;
     createdAt?: number;
@@ -469,7 +469,7 @@ interface ScheduledBroadcast {
     message: string;
     targetIds: number[];
     button?: BroadcastButton;
-    media?: { type: 'photo' | 'video'; fileId: string };
+    media?: Array<{ type: 'photo' | 'video' | 'video_note'; fileId: string }>;
     deleteAfterMs: number;
     scheduledAt: Date;
     sent: boolean;
@@ -520,7 +520,7 @@ const BALANCE_CACHE_TTL = 5 * 60 * 1000;
 const pendingDeliveries = new Map<number, Array<{
     message: string;
     button?: BroadcastButton;
-    media?: { type: 'photo' | 'video'; fileId: string };
+    media?: Array<{ type: 'photo' | 'video' | 'video_note'; fileId: string }>;
     deleteAfterMs: number;
 }>>();
 
@@ -547,10 +547,27 @@ async function flushPendingDeliveries(userId: number): Promise<void> {
                     : { text: p.button.text, callback_data: p.button.value },
             ]] } : undefined;
             let m;
-            if (p.media?.type === 'photo') {
-                m = await bot.telegram.sendPhoto(userId, p.media.fileId, { caption: p.message, ...(rm ? { reply_markup: rm } : {}) });
-            } else if (p.media?.type === 'video') {
-                m = await bot.telegram.sendVideo(userId, p.media.fileId, { caption: p.message, ...(rm ? { reply_markup: rm } : {}) });
+            if (p.media && p.media.length > 1) {
+                const tgMedia = p.media.map((med, i) => ({
+                    type: med.type as 'photo' | 'video' | 'video_note',
+                    media: med.fileId,
+                    ...(i === 0 ? { caption: p.message, parse_mode: 'Markdown' as const } : {}),
+                }));
+                m = (await bot.telegram.sendMediaGroup(userId, tgMedia as any))[0];
+                if (p.button) {
+                    await bot.telegram.sendMessage(userId, '📌', { reply_markup: rm }).catch(() => {});
+                }
+            } else if (p.media?.[0]?.type === 'photo') {
+                m = await bot.telegram.sendPhoto(userId, p.media[0].fileId, { caption: p.message, ...(rm ? { reply_markup: rm } : {}) });
+            } else if (p.media?.[0]?.type === 'video') {
+                m = await bot.telegram.sendVideo(userId, p.media[0].fileId, { caption: p.message, ...(rm ? { reply_markup: rm } : {}) });
+            } else if (p.media?.[0]?.type === 'video_note') {
+                m = await bot.telegram.sendVideoNote(userId, p.media[0].fileId);
+                if (p.message.trim()) {
+                    await bot.telegram.sendMessage(userId, p.message, rm ? { reply_markup: rm } : undefined).catch(() => {});
+                } else if (rm) {
+                    await bot.telegram.sendMessage(userId, '📌', { reply_markup: rm }).catch(() => {});
+                }
             } else {
                 m = await bot.telegram.sendMessage(userId, p.message, rm ? { reply_markup: rm } : undefined);
             }
@@ -576,7 +593,7 @@ async function dispatchBroadcastPayload(payload: {
     message: string;
     targetIds: number[];
     button?: BroadcastButton;
-    media?: { type: 'photo' | 'video'; fileId: string };
+    media?: Array<{ type: 'photo' | 'video' | 'video_note'; fileId: string }>;
     deleteAfterMs: number;
 }): Promise<{ sent: number; deferred: number }> {
     const testUserId = getTestUserId();
@@ -607,10 +624,27 @@ async function dispatchBroadcastPayload(payload: {
                 continue;
             }
             let m;
-            if (media?.type === 'photo') {
-                m = await bot.telegram.sendPhoto(uid, media.fileId, { caption: message, ...(replyMarkup ? { reply_markup: replyMarkup } : {}) });
-            } else if (media?.type === 'video') {
-                m = await bot.telegram.sendVideo(uid, media.fileId, { caption: message, ...(replyMarkup ? { reply_markup: replyMarkup } : {}) });
+            if (media && media.length > 1) {
+                const tgMedia = media.map((med, i) => ({
+                    type: med.type as 'photo' | 'video' | 'video_note',
+                    media: med.fileId,
+                    ...(i === 0 ? { caption: message, parse_mode: 'Markdown' as const } : {}),
+                }));
+                m = (await bot.telegram.sendMediaGroup(uid, tgMedia as any))[0];
+                if (replyMarkup) {
+                    await bot.telegram.sendMessage(uid, '📌', { reply_markup: replyMarkup }).catch(() => {});
+                }
+            } else if (media?.[0]?.type === 'photo') {
+                m = await bot.telegram.sendPhoto(uid, media[0].fileId, { caption: message, ...(replyMarkup ? { reply_markup: replyMarkup } : {}) });
+            } else if (media?.[0]?.type === 'video') {
+                m = await bot.telegram.sendVideo(uid, media[0].fileId, { caption: message, ...(replyMarkup ? { reply_markup: replyMarkup } : {}) });
+            } else if (media?.[0]?.type === 'video_note') {
+                m = await bot.telegram.sendVideoNote(uid, media[0].fileId);
+                if (message.trim()) {
+                    await bot.telegram.sendMessage(uid, message, replyMarkup ? { reply_markup: replyMarkup } : undefined).catch(() => {});
+                } else if (replyMarkup) {
+                    await bot.telegram.sendMessage(uid, '📌', { reply_markup: replyMarkup }).catch(() => {});
+                }
             } else {
                 m = await bot.telegram.sendMessage(uid, message, replyMarkup ? { reply_markup: replyMarkup } : undefined);
             }
@@ -680,7 +714,7 @@ function rehydrateScheduledBroadcasts(): void {
                 message: row.message,
                 targetIds: row.targetIds,
                 button: row.button as BroadcastButton | undefined,
-                media: row.media as { type: 'photo' | 'video'; fileId: string } | undefined,
+                media: row.media as Array<{ type: 'photo' | 'video'; fileId: string }> | undefined,
                 deleteAfterMs: row.deleteAfterMs,
                 scheduledAt,
                 sent: false,
@@ -4350,9 +4384,19 @@ bot.on('photo', async ctx => {
     if (as.step !== 'broadcast_media') return;
     const pending = pendingBroadcasts.get(chatId);
     if (!pending) { await ctx.reply('❌ Session expired.'); return; }
-    pendingBroadcasts.set(chatId, { ...pending, media: { type: 'photo', fileId: photo.file_id } });
-    adminSessions.delete(chatId);
-    await ctx.reply('📎 Image received! Include a link button?', { reply_markup: broadcastLinkKeyboard() });
+    const existingMedia = pending.media ?? [];
+    const fileId = photo.file_id;
+    if (!existingMedia.some(m => m.fileId === fileId)) {
+        existingMedia.push({ type: 'photo', fileId });
+    }
+    pendingBroadcasts.set(chatId, { ...pending, media: existingMedia });
+    adminSessions.set(chatId, { ...as, step: 'broadcast_media' }); // stay in step
+    const count = existingMedia.length;
+    await ctx.reply(
+        `📎 Image ${count} attached${count > 1 ? ` (${count} total)` : ''}.\n` +
+        `Send more images, type *done* to continue, or *skip* for no images.`,
+        { parse_mode: 'Markdown' }
+    );
 });
 
 bot.on('video', async ctx => {
@@ -4371,9 +4415,49 @@ bot.on('video', async ctx => {
     if (as.step !== 'broadcast_media') return;
     const pending = pendingBroadcasts.get(chatId);
     if (!pending) { await ctx.reply('❌ Session expired.'); return; }
-    pendingBroadcasts.set(chatId, { ...pending, media: { type: 'video', fileId: ctx.message.video.file_id } });
-    adminSessions.delete(chatId);
-    await ctx.reply('📹 Video received! Include a link button?', { reply_markup: broadcastLinkKeyboard() });
+    const existingMedia = pending.media ?? [];
+    const fileId = ctx.message.video.file_id;
+    if (!existingMedia.some(m => m.fileId === fileId)) {
+        existingMedia.push({ type: 'video' as const, fileId });
+    }
+    pendingBroadcasts.set(chatId, { ...pending, media: existingMedia });
+    adminSessions.set(chatId, { ...as, step: 'broadcast_media' }); // stay in step
+    const count = existingMedia.length;
+    await ctx.reply(
+        `🎬 Video ${count} attached${count > 1 ? ` (${count} total)` : ''}.\n` +
+        `Send more images/videos, type *done* to continue, or *skip* for no media.`,
+        { parse_mode: 'Markdown' }
+    );
+});
+
+// Video note handler (round/circle videos, forwarded or recorded)
+bot.on('video_note', async ctx => {
+    if (ctx.from?.id !== getAdminId()) return;
+    const chatId = ctx.chat.id;
+    const as = adminSessions.get(chatId);
+    if (!as) return;
+    if (as.step === 'media_upload' && as.mediaLibraryKey) {
+        setSequenceMedia(as.mediaLibraryKey, 'video', ctx.message.video_note.file_id);
+        adminSessions.delete(chatId);
+        await ctx.reply('✅ Video note saved for `' + as.mediaLibraryKey + '`.', { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
+        return;
+    }
+    if (as.step !== 'broadcast_media') return;
+    const pending = pendingBroadcasts.get(chatId);
+    if (!pending) { await ctx.reply('❌ Session expired.'); return; }
+    const existingMedia = pending.media ?? [];
+    const fileId = ctx.message.video_note.file_id;
+    if (!existingMedia.some(m => m.fileId === fileId)) {
+        existingMedia.push({ type: 'video_note' as const, fileId });
+    }
+    pendingBroadcasts.set(chatId, { ...pending, media: existingMedia });
+    adminSessions.set(chatId, { ...as, step: 'broadcast_media' });
+    const count = existingMedia.length;
+    await ctx.reply(
+        `🎬 Video note ${count} attached${count > 1 ? ` (${count} total)` : ''}.\\n` +
+        `Send more images/videos, type *done* to continue, or *skip* for no media.`,
+        { parse_mode: 'Markdown' }
+    );
 });
 
 // ─── User ID brain route (repeated failures) ──────────────────────────────────
@@ -4495,7 +4579,7 @@ bot.on('text', async ctx => {
                     const targetLabel = segLabelMap[target] ?? `${target} user(s)`;
                     pendingBroadcasts.set(chatId, { message: text, targetIds, createdAt: Date.now() });
                     adminSessions.set(chatId, { ...as, step: 'broadcast_media' });
-                    await ctx.reply(`📎 Send to *${targetIds.length}* ${targetLabel}.\n\nInclude an image or video? Send the file, or type "skip":`, { parse_mode: 'Markdown' });
+                    await ctx.reply(`📎 Send to *${targetIds.length}* ${targetLabel}.\n\nSend image(s)/video(s), or type "done" to finish, or "skip" for no media:`, { parse_mode: 'Markdown' });
                 } catch (err) {
                     console.error('[broadcast] broadcast_message error:', err);
                     await ctx.reply('❌ Broadcast setup failed. Check server logs.', { reply_markup: adminBackKeyboard() });
@@ -4505,11 +4589,14 @@ bot.on('text', async ctx => {
 
             if (as.step === 'broadcast_media') {
                 if (text.toLowerCase() === 'skip') {
-                    // adminSessions already deleted at top — proceed to link prompt
+                    // No media — proceed to link prompt
+                    await ctx.reply('Include a link button?', { reply_markup: broadcastLinkKeyboard() });
+                } else if (text.toLowerCase() === 'done') {
+                    // Done adding media — proceed to link prompt
                     await ctx.reply('Include a link button?', { reply_markup: broadcastLinkKeyboard() });
                 } else {
                     adminSessions.set(chatId, as); // restore for retry
-                    await ctx.reply('❌ Please send an image/video file, or type "skip" to continue without media.');
+                    await ctx.reply('❌ Please send an image/video file, or type "done" to finish, or "skip" for no media.');
                 }
                 return;
             }

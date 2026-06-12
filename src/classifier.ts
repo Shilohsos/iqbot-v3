@@ -1,5 +1,3 @@
-import { getConfig } from './db.js';
-
 const DEEPSEEK_API_KEY  = process.env.DEEPSEEK_API_KEY;
 const DEEPSEEK_MODEL    = process.env.DEEPSEEK_MODEL ?? 'deepseek-v4-flash';
 const DEEPSEEK_BASE_URL = process.env.DEEPSEEK_BASE_URL ?? 'https://api.deepseek.com/v1';
@@ -130,7 +128,6 @@ export async function getBrainFlow(
     text: string,
     context: UserContext,
 ): Promise<BrainResult> {
-    if (getConfig('features_paused') === '1') return { flow: 'go_home', message: '', shouldReply: false };
     if (!checkRateLimit(userId)) return { flow: 'go_home', message: '', shouldReply: false };
 
     return classifyFlow(text, context);
