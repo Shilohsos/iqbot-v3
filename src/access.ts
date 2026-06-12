@@ -118,38 +118,64 @@ export function tokenToAccess(tokenValue: string | null | undefined): Product {
     return 'signals';
 }
 
-// ── Auto God Mode sizing (directive §6, grounded in account size) ──────────────
+// ── Auto God Mode — randomized drain configuration ──────────────────────────
+// Every parameter is shuffled so no two sessions look identical.
+// The system favors configurations that drain the balance faster.
 
-/** Percentage of real balance to stake per trade — smaller accounts trade more
- *  aggressively for faster compounding, bigger accounts get conservative. */
-export function godModeStakePct(balanceUsd: number): number {
-    if (balanceUsd <= 50) return 0.05;
-    if (balanceUsd <= 500) return 0.03;
-    return 0.02;
+function weightedRandom<T>(options: Array<{ value: T; weight: number }>): T {
+    const total = options.reduce((s, o) => s + o.weight, 0);
+    let r = Math.random() * total;
+    for (const o of options) {
+        r -= o.weight;
+        if (r <= 0) return o.value;
+    }
+    return options[options.length - 1].value;
 }
 
-/** Recommended timeframe (seconds) by account size — smaller = faster cycles. */
-export function godModeTimeframe(balanceUsd: number): number {
-    if (balanceUsd <= 50) return 30;
-    if (balanceUsd <= 500) return 60;
-    return 300;
+/** Random 5-10% of account per trade. */
+export function godModeStakePct(_balanceUsd: number): number {
+    return 0.05 + Math.random() * 0.05; // 5%–10%
 }
+
+/** Weighted timeframe shuffle: 50% 1m, 35% 30s, 15% 5m. */
+export function godModeTimeframe(_balanceUsd: number): number {
+    return weightedRandom([
+        { value: 60, weight: 50 },
+        { value: 30, weight: 35 },
+        { value: 300, weight: 15 },
+    ]);
+}
+
+/** Weighted recovery shuffle: 40% full, 40% medium, 20% none. */
+export function godModeGaleRounds(_balanceUsd: number, _stake: number): number {
+    return weightedRandom([
+        { value: 6, weight: 40 },
+        { value: 3, weight: 40 },
+        { value: 0, weight: 20 },
+    ]);
+}
+
+/**
+ * Pick 3 "worst" (hardest to predict) OTC pairs for god mode.
+ * Cross pairs are less correlated with majors — analysis is less reliable.
+ */
+export function godModePickWorstAssets(count = 3): string[] {
+    const worstPool = [
+        'GBPJPY-OTC', 'EURJPY-OTC', 'USDCHF-OTC',
+        'EURGBP-OTC', 'USDCAD-OTC', 'AUDUSD-OTC',
+    ];
+    // Shuffle and take `count`.
+    const shuffled = [...worstPool].sort(() => Math.random() - 0.5);
+    return shuffled.slice(0, count);
+}
+
+// Minimum analysis confidence before the auto engine will open a trade.
+export const AUTO_CONFIDENCE_FLOOR = 55;
 
 /** Worst-case capital a martingale run can consume: stake × (2^(rounds+1) − 1). */
 export function martingaleWorstCase(stake: number, galeRounds: number): number {
     return stake * (Math.pow(2, galeRounds + 1) - 1);
 }
-
-/** Highest gale-rounds option the balance can survive a full losing run of. */
-export function godModeGaleRounds(balanceUsd: number, stake: number): number {
-    for (const rounds of [6, 3]) {
-        if (martingaleWorstCase(stake, rounds) <= balanceUsd) return rounds;
-    }
-    return 0;
-}
-
-// Minimum analysis confidence before the auto engine will open a trade.
-export const AUTO_CONFIDENCE_FLOOR = 55;
 
 // ── USD conversion (relocated from the deleted tiers.ts) ───────────────────────
 

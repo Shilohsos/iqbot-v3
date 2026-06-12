@@ -8,7 +8,7 @@ import { sdkPool } from './sdk-pool.js';
 import {
     resolveAccess, getProductConfig, hasAccess, getProduct, convertToUsd, tokenToAccess,
     AI_TRADING_MIN_USD, AUTO_TRADING_MIN_USD, FREE_SIGNALS_PER_DAY, ALL_PAIRS,
-    godModeStakePct, godModeTimeframe, godModeGaleRounds, martingaleWorstCase,
+    godModeStakePct, godModeTimeframe, godModeGaleRounds, martingaleWorstCase, godModePickWorstAssets,
 } from './access.js';
 import { autoEngine, initAutoEngine } from './auto-trading.js';
 import {
@@ -1557,10 +1557,10 @@ bot.action(/^upgrade:pair:(.+)$/, async ctx => { await ctx.answerCbQuery(); awai
 
 function galeKeyboard() {
     return { inline_keyboard: [
-        [{ text: '⚡ No Recovery (single trade)',   callback_data: 'gale:0' }],
-        [{ text: '🔁 Medium — 3 recovery rounds',   callback_data: 'gale:3' }],
-        [{ text: '🔁🔁 Full — 6 recovery rounds',   callback_data: 'gale:6' }],
-        [{ text: '🔙 Cancel',                        callback_data: 'wizard:cancel' }],
+        [{ text: '1️⃣ Single Trade — No Recovery',   callback_data: 'gale:0' }],
+        [{ text: '3️⃣ Medium — 3 Recovery Rounds',    callback_data: 'gale:3' }],
+        [{ text: '6️⃣ Full — 6 Recovery Rounds',      callback_data: 'gale:6' }],
+        [{ text: '🔙 Cancel',                          callback_data: 'wizard:cancel' }],
     ] };
 }
 
@@ -1749,7 +1749,7 @@ bot.action(/^gale:(\d+)$/, async ctx => {
 
         // Fire trade in background — don't block the update pipeline.
         // gale=0 → single trade (1 round total, 0 recovery); gale=3 or 6 → full recovery.
-        const martingaleRounds = (gale && gale > 0) ? gale : 1;
+        const martingaleRounds = (gale != null) ? gale : 1;
         logger.trade('executing', pair, ctx.from!.id, `$${amount} ${tfLabel(timeframe)} ${mode}`);
         const tradePromise = runMartingale(ctx, ssid, pair, analysis.direction, amount, timeframe, (mode ?? 'live') as 'demo' | 'live', martingaleRounds, preTradeMessageIds, sdk, useCur)
             .catch(err => {
@@ -2150,8 +2150,10 @@ function autoTimeframeKeyboard(): { inline_keyboard: Array<Array<{ text: string;
 
 function autoGaleKeyboard(): { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> } {
     return { inline_keyboard: [
-        [{ text: 'None', callback_data: 'agale:0' }, { text: '3 rounds', callback_data: 'agale:3' }, { text: '6 rounds', callback_data: 'agale:6' }],
-        [{ text: '❌ Cancel', callback_data: 'acancel' }],
+        [{ text: '1️⃣ Single Trade — No Recovery',   callback_data: 'agale:0' }],
+        [{ text: '3️⃣ Medium — 3 Recovery Rounds',    callback_data: 'agale:3' }],
+        [{ text: '6️⃣ Full — 6 Recovery Rounds',      callback_data: 'agale:6' }],
+        [{ text: '❌ Cancel',                          callback_data: 'acancel' }],
     ] };
 }
 
@@ -2338,9 +2340,8 @@ bot.action('auto:god', async ctx => {
         const stakeUsd = usd * pct;
         const timeframe = godModeTimeframe(usd);
         const gale = godModeGaleRounds(usd, stakeUsd);
-        // Pick 3 assets from precomputed win rates (no live 8-pair scan — directive §9.3).
-        const picks = getTopPicks();
-        const assets = picks.length >= 3 ? picks.slice(0, 3).map(p => p.pair) : ALL_PAIRS.slice(0, 3);
+        // Pick 3 worst-performing (hardest to predict) OTC pairs for god mode.
+        const assets = godModePickWorstAssets(3);
 
         autoWizSessions.set(ctx.chat!.id, { step: 'confirm', currency, amount: stakeNative, assets, timeframe, gale });
 
@@ -2920,7 +2921,7 @@ bot.action('admin:tokens', async ctx => {
             const expired = new Date(t.expires_at) < now;
             const status = t.used_by ? '✅ Used' : expired ? '❌ Expired' : '⏳ Unused';
             const hoursLeft = expired ? 0 : Math.round((new Date(t.expires_at).getTime() - now.getTime()) / 3_600_000);
-            msg += `• \`${t.token}\` — ${t.tier} — ${status}${!t.used_by && !expired ? ` (${hoursLeft}h left)` : ''}\n`;
+            msg += `• \`${t.token}\` — ${escapeMdLegacy(t.tier)} — ${status}${!t.used_by && !expired ? ` (${hoursLeft}h left)` : ''}\n`;
         }
     }
     await ctx.reply(msg, { parse_mode: 'Markdown', reply_markup: generateTokenKeyboard() });
