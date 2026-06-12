@@ -1957,20 +1957,24 @@ bot.action(/^stf:(\d+)$/, async ctx => {
     const dirEmoji = analysis.direction === 'call' ? '🟢' : '🔴';
     const dirLabel = analysis.direction.toUpperCase();
     const tfLabelShort = tfLabel(timeframe);
+    // +2s grace so users can tap into IQ Option before monitoring starts
+    const GRACE_SECS = 2;
 
-    // ── Match AI Trading style: compact header → key stats → status footer ──
+    // ── Beginner-friendly template: no abbreviations, clear instructions ──
     const renderCard = (status: string) => [
-        `📡 Signal — ${pair}`,
+        `📡 ${pair} Signal`,
         ``,
-        `Dir: ${dirLabel} ${dirEmoji} · TF: ${tfLabelShort} · Acc: ${accuracy}%`,
-        `Entry: ${fmtClock(entryTime)} · Recovery: 4 rounds`,
+        `${dirLabel} ${dirEmoji} · ${tfLabelShort} expiry · ${accuracy}% confidence`,
+        ``,
+        `⏰ Enter trade at ${fmtClock(entryTime)}`,
+        `🔄 Smart Recovery: up to 4 attempts`,
         ``,
         status,
     ].join('\n');
 
     // Initial card — no "New Signal" button, only Back.
     const cardMsg = await ctx.reply(
-        renderCard(`⏳ *Preparation* — 1:00`),
+        renderCard(`⏳ *Preparing...* — 1:00`),
         { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [
             [{ text: '🔙 Back', callback_data: 'ui:start' }],
         ] } }
@@ -1980,9 +1984,9 @@ bot.action(/^stf:(\d+)$/, async ctx => {
     // so the tracking loop can edit the same message (directive: in-place edits).
     cancelActiveSignalTracks(uid);
     const toSqlite = (d: Date) => d.toISOString().replace('T', ' ').slice(0, 19);
-    // Signal expires after 60s prep + timeframe. This way the tracking loop
-    // only checks the candle AFTER the trade actually entered and expired.
-    const signalExpiry = new Date(now.getTime() + 60000 + timeframe * 1000);
+    // Expiry = 60s prep + 2s grace + timeframe. Grace gives users time to click into
+    // IQ Option after "Active" appears before candle monitoring starts.
+    const signalExpiry = new Date(now.getTime() + 60000 + GRACE_SECS * 1000 + timeframe * 1000);
     insertSignalTrack({
         telegram_id: uid, pair, direction: analysis.direction,
         timeframe, entry_time: toSqlite(now),
@@ -2000,7 +2004,7 @@ bot.action(/^stf:(\d+)$/, async ctx => {
                 const sec = remaining % 60;
                 const timeStr = `0:${sec.toString().padStart(2, '0')}`;
                 await ctx.telegram.editMessageText(chatId, cardMsg.message_id, undefined,
-                    renderCard(`⏳ *Preparation* — ${timeStr}`),
+                    renderCard(`⏳ *Preparing...* — ${timeStr}`),
                     { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [
                         [{ text: '🔙 Back', callback_data: 'ui:start' }],
                     ] } }
@@ -2010,7 +2014,7 @@ bot.action(/^stf:(\d+)$/, async ctx => {
 
         try {
             await ctx.telegram.editMessageText(chatId, cardMsg.message_id, undefined,
-                renderCard(`✅ *Active* — take the trade now`),
+                renderCard(`🟢 *ENTER NOW* — place your ${dirLabel} trade`),
                 { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [
                     [{ text: '🔙 Back', callback_data: 'ui:start' }],
                 ] } }
@@ -6097,7 +6101,7 @@ backgroundIntervals.push(setInterval(async () => {
                         // toSqlite stored "YYYY-MM-DD HH:MM:SS" (UTC). Convert to Unix seconds.
                         return Math.floor(new Date(s.replace(' ', 'T') + 'Z').getTime() / 1000);
                     };
-                    const prepSecs = sig.round === 0 ? 60 : 0;  // prep countdown only for initial signal
+                    const prepSecs = sig.round === 0 ? 62 : 0;  // 60s prep + 2s grace before monitoring
                     const tradeEntryTs = parseSqliteTs(sig.entry_time) + prepSecs;
 
                     const candles = await refSdk.candles();
@@ -6133,20 +6137,21 @@ backgroundIntervals.push(setInterval(async () => {
                     const dirEmoji = sig.direction === 'call' ? '🟢' : '🔴';
                     const dirUp = sig.direction.toUpperCase();
                     const tfShort = tfLabel(sig.timeframe);
-                    const roundLabel = `Round ${sig.round + 1}/${sig.max_rounds + 1}`;
-                    const roundsLeft = sig.max_rounds - sig.round;
+                    const attemptNum = sig.round + 1;
+                    const maxAttempts = sig.max_rounds + 1;
+                    const attemptsLeft = sig.max_rounds - sig.round;
 
-                    // ── Match AI Trading style ──────────────────────────────
+                    // ── Beginner-friendly: simple language, clear actions ──
                     let notifyText: string;
                     let isFinal: boolean;
                     if (isWin) {
                         notifyText = [
-                            `📡 Signal — ${sig.pair}`,
-                            `Dir: ${dirUp} ${dirEmoji} · TF: ${tfShort} · ${roundLabel}`,
-                            `Recovery: ${roundsLeft} rounds left`,
+                            `📡 ${sig.pair}`,
                             ``,
-                            `🟢 *WON*`,
-                            `Ready for your next signal.`,
+                            `${dirUp} ${dirEmoji} · ${tfShort} · Attempt ${attemptNum}/${maxAttempts}`,
+                            ``,
+                            `🟢 *Won!*`,
+                            `Ready for the next signal.`,
                         ].join('\n');
                         isFinal = true;
                     } else if (sig.round < sig.max_rounds) {
@@ -6163,23 +6168,22 @@ backgroundIntervals.push(setInterval(async () => {
                             card_msg_id: sig.card_msg_id ?? undefined,
                         });
                         notifyText = [
-                            `📡 Signal — ${sig.pair}`,
-                            `Dir: ${dirUp} ${dirEmoji} · TF: ${tfShort} · ${roundLabel}`,
-                            `Recovery: ${roundsLeft} rounds left`,
+                            `📡 ${sig.pair}`,
                             ``,
-                            `🔴 *LOST* — Re-enter now`,
-                            `Asset: ${sig.pair} · Direction: ${dirUp}`,
-                            `Amount: 2× last entry · Expiry: ${tfShort}`,
+                            `${dirUp} ${dirEmoji} · ${tfShort} · Attempt ${attemptNum}/${maxAttempts}`,
+                            ``,
+                            `🔴 *Lost* — re-enter now!`,
+                            `Same direction (${dirUp}), double your amount.`,
                         ].join('\n');
                         isFinal = false;
                     } else {
                         notifyText = [
-                            `📡 Signal — ${sig.pair}`,
-                            `Dir: ${dirUp} ${dirEmoji} · TF: ${tfShort}`,
-                            `All ${sig.max_rounds + 1} rounds exhausted`,
+                            `📡 ${sig.pair}`,
                             ``,
-                            `🔴 Signal Finished`,
-                            `Take a break — try a fresh signal.`,
+                            `${dirUp} ${dirEmoji} · ${tfShort} · All ${maxAttempts} attempts done`,
+                            ``,
+                            `🔴 Signal finished`,
+                            `Take a break — try again later.`,
                         ].join('\n');
                         isFinal = true;
                     }
