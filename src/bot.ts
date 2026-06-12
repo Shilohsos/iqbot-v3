@@ -6041,29 +6041,38 @@ backgroundIntervals.push(setInterval(async () => {
     }
 }, 600_000));
 
-// ─── Signal result tracking (checks expired signals every 30s) ───────────────
-// Uses sdkPool with a stable 'signal_admin' key to avoid creating a new SDK
-// connection every tick (directive §8 — admin SDK efficiency).
-
-const SIGNAL_ADMIN_KEY = 0; // sentinel pool key for the admin SSID slot
+// ─── Signal result tracking (checks expired signals every 15s) ───────────────
+// Uses the SDK of the user whose signal expired (their SSID is fresh since they
+// just generated a signal). Market data is not user-specific so the same SDK
+// can check candles for all expired signals in this tick.
 
 backgroundIntervals.push(setInterval(async () => {
     try {
         const expired = getExpiredActiveSignals();
         if (expired.length === 0) return;
 
-        const adminSsid = process.env.IQ_SSID;
-        if (!adminSsid) return;
+        // Find the first expired signal whose user has a valid SSID
+        let refUser = null;
+        let refSsid = null;
+        for (const sig of expired) {
+            const u = getUser(sig.telegram_id);
+            if (u?.ssid) { refUser = u; refSsid = u.ssid; break; }
+        }
+        if (!refUser || !refSsid) {
+            logger.warn('signal-track', 'no users with valid SSID among expired signals');
+            return;
+        }
 
-        let sdk: Awaited<ReturnType<typeof sdkPool.get>> | null = null;
+        let refSdk: Awaited<ReturnType<typeof sdkPool.get>> | null = null;
         try {
-            sdk = await sdkPool.get(SIGNAL_ADMIN_KEY, adminSsid);
-        } catch {
-            return; // skip tick if SDK unavailable
+            refSdk = await sdkPool.get(refUser.telegram_id, refSsid);
+        } catch (err) {
+            logger.warn('signal-track', `failed to get SDK for user ${refUser.telegram_id}: ${err instanceof Error ? err.message : err}`);
+            return;
         }
 
         try {
-            const blitz = await sdk.blitzOptions();
+            const blitz = await refSdk.blitzOptions();
             const actives = blitz.getActives();
             const norm = (s: string) => s.toUpperCase().replace(/^front\./i, '').replace(/[-\/\s]/g, '');
             const toSqlite = (d: Date) => d.toISOString().replace('T', ' ').slice(0, 19);
@@ -6071,11 +6080,19 @@ backgroundIntervals.push(setInterval(async () => {
             for (const sig of expired) {
                 try {
                     const active = actives.find(a => norm(a.ticker) === norm(sig.pair));
-                    if (!active) { updateSignalTrackResult(sig.id, 'lost', 'unknown_pair'); continue; }
+                    if (!active) {
+                        updateSignalTrackResult(sig.id, 'lost', 'unknown_pair');
+                        logger.warn('signal-track', `signal #${sig.id}: unknown pair ${sig.pair}`);
+                        continue;
+                    }
 
-                    const candles = await sdk.candles();
+                    const candles = await refSdk.candles();
                     const history = await candles.getCandles(active.id, sig.timeframe, { count: 2 });
-                    if (history.length < 2) { updateSignalTrackResult(sig.id, 'lost', 'no_data'); continue; }
+                    if (history.length < 2) {
+                        updateSignalTrackResult(sig.id, 'lost', 'no_data');
+                        logger.warn('signal-track', `signal #${sig.id}: no candle data for ${sig.pair}`);
+                        continue;
+                    }
 
                     const openPrice = history[0].open;
                     const closePrice = history[1].close;
@@ -6086,6 +6103,7 @@ backgroundIntervals.push(setInterval(async () => {
                     const result = isWin ? 'price_moved_favor' : 'price_moved_against';
 
                     updateSignalTrackResult(sig.id, status, result);
+                    logger.info('signal-track', `signal #${sig.id} user ${sig.telegram_id} ${sig.pair} ${sig.direction} → ${status} (open=${openPrice}, close=${closePrice})`);
 
                     // Martingale auto-progression: insert next round record on loss
                     let notifyText: string;
@@ -6107,19 +6125,21 @@ backgroundIntervals.push(setInterval(async () => {
                         notifyText = `🔴 *SIGNAL LOST.* All ${sig.max_rounds + 1} rounds exhausted.\n\nTake a break and try a fresh signal.`;
                     }
 
-                    try { await bot.telegram.sendMessage(sig.telegram_id, notifyText, { parse_mode: 'Markdown' }); } catch {}
+                    try { await bot.telegram.sendMessage(sig.telegram_id, notifyText, { parse_mode: 'Markdown' }); } catch (e) {
+                        logger.warn('signal-track', `sendMessage failed for user ${sig.telegram_id}: ${e instanceof Error ? e.message : e}`);
+                    }
                 } catch (err) {
                     logger.warn('signal-track', `error checking signal ${sig.id}: ${err instanceof Error ? err.message : err}`);
                     updateSignalTrackResult(sig.id, 'lost', 'check_error');
                 }
             }
         } finally {
-            sdkPool.release(SIGNAL_ADMIN_KEY);
+            sdkPool.release(refUser.telegram_id);
         }
     } catch (err) {
         logger.error('signal-track', `loop error: ${err instanceof Error ? err.message : err}`);
     }
-}, 30000));
+}, 15000));
 
 // ─── Admin Analysis (single-timeframe, 6-indicator, 70 candles) ───────────────
 
