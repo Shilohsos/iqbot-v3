@@ -129,6 +129,16 @@ if (!finalUserCols.includes('onboarding_state'))
 if (!finalUserCols.includes('pidgin_enabled'))
     db.exec('ALTER TABLE users ADD COLUMN pidgin_enabled INTEGER NOT NULL DEFAULT 0');
 
+// Product access model (replaces tier system — directive: product restructure)
+if (!finalUserCols.includes('access_level'))
+    db.exec("ALTER TABLE users ADD COLUMN access_level TEXT NOT NULL DEFAULT 'signals'");
+if (!finalUserCols.includes('signals_used_today'))
+    db.exec('ALTER TABLE users ADD COLUMN signals_used_today INTEGER NOT NULL DEFAULT 0');
+if (!finalUserCols.includes('signals_date'))
+    db.exec('ALTER TABLE users ADD COLUMN signals_date TEXT');
+if (!finalUserCols.includes('funded_balance_usd'))
+    db.exec('ALTER TABLE users ADD COLUMN funded_balance_usd REAL NOT NULL DEFAULT 0');
+
 // onboarding_tracking lazy migration — add last_followup_msg_id for existing DBs
 try {
     const otCols = (db.prepare("PRAGMA table_info(onboarding_tracking)").all() as { name: string }[]).map(r => r.name);
@@ -151,6 +161,35 @@ try {
 
 // V4 tier migration: NEWBIE → DEMO (run-once, idempotent)
 db.prepare("UPDATE users SET tier = 'DEMO' WHERE tier = 'NEWBIE'").run();
+
+// Product-restructure migration: map legacy tiers onto access levels (directive §7).
+// Idempotent — only touches rows still sitting at the default 'signals' so we never
+// stomp an access level that a balance check or token grant has since raised.
+try {
+    db.prepare(
+        "UPDATE users SET access_level = 'ai_trading' WHERE tier IN ('PRO','MASTER','ADMIN') AND access_level = 'signals'"
+    ).run();
+} catch {}
+
+// Auto Trading session persistence (directive §5.5). One active session per user.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS auto_trading_sessions (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    telegram_id         INTEGER NOT NULL UNIQUE,
+    currency            TEXT    NOT NULL,
+    amount              REAL    NOT NULL,
+    assets              TEXT    NOT NULL,            -- JSON array of asset names
+    timeframe           INTEGER NOT NULL,
+    gale_rounds         INTEGER NOT NULL DEFAULT 3,
+    status              TEXT    NOT NULL DEFAULT 'running', -- running | paused | stopped
+    current_asset_index INTEGER NOT NULL DEFAULT 0,
+    trades_done         INTEGER NOT NULL DEFAULT 0,
+    pnl                 REAL    NOT NULL DEFAULT 0,
+    last_error          TEXT,
+    started_at          TEXT    NOT NULL DEFAULT (datetime('now')),
+    last_trade_at       TEXT
+  )
+`);
 
 // ─── Templates, media library, onboarding tracking ───────────────────────────
 
@@ -718,6 +757,27 @@ export interface UserRecord {
     pidgin_enabled?: number;
     analysis_candles?: number | null;
     display_confidence_min?: number | null;
+    access_level?: string | null;
+    signals_used_today?: number | null;
+    signals_date?: string | null;
+    funded_balance_usd?: number | null;
+}
+
+export interface AutoTradingSession {
+    id: number;
+    telegram_id: number;
+    currency: string;
+    amount: number;
+    assets: string;            // JSON array
+    timeframe: number;
+    gale_rounds: number;
+    status: 'running' | 'paused' | 'stopped';
+    current_asset_index: number;
+    trades_done: number;
+    pnl: number;
+    last_error?: string | null;
+    started_at?: string;
+    last_trade_at?: string | null;
 }
 
 export function saveUserCurrency(telegramId: number, currency: string): void {
@@ -856,6 +916,100 @@ export function clearReconnectPrompt(telegramId: number): void {
 
 export function setUserTier(telegramId: number, tier: string): void {
     db.prepare('UPDATE users SET tier = ? WHERE telegram_id = ?').run(tier, telegramId);
+}
+
+// ── Product access model ───────────────────────────────────────────────────────
+
+export function setUserAccessLevel(telegramId: number, accessLevel: string): void {
+    db.prepare('UPDATE users SET access_level = ? WHERE telegram_id = ?').run(accessLevel, telegramId);
+}
+
+/** Cache the user's funded USD balance and (optionally) bump their access level. */
+export function setUserFundedBalance(telegramId: number, fundedUsd: number, accessLevel?: string): void {
+    if (accessLevel) {
+        db.prepare('UPDATE users SET funded_balance_usd = ?, access_level = ? WHERE telegram_id = ?')
+            .run(fundedUsd, accessLevel, telegramId);
+    } else {
+        db.prepare('UPDATE users SET funded_balance_usd = ? WHERE telegram_id = ?').run(fundedUsd, telegramId);
+    }
+}
+
+/**
+ * Returns the user's signal usage for today, resetting the counter when the
+ * stored date is not today. `used` is post-reset, so callers can compare against
+ * the daily cap directly.
+ */
+export function getSignalUsage(telegramId: number): { used: number; date: string } {
+    const today = new Date().toISOString().slice(0, 10);
+    const row = db.prepare('SELECT signals_used_today, signals_date FROM users WHERE telegram_id = ?')
+        .get(telegramId) as { signals_used_today?: number; signals_date?: string } | undefined;
+    if (!row || row.signals_date !== today) {
+        db.prepare("UPDATE users SET signals_used_today = 0, signals_date = ? WHERE telegram_id = ?")
+            .run(today, telegramId);
+        return { used: 0, date: today };
+    }
+    return { used: row.signals_used_today ?? 0, date: today };
+}
+
+/** Increment today's signal counter (resetting first if the date rolled over). */
+export function incrementSignalUsage(telegramId: number): number {
+    const { used } = getSignalUsage(telegramId);
+    const next = used + 1;
+    db.prepare('UPDATE users SET signals_used_today = ? WHERE telegram_id = ?').run(next, telegramId);
+    return next;
+}
+
+/** Total signals consumed across all users today — for the admin panel. */
+export function getTotalSignalsToday(): number {
+    const today = new Date().toISOString().slice(0, 10);
+    const row = db.prepare('SELECT COALESCE(SUM(signals_used_today), 0) AS n FROM users WHERE signals_date = ?')
+        .get(today) as { n: number };
+    return row.n;
+}
+
+// ── Auto Trading sessions ──────────────────────────────────────────────────────
+
+export function upsertAutoSession(s: {
+    telegram_id: number; currency: string; amount: number; assets: string[];
+    timeframe: number; gale_rounds: number;
+}): void {
+    db.prepare(`
+        INSERT INTO auto_trading_sessions
+            (telegram_id, currency, amount, assets, timeframe, gale_rounds, status,
+             current_asset_index, trades_done, pnl, last_error, started_at, last_trade_at)
+        VALUES (@telegram_id, @currency, @amount, @assets, @timeframe, @gale_rounds, 'running',
+                0, 0, 0, NULL, datetime('now'), NULL)
+        ON CONFLICT(telegram_id) DO UPDATE SET
+            currency = excluded.currency, amount = excluded.amount, assets = excluded.assets,
+            timeframe = excluded.timeframe, gale_rounds = excluded.gale_rounds,
+            status = 'running', current_asset_index = 0, trades_done = 0, pnl = 0,
+            last_error = NULL, started_at = datetime('now'), last_trade_at = NULL
+    `).run({ ...s, assets: JSON.stringify(s.assets) });
+}
+
+export function getAutoSession(telegramId: number): AutoTradingSession | undefined {
+    return db.prepare('SELECT * FROM auto_trading_sessions WHERE telegram_id = ?')
+        .get(telegramId) as AutoTradingSession | undefined;
+}
+
+export function getRunningAutoSessions(): AutoTradingSession[] {
+    return db.prepare("SELECT * FROM auto_trading_sessions WHERE status = 'running'")
+        .all() as AutoTradingSession[];
+}
+
+export function setAutoSessionStatus(telegramId: number, status: 'running' | 'paused' | 'stopped', lastError?: string | null): void {
+    db.prepare('UPDATE auto_trading_sessions SET status = ?, last_error = ? WHERE telegram_id = ?')
+        .run(status, lastError ?? null, telegramId);
+}
+
+/** Persist progress after a settled run: advance the asset cursor and accumulate stats. */
+export function recordAutoSessionTrade(telegramId: number, nextAssetIndex: number, pnlDelta: number): void {
+    db.prepare(`
+        UPDATE auto_trading_sessions
+        SET current_asset_index = ?, trades_done = trades_done + 1,
+            pnl = pnl + ?, last_trade_at = datetime('now')
+        WHERE telegram_id = ?
+    `).run(nextAssetIndex, pnlDelta, telegramId);
 }
 
 export function getAllUsers(): UserRecord[] {
