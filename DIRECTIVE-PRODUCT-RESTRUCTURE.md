@@ -396,6 +396,19 @@ Each product has its own submenu when tapped.
 
 ---
 
+## Section 9: Claude's Open Questions — Master's Answers
+
+### 9.1 Daily loss cap
+**Master: No.** No daily loss cap. Auto Trading runs without a stop-loss limit.
+
+### 9.2 Manual + Auto simultaneously
+**Master: Can allow.** Users can run AI Trading (manual) while Auto Trading is active. The only guard is the existing 1-position-at-a-time rule per asset.
+
+### 9.3 God Mode asset scan
+**Master: No. Auto or God Mode only scans 3 assets max.** Either the user manually picks 3, or God Mode selects 3 for them. No 8-pair scan.
+
+---
+
 ## Claude's Freedom
 
 **Add whatever you think will make this better.** If you see edge cases, UX improvements, or technical refinements that Master didn't explicitly mention but would appreciate — implement them. Use your judgment on:
