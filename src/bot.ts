@@ -1830,7 +1830,7 @@ bot.action('ui:trade', async ctx => {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const DEPOSIT_URL = 'https://iqoption.com/pwa/payments/deposit';
-const fmtClock = (d: Date) => d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+const fmtClock = (d: Date) => d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'Africa/Lagos' });
 
 async function sendAiTradingLock(ctx: Context): Promise<void> {
     await ctx.reply(
