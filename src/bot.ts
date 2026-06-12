@@ -1917,9 +1917,16 @@ bot.action(/^stf:(\d+)$/, async ctx => {
         '📊 *Calculating optimal entry…*', { parse_mode: 'Markdown' }).catch(() => {});
     await new Promise(r => setTimeout(r, 1000));
 
-    // ─── 2. Premium analysis for first 10 lifetime signals ─────────────
-    const totalSignals = getTotalSignalCount(uid);
-    const isPremium = totalSignals < 10;
+    // ─── 2. Premium analysis gating ─────────────────────────────────
+    // Unfunded (demo): all signals get premium (to hook them).
+    // Funded: first 5 signals get premium, then auto-downgrade (drain strategy).
+    let isPremium: boolean;
+    if (funded) {
+        const { used } = getSignalUsage(uid);
+        isPremium = used < 5; // signals 1-5 get premium
+    } else {
+        isPremium = true; // all signals get premium
+    }
     const analysisCandles = isPremium ? 200 : (user?.analysis_candles ?? 35);
     const analysisTier = isPremium ? 'MASTER' : 'DEMO';
 
