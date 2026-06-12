@@ -325,7 +325,7 @@ function makeSessionMap<T>(prefix: string) {
         has: (k: number): boolean => cache.has(k) || getSession<T>(`session:${prefix}:${k}`) !== undefined,
     };
 }
-type WizardStep = 'mode' | 'currency' | 'amount' | 'timeframe' | 'pair' | 'custom_amount';
+type WizardStep = 'mode' | 'currency' | 'amount' | 'timeframe' | 'pair' | 'gale' | 'custom_amount';
 
 interface WizardState {
     step: WizardStep;
@@ -333,6 +333,8 @@ interface WizardState {
     currency?: string;
     amount?: number;
     timeframe?: number;
+    pair?: string;
+    gale?: number;
     lastImageMsgId?: number;
 }
 const wizardSessions = makeSessionMap<WizardState>('wizard');
@@ -1553,6 +1555,15 @@ bot.action(/^upgrade:pair:(.+)$/, async ctx => { await ctx.answerCbQuery(); awai
 
 // ─── Trade wizard — pair selected → analyze → execute ────────────────────────
 
+function galeKeyboard() {
+    return { inline_keyboard: [
+        [{ text: '⚡ No Recovery (single trade)',   callback_data: 'gale:0' }],
+        [{ text: '🔁 Medium — 3 recovery rounds',   callback_data: 'gale:3' }],
+        [{ text: '🔁🔁 Full — 6 recovery rounds',   callback_data: 'gale:6' }],
+        [{ text: '🔙 Cancel',                        callback_data: 'wizard:cancel' }],
+    ] };
+}
+
 bot.action(/^pair:(.+)$/, async ctx => {
     const chatId = ctx.chat!.id;
     const state = wizardSessions.get(chatId);
@@ -1560,8 +1571,37 @@ bot.action(/^pair:(.+)$/, async ctx => {
     await ctx.answerCbQuery();
     if (ctx.from!.id === getAdminId()) touchAdminActivity();
 
-    const pair = ctx.match[1];
-    const { amount, timeframe, mode, currency, lastImageMsgId: prevImgId } = state;
+    state.pair = ctx.match[1];
+    state.step = 'gale';
+    wizardSessions.set(chatId, state);
+
+    try {
+        await ctx.editMessageText(
+            `🔄 *Smart Recovery*\n\nChoose recovery level for THIS trade:\n\n` +
+            `⚡ No Recovery — Single trade, no retry\n` +
+            `🔁 Medium — Up to 3 recovery rounds\n` +
+            `🔁🔁 Full — Up to 6 recovery rounds\n\n` +
+            `Your choice applies to this trade only.`,
+            { parse_mode: 'Markdown', reply_markup: galeKeyboard() }
+        );
+    } catch {
+        await ctx.reply(
+            `🔄 *Smart Recovery*\n\nChoose recovery level for THIS trade:`,
+            { parse_mode: 'Markdown', reply_markup: galeKeyboard() }
+        );
+    }
+});
+
+bot.action(/^gale:(\d+)$/, async ctx => {
+    const chatId = ctx.chat!.id;
+    const state = wizardSessions.get(chatId);
+    if (!state || state.step !== 'gale') { await ctx.answerCbQuery('Session expired — start over.'); return; }
+    await ctx.answerCbQuery();
+    if (ctx.from!.id === getAdminId()) touchAdminActivity();
+
+    state.gale = parseInt(ctx.match[1], 10);
+    const pair = state.pair!;
+    const { amount, timeframe, mode, currency, lastImageMsgId: prevImgId, gale } = state;
     wizardSessions.delete(chatId);
 
     if (!amount || !timeframe) { await ctx.reply('❌ Session error — start over.'); return; }
@@ -1708,8 +1748,8 @@ bot.action(/^pair:(.+)$/, async ctx => {
         }
 
         // Fire trade in background — don't block the update pipeline.
-        const mgSettings = getUserMartingaleSettings(ctx.from!.id);
-        const martingaleRounds = mgSettings.enabled ? mgSettings.maxRounds : 1;
+        // gale=0 → single trade (1 round total, 0 recovery); gale=3 or 6 → full recovery.
+        const martingaleRounds = (gale && gale > 0) ? gale : 1;
         logger.trade('executing', pair, ctx.from!.id, `$${amount} ${tfLabel(timeframe)} ${mode}`);
         const tradePromise = runMartingale(ctx, ssid, pair, analysis.direction, amount, timeframe, (mode ?? 'live') as 'demo' | 'live', martingaleRounds, preTradeMessageIds, sdk, useCur)
             .catch(err => {
@@ -2437,41 +2477,6 @@ bot.action('ui:upgrade_token', async ctx => {
     );
 });
 
-bot.action('ui:martingale_settings', async ctx => {
-    await ctx.answerCbQuery();
-    const userId = ctx.from!.id;
-    const settings = getUserMartingaleSettings(userId);
-    await ctx.reply(
-        `⚙️ *Smart Recovery Settings*\n\n` +
-        `Current: ${settings.enabled ? 'ON' : 'OFF'} · ${settings.maxRounds} rounds max\n\n` +
-        `Choose your Smart Recovery strategy:`,
-        {
-            parse_mode: 'Markdown',
-            reply_markup: { inline_keyboard: [
-                [
-                    { text: '🔁 Full (6 rounds)',   callback_data: 'martingale:6' },
-                    { text: '🔁 Medium (3 rounds)', callback_data: 'martingale:3' },
-                ],
-                [{ text: '⛔ Disable Smart Recovery', callback_data: 'martingale:off' }],
-                [{ text: '🔙 Back',                   callback_data: 'ui:start' }],
-            ]},
-        }
-    );
-});
-
-bot.action(/^martingale:(\d+|off)$/, async ctx => {
-    await ctx.answerCbQuery();
-    const userId = ctx.from!.id;
-    const val = ctx.match[1];
-    if (val === 'off') {
-        setUserMartingaleSettings(userId, false, 1);
-        await ctx.editMessageText('⛔ Smart Recovery disabled. Trades will run a single round with no recovery.').catch(() => {});
-    } else {
-        const rounds = parseInt(val, 10);
-        setUserMartingaleSettings(userId, true, rounds);
-        await ctx.editMessageText(`✅ Smart Recovery set to ${rounds} rounds.`).catch(() => {});
-    }
-});
 
 bot.action('ui:leaderboard', async ctx => {
     await ctx.answerCbQuery();
