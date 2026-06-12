@@ -132,6 +132,79 @@ export function createSdk(ssid: string): Promise<ClientSdk> {
     return ClientSdk.create(WS_URL, PLATFORM_ID, new SsidAuthMethod(ssid), { host: IQ_HOST });
 }
 
+export interface MartingaleParams {
+    pair: string;
+    direction: 'call' | 'put';
+    amount: number;
+    timeframeSec: number;
+    galeRounds: number;            // 0 = no recovery (single trade)
+    balanceType: 'demo' | 'live';
+    telegramId?: number;
+    cooldownMs?: number;           // wait between recovery rounds
+}
+
+export interface MartingaleRoundInfo {
+    round: number;                 // 1-based
+    amount: number;
+    result: TradeResult;
+}
+
+export interface MartingaleOutcome {
+    status: 'WIN' | 'LOSS' | 'TIE' | 'ERROR' | 'TIMEOUT';
+    totalPnl: number;
+    rounds: number;                // rounds actually executed
+}
+
+/**
+ * UI-free martingale runner: executes a trade on an already-connected SDK and
+ * doubles the stake on loss until a win/tie, an error, or `galeRounds` recovery
+ * rounds are exhausted. Shared execution primitive (`executeTradeWithSdk`) with
+ * the Telegram-coupled runMartingale in bot.ts. The optional `onRound` callback
+ * lets callers render progress without this function knowing about Telegram.
+ */
+export async function runMartingaleCore(
+    sdk: ClientSdk,
+    params: MartingaleParams,
+    onRound?: (info: MartingaleRoundInfo) => void | Promise<void>,
+): Promise<MartingaleOutcome> {
+    const runId = crypto.randomUUID();
+    const cooldownMs = params.cooldownMs ?? 2000;
+    let currentAmount = params.amount;
+    let totalPnl = 0;
+
+    for (let round = 1; round <= params.galeRounds + 1; round++) {
+        const roundTrade: TradeRequest = {
+            pair: params.pair,
+            direction: params.direction,
+            amount: currentAmount,
+            martingaleRunId: runId,
+            timeframeSec: params.timeframeSec,
+            balanceType: params.balanceType,
+            telegramId: params.telegramId,
+        };
+
+        const result = await executeTradeWithSdk(sdk, roundTrade);
+        await onRound?.({ round, amount: currentAmount, result });
+
+        if (result.status === 'WIN' || result.status === 'TIE') {
+            totalPnl += result.status === 'WIN' ? result.pnl : 0;
+            return { status: result.status, totalPnl, rounds: round };
+        }
+        if (result.status === 'ERROR' || result.status === 'TIMEOUT') {
+            return { status: result.status, totalPnl, rounds: round };
+        }
+
+        // LOSS
+        totalPnl -= currentAmount;
+        if (round <= params.galeRounds) {
+            currentAmount *= 2;
+            if (cooldownMs > 0) await new Promise(r => setTimeout(r, cooldownMs));
+        }
+    }
+
+    return { status: 'LOSS', totalPnl, rounds: params.galeRounds + 1 };
+}
+
 function isTimeoutError(err: unknown): boolean {
     if (!(err instanceof Error)) return false;
     return err.name === 'TimeoutError' || err.message.includes('timed out') || err.message.includes('TimeoutError');
