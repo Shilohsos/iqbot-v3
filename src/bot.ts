@@ -6173,10 +6173,14 @@ backgroundIntervals.push(setInterval(async () => {
                         logger.warn('signal-track', `signal #${sig.id}: no candle data for ${sig.pair}`);
                         continue;
                     }
-                    // Sort by from timestamp, pick the candle whose window contains the trade entry
+                    // Sort by from timestamp, pick the candle whose window contains the trade entry.
+                    // Only consider COMPLETED candles (from + timeframe <= now) — the SDK may
+                    // return the currently-open candle with a live "close" price that is not final.
                     history.sort((a, b) => a.from - b.from);
-                    let tradeCandle = history[history.length - 1]; // default: most recent
-                    for (const c of history) {
+                    const nowSec = Math.floor(Date.now() / 1000);
+                    const completed = history.filter(c => c.from + sig.timeframe <= nowSec);
+                    let tradeCandle = completed.length > 0 ? completed[completed.length - 1] : history[history.length - 1];
+                    for (const c of completed) {
                         if (c.from <= tradeEntryTs && tradeEntryTs < c.from + sig.timeframe) {
                             tradeCandle = c;
                             break;
