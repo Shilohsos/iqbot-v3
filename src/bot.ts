@@ -5588,6 +5588,19 @@ bot.on('text', async ctx => {
         }
     }
 
+    // Auto Trading wizard — custom amount input
+    {
+        const autoWiz = autoWizSessions.get(chatId);
+        if (autoWiz && autoWiz.step === 'custom_amount') {
+            const amt = parseFloat(text);
+            if (isNaN(amt) || amt <= 0) { await ctx.reply('Please enter a valid positive number (e.g. 75).'); return; }
+            autoWiz.amount = amt;
+            autoWizSessions.set(chatId, autoWiz);
+            await advanceToAssetsMessage(ctx, autoWiz);
+            return;
+        }
+    }
+
     if (!brainWiz) {
         const brainCtx: UserContext = {
             onboarding_state: state ?? null,
@@ -5625,19 +5638,7 @@ bot.on('text', async ctx => {
         return;
     }
 
-    if (!brainWiz || brainWiz.step !== 'custom_amount') {
-        // Check auto trading wizard custom amount
-        const autoWiz = autoWizSessions.get(chatId);
-        if (autoWiz && autoWiz.step === 'custom_amount') {
-            const amt = parseFloat(text);
-            if (isNaN(amt) || amt <= 0) { await ctx.reply('Please enter a valid positive number (e.g. 75).'); return; }
-            autoWiz.amount = amt;
-            autoWizSessions.set(chatId, autoWiz);
-            await advanceToAssetsMessage(ctx, autoWiz);
-            return;
-        }
-        return;
-    }
+    if (!brainWiz || brainWiz.step !== 'custom_amount') return;
 
     const amount = parseFloat(text);
     if (isNaN(amount) || amount <= 0) { await ctx.reply('Please enter a valid positive number (e.g. 75).'); return; }
