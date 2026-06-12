@@ -409,6 +409,24 @@ Each product has its own submenu when tapped.
 
 ---
 
+## Section 10: Tier Sweep — Instructions
+
+Master says: **Do the tier removal sweep now.** Do NOT open a PR until `tiers.ts` is fully removed and all references replaced.
+
+Steps:
+1. Delete `src/tiers.ts`
+2. Replace all imports of `getTierConfig`, `normalizeTier`, `autoPromoteTier`, `TIER_CONFIGS`, `convertToUsd`, `TierConfig` across bot.ts, giveaway.ts, menu.ts, ui/user.ts, ui/admin.ts, db.ts
+3. Replace tier-based gating with product-based gating from `src/access.ts`
+4. Remove the periodic tier check loop (~bot.ts:5425-5450)
+5. Remove all auto-promotion logic in /start and /balance handlers
+6. Remove `updateLeaderboardAuto` PRO-only gate (line 1023 of db.ts)
+7. Remove `setUserTier` and related tier DB functions
+8. Build must compile clean — `npx tsc` with zero errors
+
+After tier sweep compiles clean, push the complete branch together.
+
+---
+
 ## Claude's Freedom
 
 **Add whatever you think will make this better.** If you see edge cases, UX improvements, or technical refinements that Master didn't explicitly mention but would appreciate — implement them. Use your judgment on:
@@ -417,6 +435,3 @@ Each product has its own submenu when tapped.
 - Error handling patterns
 - Performance optimization
 - Edge cases around balance detection (SDK fails, network issues, etc.)
-
-## 💾 IMPORTANT: Do NOT push this branch yet after implementation
-After implementing, commit the work and push the branch. Wizard will handle merging and deployment.
