@@ -2113,7 +2113,7 @@ bot.action('signals:cancel', async ctx => {
 // ─── Auto Trading (directive §5) ──────────────────────────────────────────────
 
 interface AutoWizState {
-    step: 'currency' | 'amount' | 'assets' | 'timeframe' | 'gale' | 'confirm';
+    step: 'currency' | 'amount' | 'custom_amount' | 'assets' | 'timeframe' | 'gale' | 'confirm';
     currency?: string;
     amount?: number;
     assets: string[];
@@ -2141,6 +2141,7 @@ function autoAmountKeyboard(currency: string): { inline_keyboard: Array<Array<{ 
     const vals = AUTO_AMOUNTS[currency] ?? AUTO_AMOUNTS.DEFAULT;
     return { inline_keyboard: [
         vals.map(v => ({ text: `${sym}${v.toLocaleString()}`, callback_data: `aamt:${v}` })),
+        [{ text: '✏️ Custom', callback_data: 'aamt:custom' }],
         [{ text: '❌ Cancel', callback_data: 'acancel' }],
     ] };
 }
@@ -2273,11 +2274,34 @@ bot.action(/^aamt:(\d+)$/, async ctx => {
     const st = autoWizSessions.get(ctx.chat!.id);
     if (!st || st.step !== 'amount') { await ctx.answerCbQuery('Session expired — start over.').catch(() => {}); return; }
     st.amount = parseInt(ctx.match[1], 10);
+    advanceToAssets(ctx, st);
+});
+
+bot.action('aamt:custom', async ctx => {
+    await ctx.answerCbQuery();
+    const st = autoWizSessions.get(ctx.chat!.id);
+    if (!st || st.step !== 'amount') { await ctx.answerCbQuery('Session expired — start over.').catch(() => {}); return; }
+    st.step = 'custom_amount';
+    autoWizSessions.set(ctx.chat!.id, st);
+    const cur = st.currency ?? 'USD';
+    const syms: Record<string, string> = { NGN: '₦', EUR: '€', GBP: '£', USD: '$' };
+    const sym = syms[cur] ?? '$';
+    await ctx.editMessageText(`✏️ Enter your custom amount in ${cur} (e.g. ${sym}75):`, { reply_markup: { inline_keyboard: [[{ text: '❌ Cancel', callback_data: 'acancel' }]] } });
+});
+
+function advanceToAssets(ctx: Context, st: AutoWizState) {
     st.step = 'assets';
     st.assets = [];
     autoWizSessions.set(ctx.chat!.id, st);
-    await ctx.editMessageText('🎯 Pick *3 assets* for the bot to trade:', { parse_mode: 'Markdown', reply_markup: autoAssetKeyboard(st.assets) });
-});
+    ctx.editMessageText('🎯 Pick *3 assets* for the bot to trade:', { parse_mode: 'Markdown', reply_markup: autoAssetKeyboard(st.assets) }).catch(() => {});
+}
+
+async function advanceToAssetsMessage(ctx: Context, st: AutoWizState) {
+    st.step = 'assets';
+    st.assets = [];
+    autoWizSessions.set(ctx.chat!.id, st);
+    await ctx.reply('🎯 Pick *3 assets* for the bot to trade:', { parse_mode: 'Markdown', reply_markup: autoAssetKeyboard(st.assets) });
+}
 
 bot.action(/^aasset:(.+)$/, async ctx => {
     await ctx.answerCbQuery();
@@ -5601,7 +5625,19 @@ bot.on('text', async ctx => {
         return;
     }
 
-    if (!brainWiz || brainWiz.step !== 'custom_amount') return;
+    if (!brainWiz || brainWiz.step !== 'custom_amount') {
+        // Check auto trading wizard custom amount
+        const autoWiz = autoWizSessions.get(chatId);
+        if (autoWiz && autoWiz.step === 'custom_amount') {
+            const amt = parseFloat(text);
+            if (isNaN(amt) || amt <= 0) { await ctx.reply('Please enter a valid positive number (e.g. 75).'); return; }
+            autoWiz.amount = amt;
+            autoWizSessions.set(chatId, autoWiz);
+            await advanceToAssetsMessage(ctx, autoWiz);
+            return;
+        }
+        return;
+    }
 
     const amount = parseFloat(text);
     if (isNaN(amount) || amount <= 0) { await ctx.reply('Please enter a valid positive number (e.g. 75).'); return; }
