@@ -5,6 +5,7 @@ export interface AnalysisResult {
     direction: 'call' | 'put';
     confidence: number;
     reason: string;
+    entryPrice?: number;
 }
 
 export async function analyzePairWithSdk(sdk: ClientSdk, pair: string, timeframeSec: number, tier = 'DEMO', candleCount?: number): Promise<AnalysisResult> {
@@ -68,7 +69,7 @@ async function runAnalysis(sdk: ClientSdk, pair: string, timeframeSec: number, t
             `BB ${bollBull ? '▲' : '▼'}`,
         ].join(' | ');
         const directionLabel = bullVotes >= 2 ? 'BULLISH' : bearVotes >= 2 ? 'BEARISH' : 'NEUTRAL';
-        return { direction, confidence, reason: `${directionLabel} (${Math.max(bullVotes, bearVotes)}/4) | ${signals}` };
+        return { direction, confidence, reason: `${directionLabel} (${Math.max(bullVotes, bearVotes)}/4) | ${signals}`, entryPrice: lastClose };
     }
 
     const bullScore  = (rsi > 50 ? 50 : 0) + (ema9 > ema21 ? 50 : 0);
@@ -77,7 +78,7 @@ async function runAnalysis(sdk: ClientSdk, pair: string, timeframeSec: number, t
     const direction: 'call' | 'put' = bullScore >= 50 ? 'call' : 'put';
     const label = bullScore >= 50 ? 'BULLISH' : 'BEARISH';
     const reason = `${label} (${Math.round(confidence)}%) | RSI ${rsi.toFixed(1)}, ${ema9 > ema21 ? 'EMA9 > EMA21' : 'EMA9 < EMA21'}`;
-    return { direction, confidence, reason };
+    return { direction, confidence, reason, entryPrice: closes[closes.length - 1] };
 }
 
 function computeMACD(closes: number[], fast: number, slow: number, signal: number): { macd: number; signal: number } {

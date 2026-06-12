@@ -14,6 +14,7 @@ import { autoEngine, initAutoEngine } from './auto-trading.js';
 import {
     setUserFundedBalance, getSignalUsage, incrementSignalUsage, getTotalSignalCount, incrementTotalSignalCount, getTotalSignalsToday,
     upsertAutoSession, getAutoSession,
+    insertSignalTrack, getExpiredActiveSignals, updateSignalTrackResult, getAllActiveSignalTracks,
     getRecentTrades, getTradeStats, getTopTradersToday,
     getUser, saveUser, saveUsername, deleteUser, getAllUsers, getAllUserIds,
     getActiveTraderIds, getInactiveTraderIds, findUsersByUsername, findUsersByIqUserId,
@@ -1953,6 +1954,17 @@ bot.action(/^stf:(\d+)$/, async ctx => {
     const counterLine = funded ? `— Signal #${count} today —` : `— Signal ${count}/${FREE_SIGNALS_PER_DAY} today —`;
     const badge = isPremium ? ' ★ PREMIUM ★' : '';
     const now = new Date();
+
+    // Track this signal for result checking at expiry
+    const signalExpiry = new Date(now.getTime() + timeframe * 1000);
+    insertSignalTrack({
+        telegram_id: uid, pair, direction: analysis.direction,
+        timeframe, entry_time: now.toISOString(),
+        expiry_time: signalExpiry.toISOString(),
+        round: 0, max_rounds: 3,
+        entry_price: analysis.entryPrice ?? null,
+    });
+
     const entryTime = new Date(now.getTime() + 60000);
     const lvlExpiry = (n: number) => fmtClock(new Date(entryTime.getTime() + n * timeframe * 1000));
     const dirLine = analysis.direction === 'call' ? 'CALL 🟢' : 'PUT 🔴';
@@ -1975,31 +1987,33 @@ bot.action(/^stf:(\d+)$/, async ctx => {
         [{ text: '🔙 Back', callback_data: 'ui:start' }],
     ] } });
 
-    // ─── 3. 1-minute preparation countdown ───────────────────────────
+    // ─── 3. 1-minute preparation countdown (fire-and-forget) ──────────
     const prepMsg = await ctx.reply(
         `⏳ *Signal Preparation* — 1:00\n\nSignal activates at ${fmtClock(entryTime)}`,
         { parse_mode: 'Markdown' }
     );
 
-    for (let remaining = 50; remaining >= 0; remaining -= 10) {
-        await new Promise(r => setTimeout(r, 10000));
+    void (async () => {
+        for (let remaining = 50; remaining >= 0; remaining -= 10) {
+            await new Promise(r => setTimeout(r, 10000));
+            try {
+                const sec = remaining % 60;
+                const timeStr = `0:${sec.toString().padStart(2, '0')}`;
+                const activTime = fmtClock(new Date(entryTime.getTime() - remaining * 1000 + 60000));
+                await ctx.telegram.editMessageText(chatId, prepMsg.message_id, undefined,
+                    `⏳ *Signal Preparation* — ${timeStr}\n\nSignal activates at ${activTime}`,
+                    { parse_mode: 'Markdown' }
+                );
+            } catch {}
+        }
+
         try {
-            const sec = remaining % 60;
-            const timeStr = `0:${sec.toString().padStart(2, '0')}`;
-            const activTime = fmtClock(new Date(entryTime.getTime() - remaining * 1000 + 60000));
             await ctx.telegram.editMessageText(chatId, prepMsg.message_id, undefined,
-                `⏳ *Signal Preparation* — ${timeStr}\n\nSignal activates at ${activTime}`,
+                `✅ *Signal Active!*\n\nEntry at ${fmtClock(entryTime)}\nDirection: ${dirLine}\n\nOpen IQ Option and take the trade now.`,
                 { parse_mode: 'Markdown' }
             );
         } catch {}
-    }
-
-    try {
-        await ctx.telegram.editMessageText(chatId, prepMsg.message_id, undefined,
-            `✅ *Signal Active!*\n\nEntry at ${fmtClock(entryTime)}\nDirection: ${dirLine}\n\nOpen IQ Option and take the trade now.`,
-            { parse_mode: 'Markdown' }
-        );
-    } catch {}
+    })();
 });
 
 bot.action('signals:cancel', async ctx => {
@@ -6022,6 +6036,64 @@ backgroundIntervals.push(setInterval(async () => {
         console.error('[keepalive] getMe failed:', err instanceof Error ? err.message : err);
     }
 }, 600_000));
+
+// ─── Signal result tracking (checks expired signals every 5s) ────────────
+
+backgroundIntervals.push(setInterval(async () => {
+    try {
+        const expired = getExpiredActiveSignals();
+        if (expired.length === 0) return;
+
+        const adminSsid = process.env.IQ_SSID;
+        if (!adminSsid) return;
+
+        const sdk = await createSdk(adminSsid).catch(() => null);
+        if (!sdk) return;
+
+        try {
+            const blitz = await sdk.blitzOptions();
+            const actives = blitz.getActives();
+            const norm = (s: string) => s.toUpperCase().replace(/^front\./i, '').replace(/[-\/\s]/g, '');
+
+            for (const sig of expired) {
+                try {
+                    const active = actives.find(a => norm(a.ticker) === norm(sig.pair));
+                    if (!active) { updateSignalTrackResult(sig.id, 'lost', 'unknown_pair'); continue; }
+
+                    const candles = await sdk.candles();
+                    const history = await candles.getCandles(active.id, sig.timeframe, { count: 2 });
+                    if (history.length < 2) { updateSignalTrackResult(sig.id, 'lost', 'no_data'); continue; }
+
+                    const openPrice = history[0].open;
+                    const closePrice = history[1].close;
+                    const wentUp = closePrice > openPrice;
+
+                    const isWin = sig.direction === 'call' ? wentUp : !wentUp;
+                    const status = isWin ? 'won' : 'lost';
+                    const result = isWin ? 'price_moved_favor' : 'price_moved_against';
+
+                    updateSignalTrackResult(sig.id, status, result);
+
+                    // Notify user
+                    const notifyText = isWin
+                        ? `🟢 *SIGNAL WON!* ${sig.pair} ${sig.direction.toUpperCase()} hit.\n\nReady for your next signal!`
+                        : `🔴 *SIGNAL LOST.* ${sig.pair} ${sig.direction.toUpperCase()} moved against.\n\n${sig.round < sig.max_rounds
+                            ? `Next → Level ${sig.round + 2} martingale. Take another signal.`
+                            : `All ${sig.max_rounds + 1} rounds exhausted. Try a new pair.`}`;
+
+                    try { await bot.telegram.sendMessage(sig.telegram_id, notifyText, { parse_mode: 'Markdown' }); } catch {}
+                } catch (err) {
+                    logger.warn('signal-track', `error checking signal ${sig.id}: ${err instanceof Error ? err.message : err}`);
+                    updateSignalTrackResult(sig.id, 'lost', 'check_error');
+                }
+            }
+        } finally {
+            await sdk.shutdown().catch(() => {});
+        }
+    } catch (err) {
+        logger.error('signal-track', `loop error: ${err instanceof Error ? err.message : err}`);
+    }
+}, 5000));
 
 // ─── Admin Analysis (single-timeframe, 6-indicator, 70 candles) ───────────────
 
