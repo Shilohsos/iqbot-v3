@@ -5,9 +5,8 @@ import { WS_URL, PLATFORM_ID, IQ_HOST, IQ_AUTH_URL } from './protocol.js';
 import { executeTrade, executeTradeWithSdk, createSdk, type TradeRequest, type TradeResult } from './trade.js';
 import { recoverMissedTradeResults } from './tradeRecovery.js';
 import { sdkPool } from './sdk-pool.js';
-import { getTierConfig, normalizeTier, autoPromoteTier, convertToUsd, TIER_CONFIGS } from './tiers.js';
 import {
-    resolveAccess, getProductConfig, hasAccess, getProduct,
+    resolveAccess, getProductConfig, hasAccess, getProduct, convertToUsd, tokenToAccess,
     AI_TRADING_MIN_USD, AUTO_TRADING_MIN_USD, FREE_SIGNALS_PER_DAY, ALL_PAIRS,
     godModeStakePct, godModeTimeframe, godModeGaleRounds, martingaleWorstCase,
 } from './access.js';
@@ -22,7 +21,7 @@ import {
     getFundedUserIds, getNonFundedUserIds,
     upsertOnboardingUser, approveUser, setManualApproval, rejectUser, resetUser, getApprovalStats,
     getRecentApprovals, getPendingManualUsers,
-    setUserTier, saveUserCurrency, pauseUser, resumeUser,
+    setUserAccessLevel, saveUserCurrency, pauseUser, resumeUser,
     generateToken, validateToken, useToken, getTokens,
     updateLeaderboardAuto, addLeaderboardManual, getLeaderboard,
     getLeaderboardDetailed, updateLeaderboardManual,
@@ -171,7 +170,7 @@ type UserSegment = 'non_activated' | 'non_funded' | 'funded';
 function getUserSegment(telegramId: number): UserSegment {
     const user = getUser(telegramId);
     if (!user) return 'non_activated';
-    if (user.tier === 'PRO' || user.tier === 'MASTER') return 'funded';
+    if ((user.funded_balance_usd ?? 0) > 0 || hasAccess(user.access_level, 'ai_trading')) return 'funded';
     if (user.ssid_valid === 1 && user.ssid && user.ssid !== '') return 'non_funded';
     return 'non_activated';
 }
@@ -725,6 +724,29 @@ function getSsidForUser(telegramId: number): string | null {
     const user = getUser(telegramId);
     if (user?.ssid) return user.ssid;
     return IQ_SSID ?? null;
+}
+
+/**
+ * Recompute and persist a user's product access from their live real balance.
+ * Replaces the old tier auto-promotion. Returns the resolved access level (or
+ * null when no conversion rate was available — caller should not re-gate then).
+ * Fires user_funded / user_unfunded funnel events on the funded transition.
+ */
+async function syncAccessFromBalance(
+    telegramId: number,
+    realAmount: number,
+    currency: string,
+    sdk: ClientSdk,
+): Promise<string | null> {
+    const usdAmount = await convertToUsd(realAmount, currency, sdk);
+    if (usdAmount === null) return null; // unknown rate — never re-gate
+    const prev = getUser(telegramId);
+    const wasFunded = (prev?.funded_balance_usd ?? 0) > 0;
+    const newAccess = resolveAccess(usdAmount, getProduct(prev?.access_level));
+    setUserFundedBalance(telegramId, usdAmount, newAccess);
+    if (!wasFunded && usdAmount > 0) insertFunnelEvent('user_funded', JSON.stringify({ telegram_id: telegramId }));
+    if (wasFunded && usdAmount <= 0) insertFunnelEvent('user_unfunded', JSON.stringify({ telegram_id: telegramId }));
+    return newAccess;
 }
 
 function isAuthExpiredError(err: unknown): boolean {
@@ -1433,12 +1455,9 @@ bot.action(/^amt:(.+)$/, async ctx => {
             try { await ctx.telegram.deleteMessage(ctx.chat!.id, state.lastImageMsgId); } catch {}
         }
         try { const m = await sendCachedAsset(ctx, 'L5.png'); state.lastImageMsgId = m?.message_id; } catch {}
-        const isAdminAmt = ctx.from!.id === getAdminId();
-        const tfBtnUser = isAdminAmt ? null : getUser(ctx.from!.id);
-        const tfBtnTier = isAdminAmt ? 'MASTER' : tfBtnUser?.tier ?? undefined;
         try { await ctx.editMessageText(
             '⏱ Pick your expiry timeframe 👇\n⏱ Faster timeframes settle quicker.\n🐢 Longer timeframes ride bigger moves.',
-            { reply_markup: timeframeKeyboard(tfBtnTier) }
+            { reply_markup: timeframeKeyboard() }
         ); } catch {}
     }
 });
@@ -1457,7 +1476,6 @@ bot.action(/^tf:(\d+)$/, async ctx => {
         try { await ctx.telegram.deleteMessage(ctx.chat!.id, state.lastImageMsgId); } catch {}
     }
     try { const m = await sendCachedAsset(ctx, 'L6.png'); state.lastImageMsgId = m?.message_id; } catch {}
-    const tfTier = ctx.from!.id === getAdminId() ? 'MASTER' : normalizeTier(getUser(chatId)?.tier);
     const picks = getTopPicks();
     const medals = ['🏆', '🥇', '🥈', '🥉', '4️⃣'];
     let picksMsg = 'Top picks ready 🎯\n\nHighest chance to win right now:\n\n';
@@ -1467,7 +1485,7 @@ bot.action(/^tf:(\d+)$/, async ctx => {
         picksMsg += '🏆 EUR/USD OTC\n🥇 GBP/USD OTC\n🥈 EUR/JPY OTC\n';
     }
     picksMsg += '\n🚀 Make your choice below 👇';
-    try { await ctx.editMessageText(picksMsg, { reply_markup: pairKeyboard(0, tfTier) }); } catch {}
+    try { await ctx.editMessageText(picksMsg, { reply_markup: pairKeyboard(0) }); } catch {}
 });
 
 // ─── Trade wizard — pair pagination ──────────────────────────────────────────
@@ -1477,56 +1495,26 @@ bot.action(/^page:(\d+)$/, async ctx => {
     const state = wizardSessions.get(chatId);
     if (!state || state.step !== 'pair') { await ctx.answerCbQuery('Session expired — start over.'); return; }
     await ctx.answerCbQuery();
-    const pageUser = getUser(chatId);
-    const pageTier = normalizeTier(pageUser?.tier);
-    try { await ctx.editMessageReplyMarkup(pairKeyboard(parseInt(ctx.match[1], 10), pageTier)); } catch {}
+    try { await ctx.editMessageReplyMarkup(pairKeyboard(parseInt(ctx.match[1], 10))); } catch {}
 });
 
-// ─── Locked feature upgrade prompts ──────────────────────────────────────────
+// ─── Locked feature upgrade prompts (legacy callbacks — pairs/timeframes are
+//     no longer gated; kept as a safety net for any stale inline buttons) ──────
 
-bot.action(/^upgrade:tf:(\d+)$/, async ctx => {
-    await ctx.answerCbQuery();
-    const tier = normalizeTier(getUser(ctx.from!.id)?.tier);
-    const nextTier = tier === 'DEMO' ? 'PRO' : 'MASTER';
-    const cost = nextTier === 'PRO' ? '$10' : '$50';
+async function sendLockedFeaturePrompt(ctx: Context): Promise<void> {
     const fundUrl = process.env.FUNDING_URL ?? 'https://iqoption.com/pwa/payments/deposit';
     await ctx.reply(
-        `🔒 *${ctx.match[1]}s Timeframe — ${nextTier} Tier Required*\n\n` +
-        `Fund your account with at least ${cost} to automatically unlock this tier and faster trades.`,
-        {
-            parse_mode: 'Markdown',
-            reply_markup: {
-                inline_keyboard: [
-                    [{ text: `💰 Fund Account`, url: fundUrl }],
-                    [{ text: `🔓 Upgrade with Token`, callback_data: 'ui:upgrade' }],
-                    [{ text: '🔙 Back', callback_data: 'wizard:cancel' }],
-                ],
-            },
-        }
+        `🔒 *Unlock more with funding*\n\nFund your account to unlock AI Trading ($${AI_TRADING_MIN_USD}+) and Auto Trading ($${AUTO_TRADING_MIN_USD}+).`,
+        { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [
+            [{ text: `💰 Fund Account`, url: fundUrl }],
+            [{ text: `🔓 Upgrade with Token`, callback_data: 'ui:upgrade' }],
+            [{ text: '🔙 Back', callback_data: 'wizard:cancel' }],
+        ] } }
     );
-});
+}
 
-bot.action(/^upgrade:pair:(.+)$/, async ctx => {
-    await ctx.answerCbQuery();
-    const tier = normalizeTier(getUser(ctx.from!.id)?.tier);
-    const nextTier = tier === 'DEMO' ? 'PRO' : 'MASTER';
-    const cost = nextTier === 'PRO' ? '$10' : '$50';
-    const fundUrl = process.env.FUNDING_URL ?? 'https://iqoption.com/pwa/payments/deposit';
-    await ctx.reply(
-        `🔒 *${ctx.match[1]} — ${nextTier} Tier Required*\n\n` +
-        `Fund your account with at least ${cost} to automatically unlock more pairs.`,
-        {
-            parse_mode: 'Markdown',
-            reply_markup: {
-                inline_keyboard: [
-                    [{ text: `💰 Fund Account`, url: fundUrl }],
-                    [{ text: `🔓 Upgrade with Token`, callback_data: 'ui:upgrade' }],
-                    [{ text: '🔙 Back', callback_data: 'wizard:cancel' }],
-                ],
-            },
-        }
-    );
-});
+bot.action(/^upgrade:tf:(\d+)$/, async ctx => { await ctx.answerCbQuery(); await sendLockedFeaturePrompt(ctx); });
+bot.action(/^upgrade:pair:(.+)$/, async ctx => { await ctx.answerCbQuery(); await sendLockedFeaturePrompt(ctx); });
 
 // ─── Trade wizard — pair selected → analyze → execute ────────────────────────
 
@@ -1617,35 +1605,13 @@ bot.action(/^pair:(.+)$/, async ctx => {
 
     let tradeStarted = false;
     try {
-        // Tier validation — skip for admin (unrestricted access)
-        if (!isPrivileged) {
-            const analysisUser = getUser(ctx.from!.id);
-            const analysisTier = normalizeTier(analysisUser?.tier);
-            const tierCfg = getTierConfig(analysisTier);
-            if (!tierCfg.allowedTimeframes.includes(timeframe)) {
-                if (l7MsgId) { try { await ctx.telegram.deleteMessage(chatId, l7MsgId); } catch {} }
-                await ctx.telegram.editMessageText(
-                    chatId, progressMsg.message_id, undefined,
-                    `⚠️ ${tfLabel(timeframe)} is not available on the ${tierCfg.label} tier. Upgrade for access.`
-                ).catch(() => {});
-                return;
-            }
-            if (!tierCfg.pairs.includes(pair)) {
-                if (l7MsgId) { try { await ctx.telegram.deleteMessage(chatId, l7MsgId); } catch {} }
-                await ctx.telegram.editMessageText(
-                    chatId, progressMsg.message_id, undefined,
-                    `⚠️ ${pair} is not available on the ${tierCfg.label} tier. Upgrade for access.`
-                ).catch(() => {});
-                return;
-            }
-        }
+        // Pairs and timeframes are no longer gated — every product can trade all.
 
         ctx.telegram.sendChatAction(chatId, 'typing').catch(() => {});
 
         let analysis: AnalysisResult;
         const tradeUser = getUser(ctx.from!.id);
-        const analysisTier = normalizeTier(tradeUser?.tier);
-        if (isPrivileged || analysisTier === 'DEMO') {
+        if (isPrivileged) {
             const candlesFacade = await sdk.candles();
             const turboOpts = await sdk.turboOptions();
             const norm = (s: string) => s.toUpperCase().replace(/^front\./i, '').replace(/[-\/\s]/g, '');
@@ -1659,7 +1625,7 @@ bot.action(/^pair:(.+)$/, async ctx => {
             analysis = runAdminAnalysis(history);
         } else {
             try {
-                analysis = await analyzePairWithSdk(sdk, pair, timeframe, analysisTier, tradeUser?.analysis_candles ?? undefined);
+                analysis = await analyzePairWithSdk(sdk, pair, timeframe, 'MASTER', tradeUser?.analysis_candles ?? undefined);
             } catch (err: unknown) {
                 if (l7MsgId) { try { await ctx.telegram.deleteMessage(chatId, l7MsgId); } catch {} }
                 const errMsg = friendlyError(err, '⚠️ Could not analyze market. Please try again.');
@@ -1694,13 +1660,13 @@ bot.action(/^pair:(.+)$/, async ctx => {
         ).catch(() => undefined);
         if (opportunityMsg) preTradeMessageIds.push(opportunityMsg.message_id);
 
-        const maxConcurrent = isPrivileged ? 999 : getTierConfig(normalizeTier(getUser(ctx.from!.id)?.tier)).maxConcurrentTrades;
+        const productCfg = getProductConfig(getUser(ctx.from!.id)?.access_level);
+        const maxConcurrent = isPrivileged ? 999 : Math.max(1, productCfg.maxConcurrentTrades);
         const currentCount = activeTradeSessions.get(ctx.from!.id) ?? 0;
         if (currentCount >= maxConcurrent) {
-            const tradeCfg = getTierConfig(normalizeTier(getUser(ctx.from!.id)?.tier));
             await ctx.reply(
                 maxConcurrent === 1
-                    ? `⚠️ You already have an active trade. ${tradeCfg.label} allows 1 trade at a time. Upgrade for more concurrent trades.`
+                    ? `⚠️ You already have an active trade. Wait for it to finish before starting another.`
                     : `⚠️ You already have ${currentCount} active trade(s). Max ${maxConcurrent} concurrent trades reached. Wait for one to finish.`
             );
             return;
@@ -2379,9 +2345,8 @@ bot.action('ui:support', async ctx => {
 bot.action('ui:giveaways', async ctx => {
     await ctx.answerCbQuery();
     const telegramId = ctx.from!.id;
-    const user = getUser(telegramId);
-    const tier = normalizeTier(user?.tier);
-    const canAct = tier === 'PRO' || tier === 'MASTER';
+    // All users can participate in giveaways now (directive §8.1).
+    const canAct = true;
     const activeGiveaways = getActiveGiveaways();
 
     if (activeGiveaways.length === 0) {
@@ -2515,19 +2480,9 @@ bot.command('balance', async ctx => {
         const real = all.find(b => b.type === BalanceType.Real);
         if (real?.currency) saveUserCurrency(uid, real.currency);
         else if (demo?.currency) saveUserCurrency(uid, demo.currency);
-        // Auto-promote tier based on live balance (converted to USD)
-        const user = getUser(uid);
-        if (real && user && user.tier !== 'MASTER') {
-            const currency = real.currency ?? 'USD';
-            const usdAmount = await convertToUsd(real.amount, currency, sdk);
-            // null = no conversion rate — never promote/demote on an unknown balance
-            const newTier = usdAmount === null ? null : autoPromoteTier(uid, usdAmount, user.tier ?? 'DEMO');
-            if (usdAmount !== null && newTier && newTier !== user.tier) {
-                const oldTier = user.tier;
-                setUserTier(uid, newTier);
-                if (oldTier === 'DEMO') insertFunnelEvent('user_funded', JSON.stringify({ telegram_id: uid }));
-                logger.info('bot', `auto-promoted user ${uid} from ${oldTier} to ${newTier} via /balance (${currency} ${real.amount.toFixed(2)} ≈ $${usdAmount.toFixed(2)})`);
-            }
+        // Recompute product access from live balance (replaces tier auto-promotion).
+        if (real) {
+            await syncAccessFromBalance(uid, real.amount, real.currency ?? 'USD', sdk);
         }
         let msg = '💰 *Balances*\n\n';
         if (demo) msg += `🎮 Practice: ${fmtBalance(demo)}\n`;
@@ -2564,8 +2519,8 @@ bot.command('status', async ctx => {
         await ctx.reply('🟢 *10x Bot Online*\n\nConnect your account to see full status.', { parse_mode: 'Markdown' });
         return;
     }
-    const tier = normalizeTier(user.tier);
-    const tierEmoji = tier === 'MASTER' ? '👑' : tier === 'PRO' ? '⚡' : '🧪';
+    const accessLabel = getProductConfig(user.access_level).label;
+    const accessEmoji = getProduct(user.access_level) === 'auto_trading' ? '🚀' : getProduct(user.access_level) === 'ai_trading' ? '🤖' : '⚡';
     const ssid = getSsidForUser(uid);
     const stats = getTradeStats(uid);
     const ss = getUserSessionStats(uid);
@@ -2576,7 +2531,7 @@ bot.command('status', async ctx => {
         : 'Tap /balance to refresh';
     await ctx.reply(
         `🟢 *10x Bot Online*\n\n` +
-        `Tier: ${tierEmoji} ${tier} Trader\n` +
+        `Access: ${accessEmoji} ${accessLabel}\n` +
         `IQ Option: ${ssid ? '✅ Connected' : '❌ Not connected'}\n` +
         `Balance: ${balLine}\n` +
         `Total Trades: ${stats.total} (${stats.wins}W / ${stats.losses}L)\n` +
@@ -2782,15 +2737,16 @@ bot.action('admin:tokens', async ctx => {
 
 bot.action('admin:generate_token', async ctx => {
     await ctx.answerCbQuery();
-    await ctx.reply('🔑 Select tier for new token:', { reply_markup: tokenTierKeyboard() });
+    await ctx.reply('🔑 Select product for new token:', { reply_markup: tokenTierKeyboard() });
 });
 
-bot.action(/^token_tier:(DEMO|PRO|MASTER)$/, async ctx => {
+bot.action(/^token_tier:(AI_TRADING|AUTO_TRADING)$/, async ctx => {
     await ctx.answerCbQuery();
-    const tier = ctx.match[1];
-    const token = generateToken(tier);
+    const grant = ctx.match[1];
+    const token = generateToken(grant);
+    const label = getProductConfig(tokenToAccess(grant)).label;
     await ctx.reply(
-        `✅ Token generated!\n\n\`${token}\`\n\nTier: *${tier}* · Valid 24 hours\n\nShare this with the user manually.`,
+        `✅ Token generated!\n\n\`${token}\`\n\nUnlocks: *${label}* · Valid 24 hours\n\nShare this with the user manually.`,
         { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() }
     );
 });
@@ -3129,8 +3085,7 @@ bot.action('member:view', async ctx => {
     for (const u of users.slice(0, 30)) {
         const e = u.approval_status === 'approved' ? '✅' : u.approval_status === 'paused' ? '⏸️' : u.approval_status === 'rejected' ? '❌' : '⏳';
         const name = u.username ? `@${u.username}` : maskUserId(u.telegram_id);
-        const tier = (u.tier ?? 'DEMO').toUpperCase();
-        msg += `${e} ${name} — ${tier}\n`;
+        msg += `${e} ${name} — ${getProductConfig(u.access_level).label}\n`;
     }
     if (users.length > 30) msg += `\n_…and ${users.length - 30} more_`;
     await ctx.reply(msg, { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
@@ -4195,20 +4150,21 @@ bot.action(/^media:select:(.+)$/, async ctx => {
 
 // ─── Member filter / user detail / user actions ───────────────────────────────
 
-bot.action(/^member:filter:(all|DEMO|PRO|MASTER)$/, async ctx => {
+bot.action(/^member:filter:(all|signals|ai_trading|auto_trading)$/, async ctx => {
     await ctx.answerCbQuery();
     const filter = ctx.match[1];
     const all = getAllUsers();
-    const filtered = filter === 'all' ? all : all.filter(u => (u.tier ?? 'DEMO').toUpperCase() === filter);
+    const filtered = filter === 'all' ? all : all.filter(u => getProduct(u.access_level) === filter);
+    const filterLabel = filter === 'all' ? 'all' : getProductConfig(filter).label;
     if (filtered.length === 0) {
-        await ctx.reply(`No ${filter} members found.`, { reply_markup: adminBackKeyboard() });
+        await ctx.reply(`No ${filterLabel} members found.`, { reply_markup: adminBackKeyboard() });
         return;
     }
-    let msg = `👥 *Members — ${filter}* (${filtered.length})\n\n`;
+    let msg = `👥 *Members — ${filterLabel}* (${filtered.length})\n\n`;
     for (const u of filtered.slice(0, 20)) {
         const e = u.approval_status === 'approved' ? '✅' : u.approval_status === 'paused' ? '⏸️' : '❌';
         const name = u.username ? `@${u.username}` : maskUserId(u.telegram_id);
-        msg += `${e} ${name} — ${(u.tier ?? 'DEMO').toUpperCase()}\n`;
+        msg += `${e} ${name} — ${getProductConfig(u.access_level).label}\n`;
     }
     if (filtered.length > 20) msg += `\n_…and ${filtered.length - 20} more_`;
     await ctx.reply(msg, { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
@@ -4225,7 +4181,7 @@ bot.action(/^user_detail:(\d+)$/, async ctx => {
     let msg = `👤 *User Detail*\n\n`;
     msg += `Telegram: ${u.username ? `@${u.username}` : `\`${maskUserId(uid)}\``}\n`;
     if (u.iq_user_id) msg += `IQ User ID: \`${maskUserId(u.iq_user_id)}\`\n`;
-    msg += `Status: ${u.approval_status} | Tier: ${(u.tier ?? 'DEMO').toUpperCase()}\n`;
+    msg += `Status: ${u.approval_status} | Access: ${getProductConfig(u.access_level).label}\n`;
     msg += `SSID: ${ssidStatus}\n`;
     msg += `Trades: ${ts.total} | Win rate: ${winRate}%\n`;
     if (u.onboarding_state) msg += `Onboarding: ${u.onboarding_state}\n`;
@@ -4507,7 +4463,7 @@ bot.on('text', async ctx => {
                         const winRate = ts.total > 0 ? ((ts.wins / ts.total) * 100).toFixed(0) : '0';
                         msg += `Telegram: ${u.username ? `@${u.username}` : 'no username'} (\`${maskUserId(u.telegram_id)}\`)\n`;
                         if (u.iq_user_id) msg += `IQ User ID: \`${maskUserId(u.iq_user_id)}\`\n`;
-                        msg += `Status: ${statusEmoji} ${u.approval_status} | Tier: ${u.tier ?? 'DEMO'}\n`;
+                        msg += `Status: ${statusEmoji} ${u.approval_status} | Access: ${getProductConfig(u.access_level).label}\n`;
                         msg += `Trades: ${ts.total} (Win rate: ${winRate}%)\n\n`;
                     }
                     await ctx.reply(msg, { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
@@ -4953,10 +4909,12 @@ bot.on('text', async ctx => {
             return;
         }
         if (useToken(tokenInput, ctx.from!.id)) {
-            setUserTier(ctx.from!.id, result.tier!);
+            const access = tokenToAccess(result.tier);
+            setUserAccessLevel(ctx.from!.id, access);
+            const label = getProductConfig(access).label;
             await ctx.reply(
-                `✅ Token accepted! Your tier has been upgraded to *${result.tier}*. 🎉`,
-                { parse_mode: 'Markdown', reply_markup: startKeyboard(result.tier!) }
+                `✅ Token accepted! *${label}* is now unlocked. 🎉`,
+                { parse_mode: 'Markdown', reply_markup: startKeyboard(access) }
             );
         } else {
             await ctx.reply('❌ Token could not be applied. It may have already been used or expired.');
@@ -5366,12 +5324,9 @@ bot.on('text', async ctx => {
         try { await ctx.telegram.deleteMessage(chatId, brainWiz.lastImageMsgId); } catch {}
     }
     try { const m = await ctx.replyWithPhoto(ASSET('L5.png')); brainWiz.lastImageMsgId = m.message_id; } catch {}
-    const isWizAdmin = ctx.from!.id === getAdminId();
-    const tfWizUser = isWizAdmin ? null : getUser(ctx.from!.id);
-    const tfWizTier = isWizAdmin ? 'MASTER' : (tfWizUser?.tier ?? undefined);
     await ctx.reply(
         '⏱ Pick your expiry timeframe 👇\n⏱ Faster timeframes settle quicker.\n🐢 Longer timeframes ride bigger moves.',
-        { reply_markup: timeframeKeyboard(tfWizTier) }
+        { reply_markup: timeframeKeyboard() }
     );
 });
 
@@ -5796,17 +5751,11 @@ backgroundIntervals.push(setInterval(async () => {
                     const all = (await withTimeout(sdk.balances(), 15_000, 'balance')).getBalances();
                     const real = all.find(b => b.type === BalanceType.Real);
                     if (real) {
-                        const usdAmount = await convertToUsd(real.amount, real.currency ?? 'USD', sdk);
-                        // null = no conversion rate — skip; a failed lookup must never demote a funded user
-                        if (usdAmount !== null) {
-                            const newTier = autoPromoteTier(user.telegram_id, usdAmount, user.tier ?? 'DEMO');
-                            if (newTier && newTier !== user.tier) {
-                                const oldTier = user.tier;
-                                setUserTier(user.telegram_id, newTier);
-                                if (oldTier === 'DEMO') insertFunnelEvent('user_funded', JSON.stringify({ telegram_id: user.telegram_id }));
-                                if (newTier === 'DEMO' && oldTier !== 'DEMO') insertFunnelEvent('user_unfunded', JSON.stringify({ telegram_id: user.telegram_id }));
-                                logger.info('bot', `[periodic] tier changed ${user.telegram_id} ${oldTier} → ${newTier} ($${usdAmount.toFixed(2)})`);
-                            }
+                        // Keep product access in sync with the live balance (a failed
+                        // rate lookup returns null inside the helper and is skipped).
+                        const newAccess = await syncAccessFromBalance(user.telegram_id, real.amount, real.currency ?? 'USD', sdk);
+                        if (newAccess && newAccess !== getProduct(user.access_level)) {
+                            logger.info('bot', `[periodic] access changed ${user.telegram_id} ${getProduct(user.access_level)} → ${newAccess}`);
                         }
                     }
                 } finally {

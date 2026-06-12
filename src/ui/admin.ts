@@ -64,10 +64,12 @@ export function memberFilterKeyboard(): IKMarkup {
     return {
         inline_keyboard: [
             [
-                { text: 'All',      callback_data: 'member:filter:all' },
-                { text: 'DEMO',     callback_data: 'member:filter:DEMO' },
-                { text: 'PRO',      callback_data: 'member:filter:PRO' },
-                { text: 'MASTER',   callback_data: 'member:filter:MASTER' },
+                { text: 'All',          callback_data: 'member:filter:all' },
+                { text: '⚡ Signals',    callback_data: 'member:filter:signals' },
+            ],
+            [
+                { text: '🤖 AI Trading',  callback_data: 'member:filter:ai_trading' },
+                { text: '🚀 Auto Trading',callback_data: 'member:filter:auto_trading' },
             ],
             [
                 { text: '✅ Active',  callback_data: 'member:filter:active' },
@@ -216,10 +218,9 @@ export function broadcastTimerKeyboard(): IKMarkup {
 export function tokenTierKeyboard(): IKMarkup {
     return {
         inline_keyboard: [
-            [{ text: '🧪 DEMO Tier',   callback_data: 'token_tier:DEMO' }],
-            [{ text: '⚡ PRO Tier',    callback_data: 'token_tier:PRO' }],
-            [{ text: '👑 MASTER Tier', callback_data: 'token_tier:MASTER' }],
-            [{ text: '🔙 Admin Menu',  callback_data: 'admin:back' }],
+            [{ text: '🤖 AI Trading',   callback_data: 'token_tier:AI_TRADING' }],
+            [{ text: '🚀 Auto Trading', callback_data: 'token_tier:AUTO_TRADING' }],
+            [{ text: '🔙 Admin Menu',   callback_data: 'admin:back' }],
         ],
     };
 }

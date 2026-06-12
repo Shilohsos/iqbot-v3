@@ -7,6 +7,9 @@
 //
 // Upgrade tokens override the balance check (see token_tier:AI_TRADING / AUTO_TRADING).
 
+import type { ClientSdk } from './index.js';
+import { logger } from './logger.js';
+
 export type Product = 'signals' | 'ai_trading' | 'auto_trading';
 
 export interface ProductConfig {
@@ -106,6 +109,15 @@ export function tierToAccess(tier: string | null | undefined): Product {
     return 'signals';
 }
 
+/** Map an upgrade-token grant to the product it unlocks (directive §8.3).
+ *  Accepts new product token values and legacy tier values. */
+export function tokenToAccess(tokenValue: string | null | undefined): Product {
+    const key = (tokenValue ?? '').toUpperCase();
+    if (key === 'AUTO_TRADING' || key === 'MASTER') return 'auto_trading';
+    if (key === 'AI_TRADING' || key === 'PRO') return 'ai_trading';
+    return 'signals';
+}
+
 // ── Auto God Mode sizing (directive §6, grounded in account size) ──────────────
 
 /** Percentage of real balance to stake per trade — smaller accounts trade more
@@ -138,3 +150,54 @@ export function godModeGaleRounds(balanceUsd: number, stake: number): number {
 
 // Minimum analysis confidence before the auto engine will open a trade.
 export const AUTO_CONFIDENCE_FLOOR = 55;
+
+// ── USD conversion (relocated from the deleted tiers.ts) ───────────────────────
+
+const rateCache = new Map<string, { rate: number; expires: number }>();
+
+// Fallback rates for currencies the SDK may not support. Approximate — fine for
+// access thresholds; updated periodically.
+const FALLBACK_RATES: Record<string, number> = {
+    NGN: 0.00067,   // ~₦1,500 = $1
+    KES: 0.0077,    // ~KES 130 = $1
+    GHS: 0.069,     // ~GHS 14.5 = $1
+    ZAR: 0.054,     // ~ZAR 18.5 = $1
+    INR: 0.012,     // ~INR 83 = $1
+    IDR: 0.000062,  // ~IDR 16,000 = $1
+    BRL: 0.19,      // ~BRL 5.3 = $1
+};
+
+/**
+ * Converts an amount to USD. Returns null when no rate is available — callers
+ * MUST skip balance-threshold decisions (access gating, giveaway eligibility)
+ * on null rather than treating it as $0.
+ */
+export async function convertToUsd(amount: number, currency: string, sdk: ClientSdk): Promise<number | null> {
+    if (currency === 'USD') return amount;
+
+    const cached = rateCache.get(currency);
+    if (cached && cached.expires > Date.now()) {
+        return amount * cached.rate;
+    }
+
+    try {
+        const currencies = await sdk.currencies();
+        const c = await currencies.getCurrency(currency);
+        const rate = c.rateUsd;
+        if (rate && rate > 0) {
+            rateCache.set(currency, { rate, expires: Date.now() + 3_600_000 });
+            return amount * rate;
+        }
+    } catch {
+        logger.warn('access', `currency conversion via SDK failed for ${currency}, trying fallback`);
+    }
+
+    const fallbackRate = FALLBACK_RATES[currency.toUpperCase()];
+    if (fallbackRate && fallbackRate > 0) {
+        logger.info('access', `using fallback rate for ${currency}: ${fallbackRate}`);
+        return amount * fallbackRate;
+    }
+
+    logger.warn('access', `no conversion rate available for ${currency} — skipping USD conversion`);
+    return null;
+}
