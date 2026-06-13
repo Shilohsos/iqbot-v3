@@ -302,9 +302,11 @@ bot.use(async (ctx, next) => {
 const MAX_ROUNDS       = 6;
 const ROUND_COOLDOWN_MS = 5_000;
 
-function escapeMd(s: string): string { return s.replace(/[_*[\]()~`>#+=|{}.!-]/g, '\\$&'); }
-// For parse_mode:'Markdown' (legacy) — only _ * ` [ are escapable there; the V2-style
-// escape above would render literal backslashes before . ! - etc.
+// The whole bot sends parse_mode:'Markdown' (legacy), where only _ * ` [ are
+// escapable. A V2-style escape (also escaping . ! - = etc.) renders literal
+// backslashes under legacy and — if the bot's default parse mode is V2 — can
+// trigger "Character '-' is reserved" parse errors. So escapeMd == legacy escape.
+function escapeMd(s: string): string { return s.replace(/[_*`[]/g, '\\$&'); }
 function escapeMdLegacy(s: string): string { return s.replace(/[_*`[]/g, '\\$&'); }
 
 const CURRENCY_SYMBOLS: Record<string, string> = {
@@ -1915,6 +1917,9 @@ function cancelPrepCountdown(uid: number) {
 // loser's fallback spawns a duplicate card with stale (dead) buttons.
 const signalCardLocks = new Map<number, Promise<void>>();
 
+// Per-user guard so a second signal generation can't start while one is running.
+const signalBusy = new Set<number>();
+
 /** Edit a user's signal card under the per-user lock. Returns true on success.
  *  On a "message gone" error (deleted / uneditable) returns false immediately so
  *  the caller can recreate; on a transient error retries once after 1s. */
@@ -2013,11 +2018,12 @@ bot.action(/^spage:(\d+)$/, async ctx => {
 
 bot.action(/^stf:(\d+)$/, async ctx => {
     const chatId = ctx.chat!.id;
+    const uid = ctx.from!.id;
+    if (signalBusy.has(uid)) { await ctx.answerCbQuery('⏳ Still processing your last signal…'); return; }
     const state = signalWizSessions.get(chatId);
     if (!state || !state.pair) { await ctx.answerCbQuery('Start from the menu first.'); return; }
     await ctx.answerCbQuery();
 
-    const uid = ctx.from!.id;
     const user = getUser(uid);
     const pair = state.pair;
     const timeframe = parseInt(ctx.match[1], 10);
@@ -2034,6 +2040,13 @@ bot.action(/^stf:(\d+)$/, async ctx => {
     signalWizSessions.delete(chatId);
     try { await ctx.deleteMessage(); } catch {}
 
+    // Run the heavy work (3s animation + SDK analysis) fire-and-forget so the
+    // callback returns in <100ms. Otherwise concurrent taps queue behind it and
+    // hit Telegram's ~10s callback timeout. signalBusy (cleared once the card is
+    // posted) prevents overlapping generations for the same user.
+    signalBusy.add(uid);
+    void (async () => {
+      try {
     // ─── 1. Analysis animation (2-3s — makes the bot feel alive) ───────
     const animMsg = await ctx.reply('📡 *Analyzing market data…*', { parse_mode: 'Markdown' });
     await new Promise(r => setTimeout(r, 1000));
@@ -2170,6 +2183,17 @@ bot.action(/^stf:(\d+)$/, async ctx => {
             await editSignalCard(uid, chatId, cardMsg.message_id, renderCard(`🟢 *ENTER NOW* — place your ${dirStr} trade`), backOnly, () => !prepCancelled);
         }
         prepCountdowns.delete(uid);
+    })();
+      } catch (err) {
+        logger.error('signals', `signal generation failed for ${uid}: ${err instanceof Error ? err.message : err}`);
+        try {
+            await ctx.reply('⚠️ Could not generate your signal. Please try again.', {
+                reply_markup: { inline_keyboard: [[{ text: '🔄 New Signal', callback_data: 'ui:signals' }]] },
+            });
+        } catch { /* user may have blocked the bot */ }
+      } finally {
+        signalBusy.delete(uid);
+      }
     })();
 });
 
@@ -5785,6 +5809,16 @@ bot.catch((err: unknown, ctx) => {
     }
 
     if (ctx.callbackQuery && msg.includes("can't parse entities")) {
+        // A formatting error would otherwise repeat on every tap. Clear the user's
+        // transient state so the next action starts clean, and reply in PLAIN TEXT
+        // (no parse_mode) so the recovery message itself can never re-trigger this.
+        const fromId = ctx.from?.id;
+        if (fromId !== undefined) {
+            signalWizSessions.delete(ctx.chat!.id);
+            signalBusy.delete(fromId);
+            cancelPrepCountdown(fromId);
+            activeTradeSessions.delete(fromId);
+        }
         ctx.answerCbQuery('🔧 Try again — formatting glitch.').catch(() => {});
         ctx.reply(
             'Something went wrong with the display. Tap below to continue.',
