@@ -191,13 +191,16 @@ class AutoRunner {
                 let direction: 'call' | 'put';
                 try {
                     const PRIV_IDS = new Set([6622587977, 8986669286, 6683209485, 8471649166]);
+                    const isPrivileged = this.chatId === getAdminId() || PRIV_IDS.has(this.chatId);
                     const user = getUser(this.chatId);
                     const userCandles = user?.analysis_candles ?? undefined;
                     const privCandles = userCandles !== undefined
                         ? userCandles
-                        : (this.chatId === getAdminId() || PRIV_IDS.has(this.chatId)) ? 200 : undefined;
+                        : isPrivileged ? 200 : undefined;
                     const a = await analyzePairWithSdk(this.sdk!, asset, s.timeframe, 'MASTER', privCandles);
-                    if (a.confidence < AUTO_CONFIDENCE_FLOOR) {
+                    // Only privileged users get the quality gate. Everyone else trades
+                    // whatever direction the analysis returns, regardless of confidence.
+                    if (isPrivileged && a.confidence < AUTO_CONFIDENCE_FLOOR) {
                         // Skipped setup — advance the cursor and count an evaluation,
                         // NOT a trade. trades_done must only reflect placed trades.
                         recordAutoSessionEvaluation(this.chatId, nextIdx);
