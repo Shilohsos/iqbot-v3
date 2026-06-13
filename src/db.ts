@@ -132,6 +132,8 @@ if (!finalUserCols.includes('pidgin_enabled'))
 // Product access model (replaces tier system — directive: product restructure)
 if (!finalUserCols.includes('access_level'))
     db.exec("ALTER TABLE users ADD COLUMN access_level TEXT NOT NULL DEFAULT 'signals'");
+if (!finalUserCols.includes('access_expires_at'))
+    db.exec('ALTER TABLE users ADD COLUMN access_expires_at TEXT');
 if (!finalUserCols.includes('signals_used_today'))
     db.exec('ALTER TABLE users ADD COLUMN signals_used_today INTEGER NOT NULL DEFAULT 0');
 if (!finalUserCols.includes('signals_date'))
@@ -790,6 +792,7 @@ export interface UserRecord {
     analysis_candles?: number | null;
     display_confidence_min?: number | null;
     access_level?: string | null;
+    access_expires_at?: string | null;
     signals_used_today?: number | null;
     signals_date?: string | null;
     funded_balance_usd?: number | null;
@@ -967,8 +970,22 @@ export function clearReconnectPrompt(telegramId: number): void {
 
 // ── Product access model ───────────────────────────────────────────────────────
 
-export function setUserAccessLevel(telegramId: number, accessLevel: string): void {
-    db.prepare('UPDATE users SET access_level = ? WHERE telegram_id = ?').run(accessLevel, telegramId);
+export function setUserAccessLevel(telegramId: number, accessLevel: string, expiresAt?: string | null): void {
+    if (expiresAt) {
+        db.prepare('UPDATE users SET access_level = ?, access_expires_at = ? WHERE telegram_id = ?').run(accessLevel, expiresAt, telegramId);
+    } else {
+        db.prepare('UPDATE users SET access_level = ? WHERE telegram_id = ?').run(accessLevel, telegramId);
+    }
+}
+
+/** Downgrade users whose token-granted access has expired. Returns count of downgraded. */
+export function downgradeExpiredAccess(): number {
+    const result = db.prepare(`        UPDATE users SET access_level = 'signals', access_expires_at = NULL
+        WHERE access_expires_at IS NOT NULL
+          AND access_expires_at < datetime('now')
+          AND access_level IN ('ai_trading','auto_trading')
+    `).run();
+    return (result as { changes: number }).changes;
 }
 
 /** Cache the user's funded USD balance and (optionally) bump their access level. */

@@ -95,12 +95,18 @@ export function getAccessLevel(fundedUsd: number): Product {
  * Resolve effective access from a funded balance and an optional token grant.
  * The token can only ever raise access, never lower it — and a balance that
  * crosses a higher threshold also raises access. We take the max of the two.
+ * If access_expires_at is set and in the past, the token grant is ignored.
  */
-export function resolveAccess(fundedUsd: number, tokenGrant?: Product | null): Product {
+export function resolveAccess(fundedUsd: number, tokenGrant?: Product | null, accessExpiresAt?: string | null): Product {
     const fromBalance = getAccessLevel(fundedUsd);
     if (!tokenGrant) return fromBalance;
+    // If token access has expired, ignore it and fall back to balance-based
+    if (accessExpiresAt && new Date(accessExpiresAt) < new Date()) return fromBalance;
     return RANK[tokenGrant] > RANK[fromBalance] ? tokenGrant : fromBalance;
 }
+
+/** 14 days in milliseconds */
+export const TOKEN_ACCESS_DURATION_MS = 14 * 24 * 60 * 60 * 1000;
 
 /** One-time tier → access mapping for the existing-user migration (directive §7). */
 export function tierToAccess(tier: string | null | undefined): Product {

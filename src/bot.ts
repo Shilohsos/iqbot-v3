@@ -8,6 +8,7 @@ import { sdkPool } from './sdk-pool.js';
 import {
     resolveAccess, getProductConfig, hasAccess, getProduct, convertToUsd, tokenToAccess,
     AI_TRADING_MIN_USD, AUTO_TRADING_MIN_USD, FREE_SIGNALS_PER_DAY, ALL_PAIRS,
+    TOKEN_ACCESS_DURATION_MS,
     godModeStakePct, godModeTimeframe, godModeGaleRounds, martingaleWorstCase, godModePickWorstAssets,
 } from './access.js';
 import { autoEngine, initAutoEngine } from './auto-trading.js';
@@ -24,6 +25,7 @@ import {
     getRecentApprovals, getPendingManualUsers,
     setUserAccessLevel, saveUserCurrency, pauseUser, resumeUser,
     generateToken, validateToken, useToken, getTokens,
+    downgradeExpiredAccess,
     updateLeaderboardAuto, addLeaderboardManual, getLeaderboard,
     getLeaderboardDetailed, updateLeaderboardManual,
     getFunnelStats, insertFunnelEvent, getConfig, setConfig, getTestUserId, setTestUser,
@@ -779,7 +781,7 @@ async function syncAccessFromBalance(
     if (usdAmount === null) return null; // unknown rate — never re-gate
     const prev = getUser(telegramId);
     const wasFunded = (prev?.funded_balance_usd ?? 0) > 0;
-    const newAccess = resolveAccess(usdAmount, getProduct(prev?.access_level));
+    const newAccess = resolveAccess(usdAmount, getProduct(prev?.access_level), prev?.access_expires_at);
     setUserFundedBalance(telegramId, usdAmount, newAccess);
     if (!wasFunded && usdAmount > 0) insertFunnelEvent('user_funded', JSON.stringify({ telegram_id: telegramId }));
     if (wasFunded && usdAmount <= 0) insertFunnelEvent('user_unfunded', JSON.stringify({ telegram_id: telegramId }));
@@ -1021,7 +1023,7 @@ async function sendStartMenu(ctx: Context): Promise<void> {
                     // null = no conversion rate — never re-gate on an unknown balance.
                     if (usdAmount !== null) {
                         const wasUnfunded = (user.funded_balance_usd ?? 0) <= 0;
-                        const newAccess = resolveAccess(usdAmount, getProduct(user.access_level));
+                        const newAccess = resolveAccess(usdAmount, getProduct(user.access_level), user.access_expires_at);
                         setUserFundedBalance(telegramId, usdAmount, newAccess);
                         accessForKbd = newAccess;
                         if (newAccess !== getProduct(user.access_level)) {
@@ -5230,10 +5232,12 @@ bot.on('text', async ctx => {
         }
         if (useToken(tokenInput, ctx.from!.id)) {
             const access = tokenToAccess(result.tier);
-            setUserAccessLevel(ctx.from!.id, access);
+            const expiresAt = new Date(Date.now() + TOKEN_ACCESS_DURATION_MS).toISOString();
+            setUserAccessLevel(ctx.from!.id, access, expiresAt);
+            const expiryDate = new Date(Date.now() + TOKEN_ACCESS_DURATION_MS).toLocaleDateString('en-GB');
             const label = getProductConfig(access).label;
             await ctx.reply(
-                `✅ Token accepted! *${label}* is now unlocked. 🎉`,
+                `✅ Token accepted! *${label}* is now unlocked until ${expiryDate}. 🎉`,
                 { parse_mode: 'Markdown', reply_markup: startKeyboard(access) }
             );
         } else {
@@ -5967,6 +5971,14 @@ ensurePolling().catch(err => {
     process.exit(1);
 });
 logger.info('bot', 'iqbot-v3 running');
+// Clean up any token-granted accesses that expired while bot was offline
+const downgraded = downgradeExpiredAccess();
+if (downgraded > 0) logger.info('bot', `downgraded ${downgraded} expired token accesses`);
+// Hourly check for expired token accesses
+setInterval(() => {
+const d = downgradeExpiredAccess();
+if (d > 0) logger.info('bot', `downgraded ${d} expired token accesses`);
+}, 60 * 60 * 1000);
 recoverMissedTradeResults(bot).catch(err => {
     console.error('[RECOVERY] Failed to recover missed trades:', err);
 });
