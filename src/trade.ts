@@ -85,7 +85,21 @@ export async function executeTradeWithSdk(sdk: ClientSdk, trade: TradeRequest): 
                      VALUES (?, ?, ?, ?, 'in_flight', ?, ?)`)
             .run(trade.telegramId ?? null, trade.pair, trade.direction, trade.amount, optionId, nowSql);
 
+        // Save external_id as soon as the position appears so crash recovery can find it.
+        const optId = optionId!; // narrowed for closure
+        const saveExtId = setInterval(() => {
+            const match = positions.getOpenedPositions().find(p => p.orderIds.includes(optId));
+            const extId: number | undefined = match?.externalId;
+            if (extId != null) {
+                db.prepare('UPDATE trades SET external_id = ? WHERE trade_id = ? AND status = ?')
+                    .run(extId, optId, 'in_flight');
+                clearInterval(saveExtId);
+            }
+        }, 500);
+        setTimeout(() => clearInterval(saveExtId), 15_000);
+
         const result = await waitForResult(positions, option.id, targetSize + 90);
+        clearInterval(saveExtId);
         const tradeResult: TradeResult = {
             ...result,
             tradeId: option.id,
