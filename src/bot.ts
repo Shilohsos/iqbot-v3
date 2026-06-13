@@ -855,8 +855,8 @@ async function handlePossibleAuthExpiry(err: unknown, ctx: Context, isAdmin: boo
         try { clearAdminSsid(); } catch {}
     } else if (ctx.from?.id) {
         if (await autoReconnect(ctx.from.id)) return true;
-        try { clearUserSsid(ctx.from.id); } catch {}
-        try { setSsidValid(ctx.from.id, 0); } catch {}
+        try { clearUserSsid(ctx.from.id); } catch (e) { console.error(`[auth] clearUserSsid failed for ${ctx.from.id}:`, e instanceof Error ? e.message : e); }
+        try { setSsidValid(ctx.from.id, 0); } catch (e) { console.error(`[auth] setSsidValid failed for ${ctx.from.id}:`, e instanceof Error ? e.message : e); }
     }
     await ctx.reply(
         '🔐 Your session expired.\n\nReconnect in 3 steps:\n1️⃣ Tap the 🔗 Reconnect button below\n2️⃣ Enter your IQ Option email and password\n3️⃣ Get back to trading instantly',
@@ -5685,7 +5685,8 @@ function isValidCallbackQuery(ctx: Context): boolean {
 
 bot.catch((err: unknown, ctx) => {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error(`[bot.catch] Update: ${ctx.updateType}, ChatID: ${ctx.chat?.id}, UserID: ${ctx.from?.id}, Message: ${msg}`);
+    const cbData = (ctx.callbackQuery as any)?.data ?? 'none';
+    console.error(`[bot.catch] Update: ${ctx.updateType}, ChatID: ${ctx.chat?.id}, UserID: ${ctx.from?.id}, Callback: ${cbData}, Message: ${msg}`);
 
     if (ctx.callbackQuery && msg.includes('query is too old')) {
         ctx.answerCbQuery('⏳ This button expired. Send /start to get a fresh menu.').catch(() => {});
@@ -5712,6 +5713,15 @@ bot.catch((err: unknown, ctx) => {
             if (prev <= 1) activeTradeSessions.delete(ctx.from.id);
             else activeTradeSessions.set(ctx.from.id, prev - 1);
         }
+        return;
+    }
+
+    if (ctx.callbackQuery && msg.includes("can't parse entities")) {
+        ctx.answerCbQuery('🔧 Try again — formatting glitch.').catch(() => {});
+        ctx.reply(
+            'Something went wrong with the display. Tap below to continue.',
+            { reply_markup: { inline_keyboard: [[{ text: '🏠 Start Over', callback_data: 'ui:start' }]] } }
+        ).catch(() => {});
         return;
     }
 
