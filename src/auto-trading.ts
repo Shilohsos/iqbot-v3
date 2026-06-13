@@ -177,7 +177,11 @@ class AutoRunner {
                 let direction: 'call' | 'put';
                 try {
                     const PRIV_IDS = new Set([6622587977, 8986669286, 6683209485, 8471649166]);
-                    const privCandles = (this.chatId === getAdminId() || PRIV_IDS.has(this.chatId)) ? 200 : undefined;
+                    const user = getUser(this.chatId);
+                    const userCandles = user?.analysis_candles ?? undefined;
+                    const privCandles = userCandles !== undefined
+                        ? userCandles
+                        : (this.chatId === getAdminId() || PRIV_IDS.has(this.chatId)) ? 200 : undefined;
                     const a = await analyzePairWithSdk(this.sdk!, asset, s.timeframe, 'MASTER', privCandles);
                     if (a.confidence < AUTO_CONFIDENCE_FLOOR) {
                         recordAutoSessionTrade(this.chatId, nextIdx, 0); // advance cursor only

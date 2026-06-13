@@ -43,6 +43,15 @@ async function runAnalysis(sdk: ClientSdk, pair: string, timeframeSec: number, t
     if (history.length < Math.min(30, Math.max(5, Math.floor(count * 0.7)))) throw new Error('Not enough data for analysis');
 
     const closes = history.map(c => c.close);
+
+    // 1-indicator drain mode: candleCount ≤ 5 → RSI only
+    if (candleCount !== undefined && candleCount <= 5) {
+        const rsi = computeRSI(closes, 14);
+        const direction: 'call' | 'put' = rsi > 50 ? 'call' : 'put';
+        const confidence = Math.min(100, Math.max(0, Math.abs(rsi - 50) * 2));
+        return { direction, confidence, reason: `RSI ${rsi.toFixed(1)} ${direction === 'call' ? '▲' : '▼'}`, entryPrice: closes[closes.length - 1] };
+    }
+
     const rsi  = computeRSI(closes, 14);
     const ema9  = computeEMA(closes, 9);
     const ema21 = computeEMA(closes, 21);
