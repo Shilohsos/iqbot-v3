@@ -64,8 +64,17 @@ export async function recoverMissedTradeResults(bot: Telegraf): Promise<void> {
                         recoveredPnl = pnl;
                     }
                 } else {
+                    // No external_id (older trades): match by trade_id in orderIds.
+                    // Opened positions only hold still-open trades, so a closed trade
+                    // won't be there — also sweep the positions history (closed trades).
                     const opened = positions.getOpenedPositions();
-                    const match = opened.find(p => p.orderIds.includes(row.trade_id));
+                    let match = opened.find(p => p.orderIds.includes(row.trade_id));
+
+                    if (!match) {
+                        const history = positions.getPositionsHistory();
+                        match = history.getPositions().find(p => p.orderIds.includes(row.trade_id));
+                    }
+
                     if (match && match.status === 'closed') {
                         const pnl = match.closeProfit ?? 0;
                         const reason = match.closeReason ?? '';

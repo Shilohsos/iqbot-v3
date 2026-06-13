@@ -1705,6 +1705,10 @@ bot.action(/^gale:(\d+)$/, async ctx => {
                 analysis = await analyzePairWithSdk(sdk, pair, timeframe, 'MASTER', tradeUser?.analysis_candles ?? undefined);
             } catch (err: unknown) {
                 if (l7MsgId) { try { await ctx.telegram.deleteMessage(chatId, l7MsgId); } catch {} }
+                if (await handlePossibleAuthExpiry(err, ctx, isAdmin)) {
+                    await ctx.telegram.deleteMessage(chatId, progressMsg.message_id).catch(() => {});
+                    return;
+                }
                 const errMsg = friendlyError(err, '⚠️ Could not analyze market. Please try again.');
                 await ctx.telegram.editMessageText(chatId, progressMsg.message_id, undefined, errMsg)
                     .catch(() => ctx.reply(errMsg));
@@ -1991,6 +1995,12 @@ bot.action(/^stf:(\d+)$/, async ctx => {
         const sdk = await sdkPool.get(uid, ssid);
         analysis = await analyzePairWithSdk(sdk, pair, timeframe, analysisTier, analysisCandles);
     } catch (err) {
+        // Auth-expired errors must invalidate the SSID (or auto-reconnect) so the
+        // user isn't stuck tapping into the same friendly error forever.
+        if (await handlePossibleAuthExpiry(err, ctx, false)) {
+            await ctx.telegram.deleteMessage(chatId, animMsg.message_id).catch(() => {});
+            return;
+        }
         await ctx.telegram.editMessageText(chatId, animMsg.message_id, undefined,
             friendlyError(err, '⚠️ Could not read the market. Try another signal.')).catch(() => {});
         await ctx.reply('Try again 👇', { reply_markup: { inline_keyboard: [[{ text: '🔄 New Signal', callback_data: 'ui:signals' }]] } });
@@ -2436,8 +2446,12 @@ bot.action('auto:god', async ctx => {
             [{ text: '🔧 Customize', callback_data: 'auto:start' }],
         ] } });
     } catch (err) {
-        await ctx.telegram.editMessageText(ctx.chat!.id, progress.message_id, undefined,
-            friendlyError(err, '⚡ Could not analyze your account. Try again.')).catch(() => {});
+        if (await handlePossibleAuthExpiry(err, ctx, false)) {
+            await ctx.telegram.deleteMessage(ctx.chat!.id, progress.message_id).catch(() => {});
+        } else {
+            await ctx.telegram.editMessageText(ctx.chat!.id, progress.message_id, undefined,
+                friendlyError(err, '⚡ Could not analyze your account. Try again.')).catch(() => {});
+        }
     } finally {
         sdkPool.release(uid);
     }
@@ -2519,12 +2533,12 @@ bot.action('ui:upgrade', async ctx => {
     const fundUrl = process.env.FUNDING_URL ?? 'https://iqoption.com/pwa/payments/deposit';
     await ctx.reply(
         `💡 *Product Access*\n\n` +
-        `📡 *Signals* — Free for all\\. Manual signal alerts\\.\n` +
-        `🤖 *AI Trading* — Semi\\-auto trading \\- Fund *\\$10\\+* into IQ Option\\.\n` +
-        `🚀 *Auto Trading* — Full auto trading \\- Fund *\\$50\\+* into IQ Option\\.\n\n` +
-        `Your access upgrades automatically once your balance hits the threshold\\.`,
+        `📡 *Signals* — Free for all. Manual signal alerts.\n` +
+        `🤖 *AI Trading* — Semi-auto trading. Fund *$10+* into IQ Option.\n` +
+        `🚀 *Auto Trading* — Full auto trading. Fund *$50+* into IQ Option.\n\n` +
+        `Your access upgrades automatically once your balance hits the threshold.`,
         {
-            parse_mode: 'MarkdownV2',
+            parse_mode: 'Markdown',
             reply_markup: {
                 inline_keyboard: [
                     [{ text: '💰 Fund Account', url: fundUrl }],
@@ -2585,21 +2599,21 @@ bot.action('ui:help', async ctx => {
     await ctx.answerCbQuery();
     await ctx.reply(
         `❓ *Help & FAQ*\n\n` +
-        `*📹 How to trade with 10x Bot*\\\n` +
+        `*📹 How to trade with 10x Bot*\n` +
         `[Watch video](https://youtu.be/b0s1lnZgqAI?si=bGWHTnsA7qIujtMc)\n\n` +
-        `*📹 How to fund & withdraw*\\\n` +
+        `*📹 How to fund & withdraw*\n` +
         `[Watch video](https://youtu.be/b0s1lnZgqAI?si=bGWHTnsA7qIujtMc)\n\n` +
-        `*Q: What is Smart Recovery?*\\\n` +
-        `If a trade loses, the bot doubles the next stake to recover the loss\\. Up to 6 rounds\\.\n\n` +
-        `*Q: Demo vs Live?*\\\n` +
-        `Demo uses practice balance\\. Live uses your real IQ Option balance\\.\n\n` +
-        `*Q: How do I withdraw?*\\\n` +
-        `All funds stay in your IQ Option account — withdraw directly from there\\.\n\n` +
-        `*Q: Why is my session expired?*\\\n` +
-        `IQ Option sessions expire after inactivity\\. Use /connect to reconnect\\.\n\n` +
-        `*Q: How do I upgrade my tier?*\\\n` +
-        `Deposit \\$10\\+ for PRO or \\$50\\+ for MASTER\\. Your tier upgrades automatically\\.`,
-        { parse_mode: 'MarkdownV2', reply_markup: backKeyboard() }
+        `*Q: What is Smart Recovery?*\n` +
+        `If a trade loses, the bot doubles the next stake to recover the loss. Up to 6 rounds.\n\n` +
+        `*Q: Demo vs Live?*\n` +
+        `Demo uses practice balance. Live uses your real IQ Option balance.\n\n` +
+        `*Q: How do I withdraw?*\n` +
+        `All funds stay in your IQ Option account — withdraw directly from there.\n\n` +
+        `*Q: Why is my session expired?*\n` +
+        `IQ Option sessions expire after inactivity. Use /connect to reconnect.\n\n` +
+        `*Q: How do I upgrade access?*\n` +
+        `Deposit $10+ for AI Trading or $50+ for Auto Trading. Your access upgrades automatically.`,
+        { parse_mode: 'Markdown', reply_markup: backKeyboard() }
     );
 });
 
