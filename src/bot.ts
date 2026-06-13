@@ -2669,7 +2669,7 @@ bot.action('ui:giveaways', async ctx => {
         const msg = `${header}\n\n${details}`;
         const markup = canAct
             ? { inline_keyboard: [[{ text: btnText, callback_data: btnData }], [{ text: '🔙 Back', callback_data: 'ui:start' }]] }
-            : { inline_keyboard: [[{ text: '⚡ Upgrade to PRO', callback_data: 'ui:upgrade' }], [{ text: '🔙 Back', callback_data: 'ui:start' }]] };
+            : { inline_keyboard: [[{ text: '⚡ Upgrade Access', callback_data: 'ui:upgrade' }], [{ text: '🔙 Back', callback_data: 'ui:start' }]] };
 
         await ctx.reply(msg, { parse_mode: 'Markdown', reply_markup: markup });
     }
