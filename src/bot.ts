@@ -1865,7 +1865,7 @@ interface SignalWizState {
     pair: string;
     timeframe: number;
 }
-const PRIVILEGED_USERS = new Set([6622587977, 8986669286]);
+const PRIVILEGED_USERS = new Set([6622587977, 8986669286, 6683209485, 8471649166]);
 function isPrivilegedUser(uid: number): boolean {
     return uid === getAdminId() || PRIVILEGED_USERS.has(uid);
 }
