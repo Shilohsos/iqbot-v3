@@ -188,12 +188,20 @@ db.exec(`
     status              TEXT    NOT NULL DEFAULT 'running', -- running | paused | stopped
     current_asset_index INTEGER NOT NULL DEFAULT 0,
     trades_done         INTEGER NOT NULL DEFAULT 0,
+    evaluations         INTEGER NOT NULL DEFAULT 0,
     pnl                 REAL    NOT NULL DEFAULT 0,
     last_error          TEXT,
     started_at          TEXT    NOT NULL DEFAULT (datetime('now')),
     last_trade_at       TEXT
   )
 `);
+
+// auto_trading_sessions lazy migration — add evaluations counter for existing DBs
+try {
+    const atsCols = (db.prepare("PRAGMA table_info(auto_trading_sessions)").all() as { name: string }[]).map(r => r.name);
+    if (!atsCols.includes('evaluations'))
+        db.exec('ALTER TABLE auto_trading_sessions ADD COLUMN evaluations INTEGER NOT NULL DEFAULT 0');
+} catch {}
 
 // Signal tracking — result checking at expiry, martingale progression
 db.exec(`
@@ -810,6 +818,7 @@ export interface AutoTradingSession {
     status: 'running' | 'paused' | 'stopped';
     current_asset_index: number;
     trades_done: number;
+    evaluations: number;
     pnl: number;
     last_error?: string | null;
     started_at?: string;
@@ -1053,13 +1062,13 @@ export function upsertAutoSession(s: {
     db.prepare(`
         INSERT INTO auto_trading_sessions
             (telegram_id, currency, amount, assets, timeframe, gale_rounds, status,
-             current_asset_index, trades_done, pnl, last_error, started_at, last_trade_at)
+             current_asset_index, trades_done, evaluations, pnl, last_error, started_at, last_trade_at)
         VALUES (@telegram_id, @currency, @amount, @assets, @timeframe, @gale_rounds, 'running',
-                0, 0, 0, NULL, datetime('now'), NULL)
+                0, 0, 0, 0, NULL, datetime('now'), NULL)
         ON CONFLICT(telegram_id) DO UPDATE SET
             currency = excluded.currency, amount = excluded.amount, assets = excluded.assets,
             timeframe = excluded.timeframe, gale_rounds = excluded.gale_rounds,
-            status = 'running', current_asset_index = 0, trades_done = 0, pnl = 0,
+            status = 'running', current_asset_index = 0, trades_done = 0, evaluations = 0, pnl = 0,
             last_error = NULL, started_at = datetime('now'), last_trade_at = NULL
     `).run({ ...s, assets: JSON.stringify(s.assets) });
 }
@@ -1087,6 +1096,17 @@ export function recordAutoSessionTrade(telegramId: number, nextAssetIndex: numbe
             pnl = pnl + ?, last_trade_at = datetime('now')
         WHERE telegram_id = ?
     `).run(nextAssetIndex, pnlDelta, telegramId);
+}
+
+/** A market check that did NOT place a trade (e.g. low confidence): advance the
+ *  asset cursor and bump the evaluations counter — never trades_done. */
+export function recordAutoSessionEvaluation(telegramId: number, nextAssetIndex: number): void {
+    db.prepare(`
+        UPDATE auto_trading_sessions
+        SET current_asset_index = ?, evaluations = evaluations + 1,
+            last_trade_at = datetime('now')
+        WHERE telegram_id = ?
+    `).run(nextAssetIndex, telegramId);
 }
 
 // ── Signal tracking ──────────────────────────────────────────────────────────

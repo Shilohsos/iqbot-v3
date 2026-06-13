@@ -10,7 +10,7 @@ import { analyzePairWithSdk } from './analysis.js';
 import { AUTO_CONFIDENCE_FLOOR } from './access.js';
 import {
     getAutoSession, getRunningAutoSessions, setAutoSessionStatus,
-    recordAutoSessionTrade, getUser, type AutoTradingSession,
+    recordAutoSessionTrade, recordAutoSessionEvaluation, getUser, type AutoTradingSession,
 } from './db.js';
 import { getAdminId } from './ui/admin.js';
 import { logger } from './logger.js';
@@ -83,7 +83,7 @@ class AutoRunner {
             `🚀 *Auto Trading* · ${statusEmoji}`,
             ``,
             `${asset} (${idx}/${this.assets.length}) · ${tfLabel(s.timeframe)} · ${s.gale_rounds}-round recovery`,
-            `Trades: ${s.trades_done}   P&L: ${pnlFormatted}`,
+            `Trades: ${s.trades_done}   Scanned: ${s.evaluations}   P&L: ${pnlFormatted}`,
             last ? `_${last}_` : '',
         ].filter(Boolean).join('\n');
         const extra = {
@@ -198,8 +198,9 @@ class AutoRunner {
                         : (this.chatId === getAdminId() || PRIV_IDS.has(this.chatId)) ? 200 : undefined;
                     const a = await analyzePairWithSdk(this.sdk!, asset, s.timeframe, 'MASTER', privCandles);
                     if (a.confidence < AUTO_CONFIDENCE_FLOOR) {
-                        recordAutoSessionTrade(this.chatId, nextIdx, 0); // advance cursor only
-                        // note: trades_done increments here; acceptable as "evaluations"
+                        // Skipped setup — advance the cursor and count an evaluation,
+                        // NOT a trade. trades_done must only reflect placed trades.
+                        recordAutoSessionEvaluation(this.chatId, nextIdx);
                         await new Promise(r => setTimeout(r, msToNextCandle(s.timeframe)));
                         continue;
                     }
