@@ -211,9 +211,12 @@ class AutoRunner {
                 }
 
                 recordAutoSessionTrade(this.chatId, nextIdx, outcome.totalPnl);
-                const emoji = outcome.status === 'WIN' ? '🟢' : outcome.status === 'TIE' ? '⚪' : outcome.status === 'LOSS' ? '🔴' : '⚠️';
-                const sign = outcome.totalPnl >= 0 ? '+' : '';
-                await this.renderStatus(`${emoji} ${outcome.status} ${sign}${outcome.totalPnl.toFixed(2)} ${s.currency}`);
+                const isError = outcome.status === 'ERROR' || outcome.status === 'TIMEOUT';
+                if (!isError) {
+                    const emoji = outcome.status === 'WIN' ? '🟢' : outcome.status === 'TIE' ? '⚪' : '🔴';
+                    const sign = outcome.totalPnl >= 0 ? '+' : '';
+                    await this.renderStatus(`${emoji} ${outcome.status} ${sign}${outcome.totalPnl.toFixed(2)} ${s.currency}`);
+                }
 
                 await new Promise(r => setTimeout(r, msToNextCandle(s.timeframe)));
             }
