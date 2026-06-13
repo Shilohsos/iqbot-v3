@@ -1139,6 +1139,12 @@ export function updateSignalTrackResult(id: number, status: 'won' | 'lost', resu
         .run(status, result, id);
 }
 
+/** Repoint a tracking record at a freshly-sent card message (dedup fallback). */
+export function updateSignalTrackCard(id: number, chatId: number, msgId: number): void {
+    db.prepare('UPDATE signal_tracking SET card_chat_id = ?, card_msg_id = ? WHERE id = ?')
+        .run(chatId, msgId, id);
+}
+
 export function getActiveSignalTrack(telegramId: number): SignalTrackRecord | undefined {
     return db.prepare(
         "SELECT * FROM signal_tracking WHERE telegram_id = ? AND status = 'active' ORDER BY id DESC LIMIT 1"

@@ -15,7 +15,7 @@ import { autoEngine, initAutoEngine } from './auto-trading.js';
 import {
     setUserFundedBalance, getSignalUsage, incrementSignalUsage, getTotalSignalCount, incrementTotalSignalCount, getTotalSignalsToday,
     upsertAutoSession, getAutoSession,
-    insertSignalTrack, getExpiredActiveSignals, updateSignalTrackResult, getAllActiveSignalTracks, cancelActiveSignalTracks,
+    insertSignalTrack, getExpiredActiveSignals, updateSignalTrackResult, updateSignalTrackCard, getAllActiveSignalTracks, cancelActiveSignalTracks,
     getRecentTrades, getTradeStats, getTopTradersToday,
     getUser, saveUser, saveUsername, deleteUser, getAllUsers, getAllUserIds,
     getActiveTraderIds, getInactiveTraderIds, findUsersByUsername, findUsersByIqUserId,
@@ -1910,6 +1910,49 @@ function cancelPrepCountdown(uid: number) {
     if (c) { c.cancel(); prepCountdowns.delete(uid); }
 }
 
+// Per-user lock serializing edits to a user's signal card. The prep countdown and
+// the tracking loop both edit the same message; without this they race and the
+// loser's fallback spawns a duplicate card with stale (dead) buttons.
+const signalCardLocks = new Map<number, Promise<void>>();
+
+/** Edit a user's signal card under the per-user lock. Returns true on success.
+ *  On a "message gone" error (deleted / uneditable) returns false immediately so
+ *  the caller can recreate; on a transient error retries once after 1s. */
+async function editSignalCard(
+    uid: number, chatId: number, msgId: number, text: string, keyboard: unknown,
+    guard?: () => boolean,
+): Promise<boolean> {
+    // Wait for any in-flight edit for this user to finish.
+    while (signalCardLocks.has(uid)) {
+        try { await signalCardLocks.get(uid); } catch { /* prior edit's error is its own */ }
+    }
+    let release!: () => void;
+    signalCardLocks.set(uid, new Promise<void>(r => { release = r; }));
+    try {
+        // Re-check under the lock: e.g. the tracking loop may have written the final
+        // result while we waited, in which case a stale countdown edit must not land.
+        if (guard && !guard()) return false;
+        const doEdit = () => bot.telegram.editMessageText(
+            chatId, msgId, undefined, text, { parse_mode: 'Markdown', reply_markup: keyboard as any });
+        try {
+            await doEdit();
+            return true;
+        } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            // Message is gone / can't be edited — no point retrying; let caller recreate.
+            if (/not found|can't be edited|message to edit|MESSAGE_ID_INVALID/i.test(msg)) {
+                return false;
+            }
+            // Transient (network / 5xx) — one retry after a short backoff.
+            await new Promise(r => setTimeout(r, 1000));
+            try { await doEdit(); return true; } catch { return false; }
+        }
+    } finally {
+        signalCardLocks.delete(uid);
+        release();
+    }
+}
+
 bot.action('ui:signals', async ctx => {
     await ctx.answerCbQuery();
     if (!await requireApproval(ctx)) return;
@@ -2114,34 +2157,17 @@ bot.action(/^stf:(\d+)$/, async ctx => {
     let prepCancelled = false;
     prepCountdowns.set(uid, { cancel: () => { prepCancelled = true; } });
     void (async () => {
+        const backOnly = { inline_keyboard: [[{ text: '🔙 Back', callback_data: 'ui:start' }]] };
         for (let remaining = 50; remaining >= 0 && !prepCancelled; remaining -= 10) {
             await new Promise(r => setTimeout(r, 10000));
             if (prepCancelled) break;
             const sec = remaining % 60;
             const timeStr = `0:${sec.toString().padStart(2, '0')}`;
-            try {
-                await ctx.telegram.editMessageText(chatId, cardMsg.message_id, undefined,
-                    renderCard(`⏳ *Preparing...* — ${timeStr}`),
-                    { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [
-                        [{ text: '🔙 Back', callback_data: 'ui:start' }],
-                    ] } }
-                );
-            } catch (e) {
-                logger.warn('prep-countdown', `edit failed (${timeStr ?? '?'}): ${e instanceof Error ? e.message : e}`);
-            }
+            await editSignalCard(uid, chatId, cardMsg.message_id, renderCard(`⏳ *Preparing...* — ${timeStr}`), backOnly, () => !prepCancelled);
         }
 
         if (!prepCancelled) {
-            try {
-                await ctx.telegram.editMessageText(chatId, cardMsg.message_id, undefined,
-                    renderCard(`🟢 *ENTER NOW* — place your ${dirStr} trade`),
-                    { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [
-                        [{ text: '🔙 Back', callback_data: 'ui:start' }],
-                    ] } }
-                );
-            } catch (e) {
-                logger.warn('prep-countdown', `ENTER NOW edit failed: ${e instanceof Error ? e.message : e}`);
-            }
+            await editSignalCard(uid, chatId, cardMsg.message_id, renderCard(`🟢 *ENTER NOW* — place your ${dirStr} trade`), backOnly, () => !prepCancelled);
         }
         prepCountdowns.delete(uid);
     })();
@@ -6382,23 +6408,22 @@ backgroundIntervals.push(setInterval(async () => {
                         ? { inline_keyboard: [[{ text: '🔄 New Signal', callback_data: 'ui:signals' }], [{ text: '🔙 Back', callback_data: 'ui:start' }]] }
                         : { inline_keyboard: [[{ text: '🔙 Back', callback_data: 'ui:start' }]] };
 
-                    // Edit the card in place; fall back to a new message if no card id
-                    // is stored or the edit fails (e.g. message deleted by the user).
-                    // Cancel any running prep countdown so it doesn't overwrite this result.
+                    // Edit the card in place under the per-user lock; cancel any running
+                    // prep countdown first so it can't overwrite this result. If the edit
+                    // fails (card deleted), delete the stale card and send one fresh card,
+                    // repointing the record so future rounds edit the new message.
                     cancelPrepCountdown(sig.telegram_id);
                     let edited = false;
                     if (sig.card_chat_id && sig.card_msg_id) {
-                        try {
-                            await bot.telegram.editMessageText(sig.card_chat_id, sig.card_msg_id, undefined,
-                                notifyText, { parse_mode: 'Markdown', reply_markup: keyboard });
-                            edited = true;
-                        } catch (e) {
-                            logger.warn('signal-track', `editMessageText failed for user ${sig.telegram_id}: ${e instanceof Error ? e.message : e}`);
-                        }
+                        edited = await editSignalCard(sig.telegram_id, sig.card_chat_id, sig.card_msg_id, notifyText, keyboard);
                     }
                     if (!edited) {
+                        if (sig.card_chat_id && sig.card_msg_id) {
+                            bot.telegram.deleteMessage(sig.card_chat_id, sig.card_msg_id).catch(() => {});
+                        }
                         try {
-                            await bot.telegram.sendMessage(sig.telegram_id, notifyText, { parse_mode: 'Markdown', reply_markup: keyboard });
+                            const newMsg = await bot.telegram.sendMessage(sig.telegram_id, notifyText, { parse_mode: 'Markdown', reply_markup: keyboard });
+                            updateSignalTrackCard(sig.id, newMsg.chat.id, newMsg.message_id);
                         } catch (e) {
                             logger.warn('signal-track', `sendMessage failed for user ${sig.telegram_id}: ${e instanceof Error ? e.message : e}`);
                         }
