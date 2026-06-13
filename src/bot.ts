@@ -3107,9 +3107,12 @@ const ACTION_MAP: Record<string, { text: string; value: string }> = {
     history:     { text: '📆 History',     value: 'ui:history' },
     leaderboard: { text: '🏆 Leaderboard', value: 'ui:leaderboard' },
     menu:        { text: '📋 Menu',        value: 'ui:start' },
+    upgrade:     { text: '⚡ Upgrade Access', value: 'ui:upgrade' },
 };
+const CONTACT_URL = 'https://t.me/shiloh_is_10xing';
+const FUND_URL = process.env.FUNDING_URL ?? 'https://iqoption.com/pwa/payments/deposit';
 
-bot.action(/^broadcast_action:(trade|stats|history|leaderboard|menu|start)$/, async ctx => {
+bot.action(/^broadcast_action:(trade|stats|history|leaderboard|menu|start|upgrade|contact|fund)$/, async ctx => {
     await ctx.answerCbQuery();
     const key = ctx.match[1];
     const pending = pendingBroadcasts.get(ctx.chat!.id);
@@ -3118,6 +3121,12 @@ bot.action(/^broadcast_action:(trade|stats|history|leaderboard|menu|start)$/, as
         const botUsername = process.env.BOT_USERNAME ?? 'Shiloh10xbot';
         pendingBroadcasts.set(ctx.chat!.id, { ...pending, button: { text: '🚀 Start Bot', type: 'url', value: `https://t.me/${botUsername}?start=` } });
         await ctx.reply(`✅ Button set: *🚀 Start Bot*\n\n⏱ Auto-delete after?`, { parse_mode: 'Markdown', reply_markup: broadcastTimerKeyboard() });
+    } else if (key === 'contact') {
+        pendingBroadcasts.set(ctx.chat!.id, { ...pending, button: { text: '📞 Contact Admin', type: 'url', value: CONTACT_URL } });
+        await ctx.reply(`✅ Button set: *📞 Contact Admin*\n\n⏱ Auto-delete after?`, { parse_mode: 'Markdown', reply_markup: broadcastTimerKeyboard() });
+    } else if (key === 'fund') {
+        pendingBroadcasts.set(ctx.chat!.id, { ...pending, button: { text: '💰 Fund Account', type: 'url', value: FUND_URL } });
+        await ctx.reply(`✅ Button set: *💰 Fund Account*\n\n⏱ Auto-delete after?`, { parse_mode: 'Markdown', reply_markup: broadcastTimerKeyboard() });
     } else {
         const action = ACTION_MAP[key];
         if (!action) { await ctx.reply('❌ Session expired.', { reply_markup: adminBackKeyboard() }); return; }

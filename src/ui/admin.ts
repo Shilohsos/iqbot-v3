@@ -193,12 +193,15 @@ export function broadcastLinkKeyboard(): IKMarkup {
 export function broadcastActionKeyboard(): IKMarkup {
     return {
         inline_keyboard: [
-            [{ text: '🎯 Trade Now',    callback_data: 'broadcast_action:trade' }],
-            [{ text: '📊 Stats',        callback_data: 'broadcast_action:stats' }],
-            [{ text: '📆 History',      callback_data: 'broadcast_action:history' }],
-            [{ text: '🏆 Leaderboard',  callback_data: 'broadcast_action:leaderboard' }],
-            [{ text: '📋 Menu',         callback_data: 'broadcast_action:menu' }],
-            [{ text: '🚀 Start Bot',    callback_data: 'broadcast_action:start' }],
+            [{ text: '🎯 Trade Now',       callback_data: 'broadcast_action:trade' }],
+            [{ text: '📊 Stats',           callback_data: 'broadcast_action:stats' }],
+            [{ text: '📆 History',         callback_data: 'broadcast_action:history' }],
+            [{ text: '🏆 Leaderboard',     callback_data: 'broadcast_action:leaderboard' }],
+            [{ text: '📋 Menu',            callback_data: 'broadcast_action:menu' }],
+            [{ text: '🚀 Start Bot',       callback_data: 'broadcast_action:start' }],
+            [{ text: '⚡ Upgrade Access',   callback_data: 'broadcast_action:upgrade' }],
+            [{ text: '📞 Contact Admin',   callback_data: 'broadcast_action:contact' }],
+            [{ text: '💰 Fund Account',    callback_data: 'broadcast_action:fund' }],
         ],
     };
 }
