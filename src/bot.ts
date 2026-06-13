@@ -196,7 +196,17 @@ if (!existsSync(ASSETS_DIR)) {
 
 if (!BOT_TOKEN) throw new Error('BOT_TOKEN missing from .env');
 
-process.on('unhandledRejection', (reason) => { console.error('[unhandledRejection]', reason); });
+process.on('unhandledRejection', (reason) => {
+    const msg = reason instanceof Error ? reason.message : String(reason);
+    // The SDK's WebSocket teardown ("connection closed unexpectedly", "is closing",
+    // "not open") surfaces as background rejections. Log them cleanly — the pool
+    // health check + reconnect paths handle recovery; they must not crash the bot.
+    if (/websocket|is closing|not open|connection closed/i.test(msg)) {
+        console.error('[ws] unhandled WebSocket rejection (non-fatal):', msg);
+        return;
+    }
+    console.error('[unhandledRejection]', reason);
+});
 
 // ─── Admin notification queue ─────────────────────────────────────────────────
 // Defers admin notifications when admin is actively using the portal.
@@ -209,13 +219,26 @@ function touchAdminActivity(): void {
     adminNotificationTimer = setTimeout(flushAdminNotifications, 20 * 60 * 1000);
 }
 
+/** Send to admin; if the dynamic content breaks Markdown entity parsing, retry
+ *  as plain text so the message still lands and the error log stays clean. */
+async function sendAdminMessage(msg: string, parseMode: any): Promise<void> {
+    try {
+        await bot.telegram.sendMessage(getAdminId(), msg, { parse_mode: parseMode ?? 'Markdown' });
+    } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        if (/can't parse entities|can't find end of the entity|reserved/i.test(errMsg)) {
+            try { await bot.telegram.sendMessage(getAdminId(), msg); return; } catch { /* fall through to log */ }
+        }
+        console.error(`[notifyAdmin] send failed: ${errMsg}`);
+    }
+}
+
 async function notifyAdmin(msg: string, parseMode?: any): Promise<void> {
     if (adminNotificationTimer) {
         adminNotificationQueue.push({ msg, parseMode });
         return;
     }
-    try { await bot.telegram.sendMessage(getAdminId(), msg, { parse_mode: parseMode ?? 'Markdown' }); }
-    catch (err) { console.error(`[notifyAdmin] send failed: ${err instanceof Error ? err.message : err}`); }
+    await sendAdminMessage(msg, parseMode);
 }
 
 function flushAdminNotifications(): void {
@@ -223,7 +246,7 @@ function flushAdminNotifications(): void {
     const queue = adminNotificationQueue.splice(0);
     if (queue.length === 0) return;
     for (const n of queue) {
-        bot.telegram.sendMessage(getAdminId(), n.msg, { parse_mode: n.parseMode ?? 'Markdown' }).catch(() => {});
+        sendAdminMessage(n.msg, n.parseMode).catch(() => {});
     }
 }
 
@@ -1179,7 +1202,7 @@ async function runMartingale(
                         ]},
                     }
                 )
-                : await ctx.reply(`⚠️ Stopped: ${errMsg}`, {
+                : await ctx.reply(friendlyError(err, '⚠️ Trade could not be placed. Try again.'), {
                     reply_markup: { inline_keyboard: [[{ text: '🔄 New Opportunity', callback_data: 'ui:trade' }]] },
                 });
             sentMessages.push(catchReply.message_id);
@@ -1270,7 +1293,7 @@ async function runMartingale(
                         ]},
                     }
                 )
-                : await ctx.reply(`⚠️ Stopped: ${errMsg}`, {
+                : await ctx.reply(friendlyError(new Error(errMsg), '⚠️ Trade could not be placed. Try again.'), {
                     reply_markup: { inline_keyboard: [[{ text: '🔄 New Opportunity', callback_data: 'ui:trade' }]] },
                 });
             sentMessages.push(errStatusReply.message_id);
@@ -2786,7 +2809,7 @@ bot.command('balance', async ctx => {
         } else {
             const isTimeout = err instanceof Error && err.message.startsWith('SDK timeout');
             await ctx.reply(
-                isTimeout ? '⚠️ IQ Option is taking too long. Try again in a moment.' : `❌ Balance fetch failed: ${err instanceof Error ? err.message : 'Unknown error'}`,
+                isTimeout ? '⚠️ IQ Option is taking too long. Try again in a moment.' : friendlyError(err, '❌ Could not check your balance. Try again.'),
                 { reply_markup: backKeyboard() }
             );
         }

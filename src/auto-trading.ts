@@ -14,6 +14,7 @@ import {
 } from './db.js';
 import { getAdminId } from './ui/admin.js';
 import { logger } from './logger.js';
+import { friendlyError } from './errors.js';
 import { BalanceType } from './index.js';
 
 // Minimal Telegram surface we need — injected from bot.ts to avoid a circular import.
@@ -42,6 +43,7 @@ class AutoRunner {
     private stopping = false;
     private statusMsgId: number | undefined;
     private assets: string[];
+    private lastWsNotify = 0;
 
     constructor(public readonly session: AutoTradingSession) {
         this.assets = JSON.parse(session.assets) as string[];
@@ -109,6 +111,18 @@ class AutoRunner {
             ]] } }
             : undefined;
         try { await notifier?.sendMessage(this.chatId, text, extra); } catch { /* ignore */ }
+    }
+
+    /** Notify the user about a WebSocket hiccup at most once per minute so a
+     *  flapping connection doesn't spam them. Returns true if the error was a WS error. */
+    private async maybeNotifyWsError(msg: string): Promise<boolean> {
+        if (!/websocket|is closing|not open/i.test(msg)) return false;
+        const now = Date.now();
+        if (now - this.lastWsNotify > 60_000) {
+            this.lastWsNotify = now;
+            await this.notify(`🚀 Auto Trading — ${friendlyError(new Error(msg))} Retrying automatically.`);
+        }
+        return true;
     }
 
     private async liveBalance(): Promise<number> {
@@ -197,6 +211,10 @@ class AutoRunner {
                         await this.notify('🚀 Auto Trading paused — your session expired. Reconnect and resume.', true);
                         break;
                     }
+                    // A dropped WebSocket: tell the user once, reconnect, then retry.
+                    if (await this.maybeNotifyWsError(msg)) {
+                        await this.reconnect(ssid);
+                    }
                     await new Promise(r => setTimeout(r, 3000));
                     continue;
                 }
@@ -210,6 +228,10 @@ class AutoRunner {
                 } catch (err) {
                     const msg = err instanceof Error ? err.message : String(err);
                     logger.warn('auto', `trade run failed for ${this.chatId}: ${msg}`);
+                    // Surface a dropped WebSocket once and reconnect before retrying.
+                    if (await this.maybeNotifyWsError(msg)) {
+                        await this.reconnect(ssid);
+                    }
                     await new Promise(r => setTimeout(r, 3000));
                     continue;
                 }

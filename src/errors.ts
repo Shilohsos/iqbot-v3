@@ -7,6 +7,8 @@ export const FriendlyErrors: Record<string, string> = {
     'fetch failed':          '🔌 IQ Option is unreachable right now. Your account is safe — try again in a moment.',
     'Not connected':         '🔗 Your IQ Option account isn\'t linked yet. Tap to connect.',
     'WebSocket':             '🔌 Lost connection to IQ Option. Your account is safe — try again.',
+    'is closing':            '🔌 Lost connection to IQ Option. Your account is safe — try again.',
+    'not open':              '🔌 Lost connection to IQ Option. Your account is safe — try again.',
     'not available':         '🔒 This market isn\'t available right now. Try another pair or timeframe.',
     'request is failed':     '⚠️ IQ Option rejected the request. Wait a moment and try again.',
     'is not found':          '⚠️ Couldn\'t read market data for this pair. Try another one.',

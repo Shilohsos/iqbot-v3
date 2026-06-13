@@ -1,4 +1,4 @@
-import { ClientSdk, SsidAuthMethod } from './index.js';
+import { ClientSdk, SsidAuthMethod, WsConnectionStateEnum, type WsConnectionState } from './index.js';
 import { WS_URL, PLATFORM_ID, IQ_HOST } from './protocol.js';
 
 interface PoolEntry {
@@ -7,13 +7,16 @@ interface PoolEntry {
     inUse: boolean;
     lastUsed: number;
     createdAt: number;
+    healthy: boolean;
+    connState?: WsConnectionState;
+    onStateChanged?: (state: WsConnectionStateEnum) => void;
 }
 
 class UserSdkPool {
     private entries = new Map<number, PoolEntry>();
     private pending = new Map<number, Promise<ClientSdk>>();
     private readonly IDLE_TTL_MS = 5 * 60 * 1000;
-    private readonly MAX_AGE_MS = 10 * 60 * 1000;
+    private readonly MAX_AGE_MS = 5 * 60 * 1000;
     private cleanupTimer: ReturnType<typeof setInterval>;
 
     constructor() {
@@ -29,7 +32,9 @@ class UserSdkPool {
         const existing = this.entries.get(userId);
         if (existing) {
             const stale = existing.ssid !== ssid || Date.now() - existing.createdAt > this.MAX_AGE_MS;
-            if (!stale) {
+            // A cached SDK whose WebSocket has dropped must never be handed out —
+            // the SDK would throw "WebSocket is closing/not open" at the user.
+            if (!stale && existing.healthy) {
                 existing.inUse = true;
                 existing.lastUsed = Date.now();
                 return existing.sdk;
@@ -47,13 +52,31 @@ class UserSdkPool {
                         setTimeout(() => reject(new Error('SDK connection timed out')), 180_000)
                     ),
                 ]);
-                this.entries.set(userId, {
+                const entry: PoolEntry = {
                     sdk,
                     ssid,
                     inUse: true,
                     lastUsed: Date.now(),
                     createdAt: Date.now(),
-                });
+                    healthy: true,
+                };
+                this.entries.set(userId, entry);
+                // Track WebSocket health event-driven so get() never returns a dead
+                // connection. Failure to subscribe leaves healthy=true (fail-open).
+                try {
+                    const connState = await sdk.wsConnectionState();
+                    const onStateChanged = (state: WsConnectionStateEnum) => {
+                        entry.healthy = state === WsConnectionStateEnum.Connected;
+                        if (!entry.healthy) {
+                            console.warn(`[pool] user ${userId} WebSocket ${state} — entry marked unhealthy`);
+                        }
+                    };
+                    connState.subscribeOnStateChanged(onStateChanged);
+                    entry.connState = connState;
+                    entry.onStateChanged = onStateChanged;
+                } catch (e) {
+                    console.warn(`[pool] could not subscribe to ws state for user ${userId}:`, e instanceof Error ? e.message : e);
+                }
                 return sdk;
             } finally {
                 this.pending.delete(userId);
@@ -74,6 +97,9 @@ class UserSdkPool {
     async shutdown(userId: number): Promise<void> {
         const entry = this.entries.get(userId);
         if (entry) {
+            if (entry.connState && entry.onStateChanged) {
+                try { entry.connState.unsubscribeOnStateChanged(entry.onStateChanged); } catch {}
+            }
             try { await entry.sdk.shutdown(); } catch {}
             this.entries.delete(userId);
         }
@@ -83,7 +109,9 @@ class UserSdkPool {
     private cleanup(): void {
         const now = Date.now();
         for (const [userId, entry] of this.entries.entries()) {
-            if (!entry.inUse && now - entry.lastUsed > this.IDLE_TTL_MS) {
+            const idle = !entry.inUse && now - entry.lastUsed > this.IDLE_TTL_MS;
+            // Evict idle entries and any unhealthy entry not currently in use.
+            if (idle || (!entry.inUse && !entry.healthy)) {
                 this.shutdown(userId).catch(() => {});
             }
         }
