@@ -46,7 +46,7 @@ export interface UserContext {
     ssid_valid: number | null;
     has_ssid: boolean;
     demo_trade_count: number | null;
-    tier: string;
+    access_level: string;
     user_id_fail_count?: number;
     brain_response_count?: number;
     is_activated: boolean;
@@ -68,7 +68,7 @@ async function classifyFlow(text: string, context: UserContext): Promise<BrainRe
         `ssid_valid=${context.ssid_valid ?? 'null'},`,
         `has_ssid=${context.has_ssid},`,
         `demo_trade_count=${context.demo_trade_count ?? 0},`,
-        `tier=${context.tier},`,
+        `access_level=${context.access_level},`,
         `is_activated=${context.is_activated}`,
         context.user_id_fail_count ? `, user_id_fail_count=${context.user_id_fail_count}` : '',
     ].join(' ');

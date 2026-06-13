@@ -321,7 +321,7 @@ export function selectWinners(giveawayId: number): Array<{ telegram_id: number; 
             `💵 *Amount Per Winner:* ${perWinner}\n\n` +
             `🏆 *WINNERS:*\n${winnersList}\n\n` +
             `Winners contact admin now for your winnings\\!\n\n` +
-            `Missed out? Don't let it happen again\\. Upgrade to PRO and join the next one\\! 🔥`;
+            `Missed out? Don't let it happen again\\. Upgrade your access and join the next one\\! 🔥`;
         const adminLink = process.env.ADMIN_CONTACT_LINK ?? 'https://t.me/shiloh_is_10xing';
         const replyMarkup = JSON.stringify({ inline_keyboard: [[{ text: '👤 Contact Admin', url: adminLink }]] });
         for (const uid of allUserIds) {

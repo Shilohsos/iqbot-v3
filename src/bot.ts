@@ -66,7 +66,7 @@ import {
     getTemplateCategories,
     updateTemplateMessage,
     getRandomTemplate,
-    getTierDistribution,
+    getAccessDistribution,
     getFundedUserCount,
     getRecentBroadcasts,
     getOnboardingFunnelStats,
@@ -1355,7 +1355,7 @@ async function sendFirstTradeCongrats(ctx: Context): Promise<void> {
         `/help — Contact admin\n` +
         `/connect — Reconnect your IQ Option account\n` +
         `/balance — Check your balances\n` +
-        `/tiers — View your account tier`
+        `/access — View your product access`
     );
     await sendStartMenu(ctx);
 }
@@ -2518,11 +2518,11 @@ bot.action('ui:upgrade', async ctx => {
     connectSessions.delete(ctx.chat!.id);
     const fundUrl = process.env.FUNDING_URL ?? 'https://iqoption.com/pwa/payments/deposit';
     await ctx.reply(
-        `💡 *Tiers & Upgrade*\n\n` +
-        `🧪 *DEMO* — Practice mode\\. Max 10 trades\\/day\\.\n` +
-        `⚡ *PRO* — Live trading \\- Fund *\\$10\\+* into IQ Option\\.\n` +
-        `👑 *MASTER* — Live trading \\- Fund *\\$50\\+* into IQ Option\\.\n\n` +
-        `Your tier upgrades automatically once your balance hits the threshold\\.`,
+        `💡 *Product Access*\n\n` +
+        `📡 *Signals* — Free for all\\. Manual signal alerts\\.\n` +
+        `🤖 *AI Trading* — Semi\-auto trading \\- Fund *\\$10\\+* into IQ Option\\.\n` +
+        `🚀 *Auto Trading* — Full auto trading \\- Fund *\\$50\\+* into IQ Option\\.\n\n` +
+        `Your access upgrades automatically once your balance hits the threshold\\.`,
         {
             parse_mode: 'MarkdownV2',
             reply_markup: {
@@ -2541,7 +2541,7 @@ bot.action('ui:upgrade_token', async ctx => {
     upgradeSessions.add(ctx.chat!.id);
     await ctx.reply(
         `🔑 *Upgrade with Token*\n\n` +
-        `Enter your upgrade token below to unlock *PRO* tier\\. ⚡\n\n` +
+        `Enter your upgrade token below to unlock product access\\. ⚡\n\n` +
         `Don't have a token? Contact support\\.`,
         {
             parse_mode: 'Markdown',
@@ -3075,7 +3075,7 @@ bot.action(/^broadcast:(all|funded|nonfunded|nonactivated|testuser)$/, async ctx
     adminSessions.set(ctx.chat!.id, { step: 'broadcast_message', broadcastTarget: target });
     const labelMap: Record<string, string> = {
         all: 'All Users',
-        funded: 'Funded users (PRO/MASTER)',
+        funded: 'Funded users (AI/Auto Trading)',
         nonfunded: 'Non-Funded users (connected, no deposit)',
         nonactivated: 'Non-Activated users',
         testuser: 'test user (Shara)',
@@ -4340,14 +4340,14 @@ bot.action('admin:ssid_expired', async ctx => {
 bot.action('admin:onboarding_funnel', async ctx => {
     await ctx.answerCbQuery();
     const stats = getOnboardingFunnelStats();
-    const dist = getTierDistribution();
+    const dist = getAccessDistribution();
     let msg = '👣 *Onboarding Funnel*\n\n';
     for (const [state, count] of Object.entries(stats)) {
         msg += `• ${state}: ${count}\n`;
     }
-    msg += '\n*Tier Distribution:*\n';
+    msg += '\n*Access Distribution:*\n';
     for (const row of dist) {
-        msg += `• ${row.tier}: ${row.count} (${row.pct.toFixed(1)}%)\n`;
+        msg += `• ${row.access_level}: ${row.count} (${row.pct.toFixed(1)}%)\n`;
     }
     await ctx.reply(msg, { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
 });
@@ -4703,7 +4703,7 @@ async function handleUserIdBrainRoute(ctx: Context, telegramId: number, lastInpu
         ssid_valid: null,
         has_ssid: false,
         demo_trade_count: null,
-        tier: 'DEMO',
+        access_level: 'signals',
         user_id_fail_count: failCount,
         is_activated: false,
     };
@@ -4806,7 +4806,7 @@ bot.on('text', async ctx => {
 
                     const segLabelMap: Record<string, string> = {
                         all: 'All Users',
-                        funded: 'Funded (PRO/MASTER)',
+                        funded: 'Funded (AI/Auto Trading)',
                         nonfunded: 'Non-Funded (connected, no deposit)',
                         nonactivated: 'Non-Activated',
                         testuser: 'test user (Shara)',
@@ -5265,7 +5265,7 @@ bot.on('text', async ctx => {
                 ssid_valid: brainUser?.ssid_valid ?? null,
                 has_ssid: !!brainUser?.ssid,
                 demo_trade_count: brainUser ? getDemoTradeCount(brainUser.telegram_id) : null,
-                tier: brainUser?.tier ?? 'DEMO',
+                access_level: brainUser?.access_level ?? 'signals',
                 is_activated: brainIsActivated,
                 user_id_fail_count: getUserIdFailCount(ctx.from!.id),
             };
@@ -5420,7 +5420,7 @@ bot.on('text', async ctx => {
                     ssid_valid: null,
                     has_ssid: false,
                     demo_trade_count: null,
-                    tier: brainUser?.tier ?? 'DEMO',
+                    access_level: brainUser?.access_level ?? 'signals',
                     is_activated: false,
                     user_id_fail_count: failCount,
                 };
@@ -5615,7 +5615,7 @@ bot.on('text', async ctx => {
             ssid_valid: user?.ssid_valid ?? null,
             has_ssid: !!user?.ssid,
             demo_trade_count: user ? getDemoTradeCount(user.telegram_id) : null,
-            tier: user?.tier ?? 'DEMO',
+            access_level: user?.access_level ?? 'signals',
             is_activated: isActivated,
         };
         const brainResult = await getBrainFlow(ctx.from!.id, text, brainCtx).catch(

@@ -2801,10 +2801,10 @@ export function getAllSequenceMediaKeys(): { template_key: string; media_type: s
 
 // ─── Admin analytics ──────────────────────────────────────────────────────────
 
-export function getTierDistribution(): { tier: string; count: number; pct: number }[] {
+export function getAccessDistribution(): { access_level: string; count: number; pct: number }[] {
     const rows = db.prepare(
-        "SELECT COALESCE(access_level,'signals') AS tier, COUNT(*) AS count FROM users GROUP BY access_level ORDER BY count DESC"
-    ).all() as { tier: string; count: number }[];
+        "SELECT COALESCE(access_level,'signals') AS access_level, COUNT(*) AS count FROM users GROUP BY access_level ORDER BY count DESC"
+    ).all() as { access_level: string; count: number }[];
     const total = rows.reduce((s, r) => s + r.count, 0);
     return rows.map(r => ({ ...r, pct: total > 0 ? Math.round((r.count / total) * 100) : 0 }));
 }
