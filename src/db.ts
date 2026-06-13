@@ -2662,8 +2662,9 @@ export function getLoginFailedUsers(): Array<{ telegram_id: number }> {
     return db.prepare(`
         SELECT u.telegram_id FROM users u
         LEFT JOIN onboarding_tracking ot ON ot.telegram_id = u.telegram_id
-        WHERE u.onboarding_state = 'awaiting_password'
-        AND (ot.last_activity_at IS NULL OR ot.last_activity_at < datetime('now', '-1 hour'))
+        WHERE u.onboarding_state IN ('awaiting_password', 'awaiting_email')
+        AND (ot.last_activity_at IS NULL OR ot.last_activity_at < datetime('now', '-30 minutes'))
+        AND u.ssid IS NULL
     `).all() as any;
 }
 

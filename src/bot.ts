@@ -5445,6 +5445,9 @@ bot.on('text', async ctx => {
                 }
             } else {
                 setOnboardingState(ctx.from!.id, 'awaiting_email');
+                // Clear ssid_valid so a failed login can never be misclassified as
+                // an expired session by other code paths (reconnect loop, segments).
+                try { setSsidValid(ctx.from!.id, 0); } catch (e) { console.error(`[connect] setSsidValid failed for ${ctx.from!.id}:`, e instanceof Error ? e.message : e); }
                 const errMsg = err instanceof Error ? err.message : 'Login failed';
                 await ctx.reply(`❌ ${errMsg}\n\n📧 Enter your IQ Option email again:`);
             }
@@ -5912,7 +5915,7 @@ function getReconnectMessage(state: ReconnectState): { text: string; button: Rec
             };
         case 'login_failed':
             return {
-                text: '🟣 *Login didn\'t go through*\n\nDouble-check your IQ Option email and password.\n\n1️⃣ Tap 🔗 Connect below\n2️⃣ Enter the correct email and password\n3️⃣ We\'ll handle the rest',
+                text: '🟣 *Login didn\'t go through*\n\nYour IQ Option email or password was incorrect.\n\n✅ Check for typos, caps lock, or extra spaces\n✅ Make sure you\'re using your IQ Option login (not Google/Apple)\n\n1️⃣ Tap 🔗 Connect below\n2️⃣ Enter the correct email and password\n3️⃣ Back to winning 💜',
                 button: { text: '🔗 Connect', callback_data: 'ui:connect' },
             };
         case 'onboarding_abandoned':
