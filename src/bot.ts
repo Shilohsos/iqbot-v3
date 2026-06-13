@@ -2520,7 +2520,7 @@ bot.action('ui:upgrade', async ctx => {
     await ctx.reply(
         `💡 *Product Access*\n\n` +
         `📡 *Signals* — Free for all\\. Manual signal alerts\\.\n` +
-        `🤖 *AI Trading* — Semi\-auto trading \\- Fund *\\$10\\+* into IQ Option\\.\n` +
+        `🤖 *AI Trading* — Semi\\-auto trading \\- Fund *\\$10\\+* into IQ Option\\.\n` +
         `🚀 *Auto Trading* — Full auto trading \\- Fund *\\$50\\+* into IQ Option\\.\n\n` +
         `Your access upgrades automatically once your balance hits the threshold\\.`,
         {
