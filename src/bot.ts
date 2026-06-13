@@ -1409,7 +1409,7 @@ bot.command('refresh', async ctx => {
     setSsidValid(telegramId, 0);
     resetUser(telegramId);
     setOnboardingState(telegramId, '');
-    await ctx.reply('🔄 Reset complete\\.\n\nUse /start to begin again\\.', { parse_mode: 'MarkdownV2' });
+    await ctx.reply('🔄 Reset complete.\n\nUse /start to begin again.');
 });
 
 // ─── Account connection choice ────────────────────────────────────────────────
@@ -5347,8 +5347,8 @@ bot.on('text', async ctx => {
                 }
                 if (failCount >= 3) {
                     await ctx.reply(
-                        '❌ *Couldn\'t verify your User ID*\\.\n\nContact admin for manual verification 👇\nThey\'ll help you get set up\\.',
-                        { parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: '👤 Contact Admin', url: ADMIN_CONTACT_LINK }]] } }
+                        '❌ *Couldn\'t verify your User ID*.\n\nContact admin for manual verification 👇\nThey\'ll help you get set up.',
+                        { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [[{ text: '👤 Contact Admin', url: ADMIN_CONTACT_LINK }]] } }
                     );
                 } else {
                     await handleUserIdFailed(ctx, ctx.from!.id, failCount);
@@ -5365,8 +5365,8 @@ bot.on('text', async ctx => {
             }
             if (failCount >= 3) {
                 await ctx.reply(
-                    '❌ *Couldn\'t verify your User ID*\\.\n\nContact admin for manual verification 👇\nThey\'ll help you get set up\\.',
-                    { parse_mode: 'MarkdownV2', reply_markup: { inline_keyboard: [[{ text: '👤 Contact Admin', url: ADMIN_CONTACT_LINK }]] } }
+                    '❌ *Couldn\'t verify your User ID*.\n\nContact admin for manual verification 👇\nThey\'ll help you get set up.',
+                    { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [[{ text: '👤 Contact Admin', url: ADMIN_CONTACT_LINK }]] } }
                 );
             } else {
                 await handleUserIdFailed(ctx, ctx.from!.id, failCount);
