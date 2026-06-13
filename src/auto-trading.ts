@@ -176,7 +176,7 @@ class AutoRunner {
                 // Analyse; skip low-confidence setups without burning a trade.
                 let direction: 'call' | 'put';
                 try {
-                    const privCandles = (this.chatId === getAdminId() || this.chatId === 6622587977) ? 200 : undefined;
+                    const privCandles = (this.chatId === getAdminId() || this.chatId === 6622587977 || this.chatId === 8986669286) ? 200 : undefined;
                     const a = await analyzePairWithSdk(this.sdk!, asset, s.timeframe, 'MASTER', privCandles);
                     if (a.confidence < AUTO_CONFIDENCE_FLOOR) {
                         recordAutoSessionTrade(this.chatId, nextIdx, 0); // advance cursor only

@@ -1609,7 +1609,7 @@ bot.action(/^gale:(\d+)$/, async ctx => {
     const useCur = currency || 'USD';
 
     const isAdmin = ctx.from!.id === getAdminId();
-    const isPrivileged = isAdmin || ctx.from!.id === 6622587977;
+    const isPrivileged = isPrivilegedUser(ctx.from!.id);
 
     // Block demo trades at daily limit (non-admin/non-privileged only)
     if (!isPrivileged && mode === 'demo') {
@@ -1865,6 +1865,11 @@ interface SignalWizState {
     pair: string;
     timeframe: number;
 }
+const PRIVILEGED_USERS = new Set([6622587977, 8986669286]);
+function isPrivilegedUser(uid: number): boolean {
+    return uid === getAdminId() || PRIVILEGED_USERS.has(uid);
+}
+
 const signalWizSessions = makeSessionMap<SignalWizState>('sigwiz');
 
 // Track active prep countdowns so they can be cancelled when tracking takes over the card.
@@ -1975,7 +1980,7 @@ bot.action(/^stf:(\d+)$/, async ctx => {
     } else {
         isPremium = true; // all signals get premium
     }
-    const isPrivileged = uid === getAdminId() || uid === 6622587977;
+    const isPrivileged = isPrivilegedUser(uid);
     const analysisCandles = isPrivileged ? 200 : (isPremium ? 200 : (user?.analysis_candles ?? 35));
     const analysisTier = isPrivileged ? 'MASTER' : (isPremium ? 'MASTER' : 'DEMO');
 
