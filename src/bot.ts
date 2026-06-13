@@ -1418,6 +1418,8 @@ bot.command('refresh', async ctx => {
 
 bot.action('onboard:yes', async ctx => {
     await ctx.answerCbQuery().catch(() => {});
+    upgradeSessions.delete(ctx.chat!.id);
+    connectSessions.delete(ctx.chat!.id);
     setOnboardingState(ctx.from!.id, 'awaiting_user_id');
     await ctx.reply("Bet. Let's link it up.\n\nDrop your IQ Option User ID 👇");
 });
