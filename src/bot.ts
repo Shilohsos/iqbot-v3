@@ -1555,26 +1555,28 @@ bot.action(/^mode:(demo|live)$/, async ctx => {
             );
             return;
         }
-        // Show demo notice on first entry
+        state.mode = mode;
+        state.step = 'currency';
         await ctx.reply(
-            `🟣 *Demo Mode*\n\nYou can test AI Trading for up to ${cap} trades/day with premium analysis.\n\nFund $${PRODUCT_LIMITS.ai_trading.unlockBalance}+ to unlock unlimited live trading. 💜`,
-            { parse_mode: 'Markdown' }
+            `🟣 *Demo Mode* — ${cap} trades/day\n\nFund $${PRODUCT_LIMITS.ai_trading.unlockBalance}+ for unlimited live trading.\n\nSelect your trading currency:`,
+            { parse_mode: 'Markdown', reply_markup: currencyKeyboard() }
         );
-    } else {
-        // Live mode — check if user has enough balance (only for new funders without existing access)
-        const user = getUser(ctx.from!.id);
-        const funded = (user?.funded_balance_usd ?? 0);
-        const hasAccessViaToken = hasAccess(user?.access_level, 'ai_trading');
-        if (!hasAccessViaToken && funded < PRODUCT_LIMITS.ai_trading.unlockBalance) {
-            await ctx.reply(
-                `⚠️ Live trading requires $${PRODUCT_LIMITS.ai_trading.unlockBalance}+ funded.\n\nYou have $${funded.toFixed(2)} funded. Use Demo mode or fund your account.`,
-                { reply_markup: { inline_keyboard: [
-                    [{ text: '💰 Fund Account', url: DEPOSIT_URL }],
-                    [{ text: '🔄 Trade Demo', callback_data: 'mode:demo' }],
-                ]}}
-            );
-            return;
-        }
+        return;
+    }
+
+    // Live — user already passed hasAccessLive at ui:trade level
+    // Just verify they have a valid SSID before proceeding
+    const user = getUser(ctx.from!.id);
+    const hasValidSsid = user?.ssid && user.ssid_valid !== 0;
+    if (!hasValidSsid) {
+        const isExpired = !!user?.ssid;
+        await ctx.reply(
+            isExpired
+                ? '🔌 Your IQ Option session expired. Reconnect to continue trading 👇'
+                : '⚠️ You need to connect your IQ Option account first.\nTap Connect below to get started 👇',
+            { reply_markup: { inline_keyboard: [[{ text: isExpired ? '🔗 Reconnect' : '🔗 Connect Account', callback_data: 'ui:connect' }]] } }
+        );
+        return;
     }
 
     state.mode = mode;
