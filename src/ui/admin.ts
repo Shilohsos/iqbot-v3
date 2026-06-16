@@ -441,6 +441,7 @@ export function composeButtonKeyboard(): IKMarkup {
             [{ text: '🎯 Trade Now',       callback_data: 'compose_btn:trade' }],
             [{ text: '💰 Fund Account',    callback_data: 'compose_btn:fund' }],
             [{ text: '📞 Contact Admin',  callback_data: 'compose_btn:contact' }],
+            [{ text: '🛥️ Yacht Club',    callback_data: 'compose_btn:yacht' }],
             [{ text: '❌ No Button',       callback_data: 'compose_btn:none' }],
         ],
     };

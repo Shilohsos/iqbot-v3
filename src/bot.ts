@@ -466,7 +466,7 @@ interface AdminSessionState {
     composeDescription?: string;
     composeContent?: string;
     composeImageFileIds?: string[];
-    composeCta?: 'start' | 'trade' | 'fund' | 'none';
+    composeCta?: 'start' | 'trade' | 'fund' | 'contact' | 'yacht' | 'none';
     // Media library upload
     mediaLibraryKey?: string;
 }
@@ -4414,7 +4414,7 @@ bot.action('compose:approve', async ctx => {
     await ctx.reply('📎 Send an image to attach, or type *skip* to send text-only:', { parse_mode: 'Markdown' });
 });
 
-bot.action(/^compose_btn:(start|trade|fund|contact|none)$/, async ctx => {
+bot.action(/^compose_btn:(start|trade|fund|contact|yacht|none)$/, async ctx => {
     await ctx.answerCbQuery();
     const chatId = ctx.chat!.id;
     const as = adminSessions.get(chatId);
@@ -4448,6 +4448,7 @@ bot.action(/^compose_delivery:(bot|channel|both)$/, async ctx => {
         trade:   { text: '🎯 Trade Now', callback_data: 'ui:trade_menu' },
         fund:    { text: '💰 Fund Account', url: fundUrl },
         contact: { text: '📞 Contact Admin', url: ADMIN_CONTACT_LINK },
+        yacht:   { text: '🛥️ Join Yacht Club', url: 'https://t.me/+Y3LbEi18ECVmMWI0' },
     };
     const cta = as.composeCta;
     const ctaBtn = cta && cta !== 'none' ? ctaBtnMap[cta] : { text: '🚀 Trade Now', callback_data: 'ui:trade_menu' };
