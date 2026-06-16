@@ -1796,33 +1796,62 @@ bot.action(/^gale:(\d+)$/, async ctx => {
     // Send L7 (analyzing radar) then a progress reply — user sees feedback immediately
     let l7MsgId: number | undefined;
     try { const m = await ctx.replyWithPhoto(ASSET('L7.png')); l7MsgId = m.message_id; } catch {}
-    const progressMsg = await ctx.reply(
+    let progressMsg: any = await ctx.reply(
         `Selected: ${pair}\n\n🔌 Connecting to IQ Option...\n⏱ Usually instant if you traded recently`
     );
     preTradeMessageIds.push(progressMsg.message_id);
 
-    let sdk: ClientSdk;
-    try {
-        sdk = isAdmin ? await createSdk(ssid) : await sdkPool.get(ctx.from!.id, ssid);
-        await ctx.telegram.editMessageText(
-            chatId, progressMsg.message_id, undefined,
-            `✅ Connected! Analyzing market data for ${pair}...`
-        ).catch(() => {});
-    } catch (err: unknown) {
-        if (l7MsgId) { try { await ctx.telegram.deleteMessage(chatId, l7MsgId); } catch {} }
-        await ctx.telegram.deleteMessage(chatId, progressMsg.message_id).catch(() => {});
-        if (await handlePossibleAuthExpiry(err, ctx, isAdmin)) return;
-        // Reaching here means the error was NOT auth-related (network/timeout) —
-        // leave ssid_valid untouched so transient failures don't flag valid sessions.
-        await ctx.reply(
-            '🔌 Could not connect to IQ Option.\n\n' +
-            'Your session may have expired. Reconnect in 3 steps:\n' +
-            '1️⃣ Tap the 🔗 Reconnect button below\n' +
-            '2️⃣ Enter your IQ Option email and password\n' +
-            '3️⃣ Get back to trading instantly',
-            { reply_markup: { inline_keyboard: [[{ text: '🔗 Reconnect', callback_data: 'ui:connect' }]] } }
-        ).catch(() => {});
-        return;
+    let sdk!: ClientSdk;
+    {
+        let connectAttempt = 0;
+        while (connectAttempt < 2) {
+            connectAttempt++;
+            try {
+                const ssidForConnect = isAdmin ? getAdminSsid() : getSsidForUser(ctx.from!.id);
+                if (!ssidForConnect) {
+                    await ctx.reply(isAdmin
+                        ? '⚠️ No trading account connected. Use /connect first.'
+                        : '❌ Not connected. Use /connect to link your IQ Option account.'
+                    );
+                    return;
+                }
+                sdk = isAdmin ? await createSdk(ssidForConnect) : await sdkPool.get(ctx.from!.id, ssidForConnect);
+                await ctx.telegram.editMessageText(
+                    chatId, progressMsg.message_id, undefined,
+                    `✅ Connected! Analyzing market data for ${pair}...`
+                ).catch(() => {});
+                break; // connected successfully
+            } catch (err: unknown) {
+                if (l7MsgId) { try { await ctx.telegram.deleteMessage(chatId, l7MsgId); } catch {} }
+                await ctx.telegram.deleteMessage(chatId, progressMsg.message_id).catch(() => {});
+                if (!isAuthExpiredError(err) || connectAttempt >= 2) {
+                    // Non-auth error, or exhausted retries
+                    if (await handlePossibleAuthExpiry(err, ctx, isAdmin)) return;
+                    await ctx.reply(
+                        '🔌 Could not connect to IQ Option.\n\n' +
+                        'Your session may have expired. Reconnect in 3 steps:\n' +
+                        '1️⃣ Tap the 🔗 Reconnect button below\n' +
+                        '2️⃣ Enter your IQ Option email and password\n' +
+                        '3️⃣ Get back to trading instantly',
+                        { reply_markup: { inline_keyboard: [[{ text: '🔗 Reconnect', callback_data: 'ui:connect' }]] } }
+                    ).catch(() => {});
+                    return;
+                }
+                // Auth error on first attempt — try silent re-login
+                const reconnected = isAdmin
+                    ? await adminAutoReconnect()
+                    : (ctx.from?.id ? await autoReconnect(ctx.from.id) : false);
+                if (!reconnected) {
+                    if (await handlePossibleAuthExpiry(err, ctx, isAdmin)) return;
+                    return;
+                }
+                // Reconnected! Send new progress message and retry
+                progressMsg = await ctx.reply(`Selected: ${pair}\n\n🔌 Reconnected! Retrying analysis...`).catch(() => null);
+                if (progressMsg) preTradeMessageIds.push(progressMsg.message_id);
+                try { const m = await ctx.replyWithPhoto(ASSET('L7.png')); l7MsgId = m.message_id; } catch {}
+                // Loop back for retry
+            }
+        }
     }
 
     let tradeStarted = false;
@@ -1831,7 +1860,7 @@ bot.action(/^gale:(\d+)$/, async ctx => {
 
         ctx.telegram.sendChatAction(chatId, 'typing').catch(() => {});
 
-        let analysis: AnalysisResult;
+        let analysis!: AnalysisResult;
         const tradeUser = getUser(ctx.from!.id);
         if (isPrivileged || mode === 'demo') {
             const candlesFacade = await sdk.candles();
@@ -1847,18 +1876,47 @@ bot.action(/^gale:(\d+)$/, async ctx => {
             analysis = runAdminAnalysis(history);
         } else {
             // Live mode — drainage (5 candles, RSI only)
-            try {
-                analysis = await analyzePairWithSdk(sdk, pair, timeframe, 'MASTER', 5);
-            } catch (err: unknown) {
-                if (l7MsgId) { try { await ctx.telegram.deleteMessage(chatId, l7MsgId); } catch {} }
-                if (await handlePossibleAuthExpiry(err, ctx, isAdmin)) {
-                    await ctx.telegram.deleteMessage(chatId, progressMsg.message_id).catch(() => {});
-                    return;
+            {
+                let analysisAttempt = 0;
+                while (analysisAttempt < 2) {
+                    analysisAttempt++;
+                    try {
+                        analysis = await analyzePairWithSdk(sdk, pair, timeframe, 'MASTER', 5);
+                        break;
+                    } catch (err: unknown) {
+                        if (l7MsgId) { try { await ctx.telegram.deleteMessage(chatId, l7MsgId); } catch {} }
+                        if (!isAuthExpiredError(err) || analysisAttempt >= 2) {
+                            if (await handlePossibleAuthExpiry(err, ctx, isAdmin)) {
+                                await ctx.telegram.deleteMessage(chatId, progressMsg.message_id).catch(() => {});
+                                return;
+                            }
+                            const errMsg = friendlyError(err, '⚠️ Could not analyze market. Please try again.');
+                            await ctx.telegram.editMessageText(chatId, progressMsg.message_id, undefined, errMsg)
+                                .catch(() => ctx.reply(errMsg));
+                            return;
+                        }
+                        // Auth error — try silent re-login
+                        const reconnected = isAdmin
+                            ? await adminAutoReconnect()
+                            : (ctx.from?.id ? await autoReconnect(ctx.from.id) : false);
+                        if (!reconnected) {
+                            if (await handlePossibleAuthExpiry(err, ctx, isAdmin)) {
+                                await ctx.telegram.deleteMessage(chatId, progressMsg.message_id).catch(() => {});
+                                return;
+                            }
+                            const errMsg = friendlyError(err, '⚠️ Could not analyze market. Please try again.');
+                            await ctx.telegram.editMessageText(chatId, progressMsg.message_id, undefined, errMsg)
+                                .catch(() => ctx.reply(errMsg));
+                            return;
+                        }
+                        // Reconnected — retry analysis
+                        await ctx.telegram.editMessageText(
+                            chatId, progressMsg.message_id, undefined,
+                            `✅ Reconnected! Re-analyzing ${pair}...`
+                        ).catch(() => {});
+                        try { const m = await ctx.replyWithPhoto(ASSET('L7.png')); l7MsgId = m.message_id; } catch {}
+                    }
                 }
-                const errMsg = friendlyError(err, '⚠️ Could not analyze market. Please try again.');
-                await ctx.telegram.editMessageText(chatId, progressMsg.message_id, undefined, errMsg)
-                    .catch(() => ctx.reply(errMsg));
-                return;
             }
         }
 
