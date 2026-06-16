@@ -2109,21 +2109,38 @@ bot.action('ui:yacht', async ctx => {
         return;
     }
 
+    let usdAmount: number | null = null;
+    let hadReal = false;
     try {
-        // Live balance check — convert to USD BEFORE releasing the SDK (the
-        // directive's pseudocode released it too early).
-        let usdAmount: number | null = null;
-        let hadReal = false;
-        const sdk = await sdkPool.get(uid, ssid);
-        try {
-            const all = (await withTimeout(sdk.balances(), 15_000, 'balance')).getBalances();
-            const real = all.find(b => b.type === BalanceType.Real);
-            if (real && real.amount > 0) {
-                hadReal = true;
-                usdAmount = await convertToUsd(real.amount, real.currency ?? 'USD', sdk);
+        let balanceAttempt = 0;
+        while (balanceAttempt < 2) {
+            balanceAttempt++;
+            try {
+                const sdk = await sdkPool.get(uid, getSsidForUser(uid)!);
+                try {
+                    const all = (await withTimeout(sdk.balances(), 15_000, 'balance')).getBalances();
+                    const real = all.find(b => b.type === BalanceType.Real);
+                    if (real && real.amount > 0) {
+                        hadReal = true;
+                        usdAmount = await convertToUsd(real.amount, real.currency ?? 'USD', sdk);
+                    }
+                } finally {
+                    sdkPool.release(uid);
+                }
+                break; // success — exit retry loop
+            } catch (err) {
+                if (!isAuthExpiredError(err) || balanceAttempt >= 2) {
+                    // Non-auth error, or exhausted retries — propagate
+                    throw err;
+                }
+                // Auth error on first attempt — try silent re-login
+                if (!(await autoReconnect(uid))) {
+                    clearUserSsid(uid);
+                    setSsidValid(uid, 0);
+                    throw err;
+                }
+                // Reconnected! Loop back and retry with fresh SSID
             }
-        } finally {
-            sdkPool.release(uid);
         }
 
         if (!hadReal) {
@@ -2169,13 +2186,6 @@ bot.action('ui:yacht', async ctx => {
         );
     } catch (err) {
         if (isAuthExpiredError(err)) {
-            if (await autoReconnect(uid)) {
-                await ctx.reply(
-                    `🛥️ *10x Yacht Club*\n\nYour session was refreshed. Tap below to check eligibility.`,
-                    { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [[{ text: '🛥️ Check Again', callback_data: 'ui:yacht' }]] } }
-                );
-                return;
-            }
             clearUserSsid(uid);
             setSsidValid(uid, 0);
         }
