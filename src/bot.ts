@@ -872,7 +872,7 @@ async function refreshFundedBalanceFromLive(uid: number): Promise<void> {
         if (isAuthExpiredError(err)) {
             if (await autoReconnect(uid)) {
                 ssid = getSsidForUser(uid);
-                if (ssid) { try { await fetchAndSync(ssid); } catch { /* give up — use cache */ } }
+                if (ssid) { try { await fetchAndSync(ssid); } catch (e) { logger.warn('bot', `balance refresh retry failed for ${uid}: ${e instanceof Error ? e.message : e}`); } }
             } else {
                 // Reconnect failed (bad creds / decode error): invalidate the SSID so
                 // the user is routed to reconnect instead of silently stuck.
@@ -880,10 +880,16 @@ async function refreshFundedBalanceFromLive(uid: number): Promise<void> {
                 setSsidValid(uid, 0);
                 logger.warn('bot', `SSID cleared for user ${uid} after failed reconnect during balance refresh`);
             }
+        } else {
+            // Timeout/network: keep the cached value but record why (C6).
+            logger.warn('bot', `balance refresh failed for ${uid} (using cached): ${err instanceof Error ? err.message : err}`);
         }
-        // Non-auth errors (timeout/network): fall back to cached value silently.
     }
 }
+
+// Per-user in-flight guard so rapid button mashing doesn't fire parallel SDK
+// balance calls (C3). Concurrent callers await the same refresh promise.
+const balanceRefreshInFlight = new Map<number, Promise<void>>();
 
 /** Access gate that refreshes the live balance FIRST if the user currently lacks
  *  access — so a deposit made after connecting unlocks them immediately instead
@@ -891,7 +897,13 @@ async function refreshFundedBalanceFromLive(uid: number): Promise<void> {
 async function hasAccessLive(uid: number, need: Product): Promise<boolean> {
     if (uid === getAdminId()) return true;
     if (hasAccess(getUser(uid)?.access_level, need)) return true;
-    await refreshFundedBalanceFromLive(uid);
+    // Coalesce concurrent refreshes for the same user into one SDK call (C3).
+    let refresh = balanceRefreshInFlight.get(uid);
+    if (!refresh) {
+        refresh = refreshFundedBalanceFromLive(uid).finally(() => balanceRefreshInFlight.delete(uid));
+        balanceRefreshInFlight.set(uid, refresh);
+    }
+    await refresh;
     return hasAccess(getUser(uid)?.access_level, need);
 }
 
@@ -2431,7 +2443,7 @@ async function sendAutoMenu(ctx: Context): Promise<void> {
         rows.push([{ text: '⚡ Reconfigure (God Mode)', callback_data: 'auto:god' }]);
         rows.push([{ text: '🔙 Back', callback_data: 'ui:start' }]);
 
-        await ctx.reply(body, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: rows } });
+        await ctx.reply(body, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: rows } }).catch(() => {});
     } else {
         // No active session — show mode options
         const user = getUser(ctx.from!.id);
@@ -2453,7 +2465,7 @@ async function sendAutoMenu(ctx: Context): Promise<void> {
             rows.push([{ text: '🎮 Demo Mode', callback_data: 'auto:start:demo' }]);
             rows.push([{ text: '⚡ Auto God Mode', callback_data: 'auto:god' }]);
             rows.push([{ text: '🔙 Back', callback_data: 'ui:start' }]);
-            await ctx.reply(body, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: rows } });
+            await ctx.reply(body, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: rows } }).catch(() => {});
         } else {
             // Unfunded user — show demo countdown and unlock requirements
             const body = [
@@ -2471,14 +2483,9 @@ async function sendAutoMenu(ctx: Context): Promise<void> {
             rows.push([{ text: `💎 Live (Fund $${PRODUCT_LIMITS.auto_trading.unlockBalance}+)`, url: DEPOSIT_URL }]);
             rows.push([{ text: '⚡ Auto God Mode', callback_data: 'auto:god' }]);
             rows.push([{ text: '🔙 Back', callback_data: 'ui:start' }]);
-            await ctx.reply(body, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: rows } });
+            await ctx.reply(body, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: rows } }).catch(() => {});
         }
     }
-}
-
-function requireAutoAccess(ctx: Context): boolean {
-    if (ctx.from!.id === getAdminId()) return true;
-    return hasAccess(getUser(ctx.from!.id)?.access_level, 'auto_trading');
 }
 
 /** Check if auto trading is allowed in demo mode (no access needed). */
@@ -2493,19 +2500,6 @@ bot.action('ui:auto', async ctx => {
     if (!await requireApproval(ctx)) return;
     if (!await hasAccessLive(ctx.from!.id, 'auto_trading')) { await sendAutoTradingLock(ctx); return; }
     await sendAutoMenu(ctx);
-});
-
-bot.action('auto:start', async ctx => {
-    await ctx.answerCbQuery();
-    if (!await hasAccessLive(ctx.from!.id, 'auto_trading')) { await sendAutoTradingLock(ctx); return; }
-    if (!getSsidForUser(ctx.from!.id)) {
-        await ctx.reply('⚠️ Connect your IQ Option account first.', {
-            reply_markup: { inline_keyboard: [[{ text: '🔗 Connect Account', callback_data: 'ui:connect' }]] },
-        });
-        return;
-    }
-    autoWizSessions.set(ctx.chat!.id, { step: 'currency', assets: [], mode: 'live' });
-    await ctx.reply('💰 Select your trading currency:', { reply_markup: autoCurrencyKeyboard() });
 });
 
 bot.action('auto:start:demo', async ctx => {

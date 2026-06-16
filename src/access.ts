@@ -267,9 +267,15 @@ const FALLBACK_RATES: Record<string, number> = {
 export async function convertToUsd(amount: number, currency: string, sdk: ClientSdk): Promise<number | null> {
     if (currency === 'USD') return amount;
 
+    const now = Date.now();
     const cached = rateCache.get(currency);
-    if (cached && cached.expires > Date.now()) {
+    if (cached && cached.expires > now) {
         return amount * cached.rate;
+    }
+    // Drop expired entries so the cache can't grow unbounded over time (C8).
+    if (cached) rateCache.delete(currency);
+    for (const [cur, entry] of rateCache) {
+        if (entry.expires <= now) rateCache.delete(cur);
     }
 
     try {

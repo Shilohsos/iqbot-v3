@@ -403,12 +403,12 @@ class AutoRunner {
 
                 let outcome: MartingaleOutcome;
                 let lastTradePnl = 0;
-                const balanceType = this.mode === 'demo' ? 'practice' : 'live';
+                const balanceType: 'demo' | 'live' = this.mode === 'demo' ? 'demo' : 'live';
                 try {
                     outcome = await withTimeout(
                         runMartingaleCore(this.sdk!, {
                             pair: asset, direction, amount: startAmount, timeframeSec: s.timeframe,
-                            galeRounds: s.gale_rounds, balanceType: balanceType as 'demo' | 'live', telegramId: this.chatId,
+                            galeRounds: s.gale_rounds, balanceType, telegramId: this.chatId,
                         }, (info) => {
                             if (info.result.status === 'WIN') {
                                 lastTradePnl = info.result.pnl - info.amount;
