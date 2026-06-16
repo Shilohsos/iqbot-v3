@@ -476,11 +476,12 @@ export function reviewsKeyboard(): IKMarkup {
 }
 
 export function reviewResultKeyboard(): IKMarkup {
+    // No "Approve & Send" / "Copy Text" — there is no review broadcast workflow and
+    // Telegram has no clipboard API, so those were dead-ends. The reviews are shown
+    // as plain text above; the admin long-presses to copy. Only real actions remain.
     return {
         inline_keyboard: [
-            [{ text: '✅ Approve & Send',    callback_data: 'reviews:approve' }],
             [{ text: '🔄 Regenerate',        callback_data: 'reviews:regenerate' }],
-            [{ text: '📋 Copy Text',         callback_data: 'reviews:copy' }],
             [{ text: '🔙 Back',              callback_data: 'admin:reviews' }],
         ],
     };

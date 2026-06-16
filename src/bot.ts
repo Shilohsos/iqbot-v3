@@ -9,7 +9,7 @@ import {
     resolveAccess, getProductConfig, hasAccess, getProduct, convertToUsd, tokenToAccess,
     type Product,
     AI_TRADING_MIN_USD, AUTO_TRADING_MIN_USD, FREE_SIGNALS_PER_DAY, ALL_PAIRS,
-    PRODUCT_LIMITS, isDemoMode, SIGNALS_PREMIUM_COUNT, getDemoLimitMessage, getRelockMessage,
+    PRODUCT_LIMITS, SIGNALS_PREMIUM_COUNT,
     clampDisplayConfidence,
     TOKEN_ACCESS_DURATION_MS,
     godModeStakePct, godModeTimeframe, godModeGaleRounds, martingaleWorstCase, godModePickWorstAssets,
@@ -833,8 +833,16 @@ async function syncAccessFromBalance(
     if (usdAmount === null) return null; // unknown rate — never re-gate
     const prev = getUser(telegramId);
     const wasFunded = (prev?.funded_balance_usd ?? 0) > 0;
-    const newAccess = resolveAccess(usdAmount, getProduct(prev?.access_level), prev?.access_expires_at);
-    setUserFundedBalance(telegramId, usdAmount, newAccess);
+    // Only a live (non-expired) upgrade token should override the balance. Without
+    // an active token the current access_level is balance-derived, so we pass NO
+    // token grant — letting the balance purely decide (and allowing a drop to
+    // downgrade the user). Passing the current level here would make access a
+    // one-way ratchet that can never be lowered.
+    const hasActiveToken = !!prev?.access_expires_at && new Date(prev.access_expires_at) > new Date();
+    const tokenGrant = hasActiveToken ? getProduct(prev?.access_level) : undefined;
+    const newAccess = resolveAccess(usdAmount, tokenGrant, prev?.access_expires_at);
+    // Preserve the expiry only for an active token; otherwise clear any stale one.
+    setUserFundedBalance(telegramId, usdAmount, newAccess, hasActiveToken ? prev?.access_expires_at : null);
     if (!wasFunded && usdAmount > 0) insertFunnelEvent('user_funded', JSON.stringify({ telegram_id: telegramId }));
     if (wasFunded && usdAmount <= 0) insertFunnelEvent('user_unfunded', JSON.stringify({ telegram_id: telegramId }));
     return newAccess;
@@ -861,13 +869,27 @@ async function refreshFundedBalanceFromLive(uid: number): Promise<void> {
     try {
         await fetchAndSync(ssid);
     } catch (err) {
-        if (isAuthExpiredError(err) && await autoReconnect(uid)) {
-            ssid = getSsidForUser(uid);
-            if (ssid) { try { await fetchAndSync(ssid); } catch { /* give up — use cache */ } }
+        if (isAuthExpiredError(err)) {
+            if (await autoReconnect(uid)) {
+                ssid = getSsidForUser(uid);
+                if (ssid) { try { await fetchAndSync(ssid); } catch (e) { logger.warn('bot', `balance refresh retry failed for ${uid}: ${e instanceof Error ? e.message : e}`); } }
+            } else {
+                // Reconnect failed (bad creds / decode error): invalidate the SSID so
+                // the user is routed to reconnect instead of silently stuck.
+                clearUserSsid(uid);
+                setSsidValid(uid, 0);
+                logger.warn('bot', `SSID cleared for user ${uid} after failed reconnect during balance refresh`);
+            }
+        } else {
+            // Timeout/network: keep the cached value but record why (C6).
+            logger.warn('bot', `balance refresh failed for ${uid} (using cached): ${err instanceof Error ? err.message : err}`);
         }
-        // Non-auth errors (timeout/network): fall back to cached value silently.
     }
 }
+
+// Per-user in-flight guard so rapid button mashing doesn't fire parallel SDK
+// balance calls (C3). Concurrent callers await the same refresh promise.
+const balanceRefreshInFlight = new Map<number, Promise<void>>();
 
 /** Access gate that refreshes the live balance FIRST if the user currently lacks
  *  access — so a deposit made after connecting unlocks them immediately instead
@@ -875,7 +897,13 @@ async function refreshFundedBalanceFromLive(uid: number): Promise<void> {
 async function hasAccessLive(uid: number, need: Product): Promise<boolean> {
     if (uid === getAdminId()) return true;
     if (hasAccess(getUser(uid)?.access_level, need)) return true;
-    await refreshFundedBalanceFromLive(uid);
+    // Coalesce concurrent refreshes for the same user into one SDK call (C3).
+    let refresh = balanceRefreshInFlight.get(uid);
+    if (!refresh) {
+        refresh = refreshFundedBalanceFromLive(uid).finally(() => balanceRefreshInFlight.delete(uid));
+        balanceRefreshInFlight.set(uid, refresh);
+    }
+    await refresh;
     return hasAccess(getUser(uid)?.access_level, need);
 }
 
@@ -1108,21 +1136,18 @@ async function sendStartMenu(ctx: Context): Promise<void> {
                 if (real?.currency) saveUserCurrency(telegramId, real.currency);
                 else if (demo?.currency) saveUserCurrency(telegramId, demo.currency);
                 // Recompute product access from the funded (real) balance in USD.
+                // Routed through syncAccessFromBalance so the token/downgrade and
+                // funnel-event logic lives in exactly one place (A3).
                 if (real) {
                     const currency = real.currency ?? 'USD';
-                    const usdAmount = await convertToUsd(real.amount, currency, sdk);
-                    // null = no conversion rate — never re-gate on an unknown balance.
-                    if (usdAmount !== null) {
-                        const wasUnfunded = (user.funded_balance_usd ?? 0) <= 0;
-                        const newAccess = resolveAccess(usdAmount, getProduct(user.access_level), user.access_expires_at);
-                        setUserFundedBalance(telegramId, usdAmount, newAccess);
-                        accessForKbd = newAccess;
+                    const newAccess = await syncAccessFromBalance(telegramId, real.amount, currency, sdk);
+                    if (newAccess) {
                         if (newAccess !== getProduct(user.access_level)) {
-                            logger.info('bot', `user ${telegramId} access → ${newAccess} (balance ${currency} ${real.amount.toFixed(2)} ≈ $${usdAmount.toFixed(2)})`);
+                            logger.info('bot', `user ${telegramId} access → ${newAccess} (balance ${currency} ${real.amount.toFixed(2)})`);
                         }
-                        if (wasUnfunded && usdAmount > 0) insertFunnelEvent('user_funded', JSON.stringify({ telegram_id: telegramId }));
+                        accessForKbd = newAccess;
                         user.access_level = newAccess;
-                        user.funded_balance_usd = usdAmount;
+                        user.funded_balance_usd = getUser(telegramId)?.funded_balance_usd ?? user.funded_balance_usd;
                     }
                 }
                 if (needsFetch) {
@@ -2418,7 +2443,7 @@ async function sendAutoMenu(ctx: Context): Promise<void> {
         rows.push([{ text: '⚡ Reconfigure (God Mode)', callback_data: 'auto:god' }]);
         rows.push([{ text: '🔙 Back', callback_data: 'ui:start' }]);
 
-        await ctx.reply(body, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: rows } });
+        await ctx.reply(body, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: rows } }).catch(() => {});
     } else {
         // No active session — show mode options
         const user = getUser(ctx.from!.id);
@@ -2440,7 +2465,7 @@ async function sendAutoMenu(ctx: Context): Promise<void> {
             rows.push([{ text: '🎮 Demo Mode', callback_data: 'auto:start:demo' }]);
             rows.push([{ text: '⚡ Auto God Mode', callback_data: 'auto:god' }]);
             rows.push([{ text: '🔙 Back', callback_data: 'ui:start' }]);
-            await ctx.reply(body, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: rows } });
+            await ctx.reply(body, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: rows } }).catch(() => {});
         } else {
             // Unfunded user — show demo countdown and unlock requirements
             const body = [
@@ -2458,14 +2483,9 @@ async function sendAutoMenu(ctx: Context): Promise<void> {
             rows.push([{ text: `💎 Live (Fund $${PRODUCT_LIMITS.auto_trading.unlockBalance}+)`, url: DEPOSIT_URL }]);
             rows.push([{ text: '⚡ Auto God Mode', callback_data: 'auto:god' }]);
             rows.push([{ text: '🔙 Back', callback_data: 'ui:start' }]);
-            await ctx.reply(body, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: rows } });
+            await ctx.reply(body, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: rows } }).catch(() => {});
         }
     }
-}
-
-function requireAutoAccess(ctx: Context): boolean {
-    if (ctx.from!.id === getAdminId()) return true;
-    return hasAccess(getUser(ctx.from!.id)?.access_level, 'auto_trading');
 }
 
 /** Check if auto trading is allowed in demo mode (no access needed). */
@@ -2480,19 +2500,6 @@ bot.action('ui:auto', async ctx => {
     if (!await requireApproval(ctx)) return;
     if (!await hasAccessLive(ctx.from!.id, 'auto_trading')) { await sendAutoTradingLock(ctx); return; }
     await sendAutoMenu(ctx);
-});
-
-bot.action('auto:start', async ctx => {
-    await ctx.answerCbQuery();
-    if (!await hasAccessLive(ctx.from!.id, 'auto_trading')) { await sendAutoTradingLock(ctx); return; }
-    if (!getSsidForUser(ctx.from!.id)) {
-        await ctx.reply('⚠️ Connect your IQ Option account first.', {
-            reply_markup: { inline_keyboard: [[{ text: '🔗 Connect Account', callback_data: 'ui:connect' }]] },
-        });
-        return;
-    }
-    autoWizSessions.set(ctx.chat!.id, { step: 'currency', assets: [], mode: 'live' });
-    await ctx.reply('💰 Select your trading currency:', { reply_markup: autoCurrencyKeyboard() });
 });
 
 bot.action('auto:start:demo', async ctx => {
@@ -2521,12 +2528,11 @@ bot.action('auto:start:demo', async ctx => {
 
 bot.action('auto:start:live', async ctx => {
     await ctx.answerCbQuery();
-    const user = getUser(ctx.from!.id);
-    const funded = user?.funded_balance_usd ?? 0;
-    const hasAccessViaToken = hasAccess(user?.access_level, 'auto_trading');
-    if (ctx.from!.id !== getAdminId() && !hasAccessViaToken && funded < PRODUCT_LIMITS.auto_trading.unlockBalance) {
+    // Live-balance gate (refreshes from the SDK if the cached access looks locked),
+    // so a user who funded after connecting isn't blocked by a stale DB value.
+    if (!await hasAccessLive(ctx.from!.id, 'auto_trading')) {
         await ctx.reply(
-            `⚠️ Live trading requires $${PRODUCT_LIMITS.auto_trading.unlockBalance}+ funded.\n\nYou have $${funded.toFixed(2)} funded. Use Demo mode or fund your account.`,
+            `⚠️ Live trading requires $${PRODUCT_LIMITS.auto_trading.unlockBalance}+ funded.\n\nUse Demo mode or fund your account.`,
             { reply_markup: { inline_keyboard: [[{ text: '💰 Fund Account', url: DEPOSIT_URL }], [{ text: '🎮 Demo Mode', callback_data: 'auto:start:demo' }]] } }
         );
         return;
@@ -2701,7 +2707,7 @@ bot.action('auto:god', async ctx => {
         // Pick 3 worst-performing (hardest to predict) OTC pairs for god mode.
         const assets = godModePickWorstAssets(3);
 
-        autoWizSessions.set(ctx.chat!.id, { step: 'confirm', currency, amount: stakeNative, assets, timeframe, gale });
+        autoWizSessions.set(ctx.chat!.id, { step: 'confirm', currency, amount: stakeNative, assets, timeframe, gale, mode: 'live' });
 
         const plan = [
             `⚡ *Auto God Mode — Your Trading Plan*`, ``,
@@ -2737,9 +2743,10 @@ bot.action('auto:pause', async ctx => {
 });
 bot.action('auto:resume', async ctx => {
     await ctx.answerCbQuery();
-    // Demo mode: no access gate; live mode: require access
+    // Demo mode: no access gate; live mode: require access (live balance refresh —
+    // a session paused long enough could have dropped below threshold).
     const session = getAutoSession(ctx.from!.id);
-    if (session?.mode !== 'demo' && !requireAutoAccess(ctx)) { await sendAutoTradingLock(ctx); return; }
+    if (session?.mode !== 'demo' && !await hasAccessLive(ctx.from!.id, 'auto_trading')) { await sendAutoTradingLock(ctx); return; }
     autoEngine.resume(ctx.from!.id);
     await sendAutoMenu(ctx);
 });
@@ -4673,7 +4680,8 @@ async function generateAndShow(ctx: any, scenario: string) {
     lastReviewScenario.set(ctx.from!.id, scenario);
     try {
         const reviews = await generateReviews(scenario, 5);
-        const text = reviews.map((r, i) => `${i + 1}. ${r}`).join('\n\n');
+        const text = reviews.map((r, i) => `${i + 1}. ${r}`).join('\n\n')
+            + '\n\n👆 Long-press any review to copy it, then paste into your broadcast.';
         await ctx.telegram.deleteMessage(ctx.chat!.id, loading.message_id).catch(() => {});
         await ctx.reply(text, { reply_markup: reviewResultKeyboard() });
     } catch (err) {
@@ -4683,14 +4691,6 @@ async function generateAndShow(ctx: any, scenario: string) {
 }
 
 const lastReviewScenario = new Map<number, string>();
-
-bot.action('reviews:approve', async ctx => {
-    await ctx.answerCbQuery('Approved! Copy the reviews above to share.');
-});
-
-bot.action('reviews:copy', async ctx => {
-    await ctx.answerCbQuery('Copy the reviews from the message above', { show_alert: true });
-});
 
 // ─── Go Live broadcast ────────────────────────────────────────────────────────
 

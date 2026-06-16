@@ -8,14 +8,13 @@
 // Upgrade tokens override the balance check (see token_tier:AI_TRADING / AUTO_TRADING).
 //
 // ── Mode System (2026-06-15) ──
-// Every product now has two modes: Demo and Live.
+// Every product has two modes: Demo and Live.
 //   Demo  = admin privilege (200 candles, 6 indicators) — for unfunded/below-threshold users
 //   Live  = drainage (5 candles, RSI only) — for funded users above threshold
 //
-// Balance thresholds:
-//   Signals:      unlock at $10 funded, re-lock if balance < $1
-//   AI Trading:   unlock at $30 funded, re-lock if balance < $5
-//   Auto Trading: unlock at $100 funded, re-lock if balance < $10
+// Unlock thresholds: Signals $10, AI Trading $30, Auto Trading $100 funded.
+// Access is recomputed from the live balance and downgrades when it drops below
+// the unlock threshold (see syncAccessFromBalance).
 //
 // Signals special: first 5 live signals use admin privilege, then drainage.
 
@@ -40,8 +39,6 @@ export interface ProductLimits {
     dailyCap: number;
     /** Minimum funded balance (USD) to unlock live mode */
     unlockBalance: number;
-    /** If live balance falls below this, revert to demo mode */
-    relockBalance: number;
     /** Human-readable label for the daily cap */
     capLabel: string;
 }
@@ -50,19 +47,16 @@ export const PRODUCT_LIMITS: Record<Product, ProductLimits> = {
     signals: {
         dailyCap: 22,
         unlockBalance: 10,
-        relockBalance: 1,
         capLabel: '22 signals/day',
     },
     ai_trading: {
         dailyCap: 10,
         unlockBalance: 30,
-        relockBalance: 5,
         capLabel: '10 trades/day',
     },
     auto_trading: {
         dailyCap: 30,  // minutes
         unlockBalance: 100,
-        relockBalance: 10,
         capLabel: '30 minutes/day',
     },
 };
@@ -107,77 +101,13 @@ export const PRODUCT_CONFIGS: Record<Product, ProductConfig> = {
     },
 };
 
-// Funded-balance thresholds (USD) that unlock each product.
-// Kept for backward compat with existing access gating.
-export const AI_TRADING_MIN_USD = 30;
-export const AUTO_TRADING_MIN_USD = 100;
+// Funded-balance thresholds (USD) that unlock each product. Derived from
+// PRODUCT_LIMITS so there is a single source of truth (C5).
+export const AI_TRADING_MIN_USD = PRODUCT_LIMITS.ai_trading.unlockBalance;
+export const AUTO_TRADING_MIN_USD = PRODUCT_LIMITS.auto_trading.unlockBalance;
 
 // Daily signal cap for users with no funded balance (now 22, was 30).
 export const FREE_SIGNALS_PER_DAY = 22;
-
-// ── Mode determination ───────────────────────────────────────────────────────
-
-/**
- * Determine whether a user is in Demo mode for a given product.
- * Demo = no funded balance OR balance below unlock threshold.
- * Also returns true if the balance was funded but dropped below the relock threshold.
- */
-export function isDemoMode(
-    fundedBalanceUsd: number | null | undefined,
-    product: Product,
-): boolean {
-    const limits = PRODUCT_LIMITS[product];
-    const bal = fundedBalanceUsd ?? 0;
-    // Never funded → demo
-    if (bal <= 0) return true;
-    // Funded but below unlock threshold → demo
-    if (bal < limits.unlockBalance) return true;
-    // Funded and above unlock → live (even if below relock, we handle that separately)
-    return false;
-}
-
-/**
- * Check if a funded user's balance has dropped below the re-lock threshold.
- * Only meaningful when isDemoMode() returns false (user was live).
- */
-export function shouldRevertToDemo(
-    realBalance: number,
-    currency: string,
-    product: Product,
-    usdRate: number | null, // pass null if conversion unavailable
-): boolean {
-    const limits = PRODUCT_LIMITS[product];
-    // Can't determine — err on the side of keeping them live
-    if (usdRate === null) return false;
-    const balanceUsd = realBalance * usdRate;
-    return balanceUsd < limits.relockBalance;
-}
-
-/**
- * Get the daily limit message for a product when user is in demo mode.
- */
-export function getDemoLimitMessage(product: Product): string {
-    const limits = PRODUCT_LIMITS[product];
-    const labels: Record<Product, string> = {
-        signals: `📡 You can test up to ${limits.capLabel}. Fund $${limits.unlockBalance}+ for unlimited signals.`,
-        ai_trading: `🤖 You can take up to ${limits.capLabel} on demo. Fund $${limits.unlockBalance}+ for unlimited live trading.`,
-        auto_trading: `🚀 You can test Auto Trading for up to ${limits.capLabel} on demo. Fund $${limits.unlockBalance}+ for unlimited live trading.`,
-    };
-    return labels[product];
-}
-
-/**
- * Get the re-lock notice when balance drops below threshold.
- */
-export function getRelockMessage(product: Product): string {
-    const limits = PRODUCT_LIMITS[product];
-    const labels: Record<Product, string> = {
-        signals: `⚠️ Your live balance dropped below $${limits.relockBalance}. Switching back to ${limits.capLabel} with premium analysis. Fund back above $${limits.unlockBalance} to unlock unlimited.`,
-        ai_trading: `⚠️ Your live balance dropped below $${limits.relockBalance}. Switching back to ${limits.capLabel} on demo. Fund back above $${limits.unlockBalance} to go live again.`,
-        auto_trading: `⚠️ Your live balance dropped below $${limits.relockBalance}. Switching back to ${limits.capLabel} on demo. Fund back above $${limits.unlockBalance} to go live again.`,
-    };
-    return labels[product];
-}
 
 const RANK: Record<Product, number> = { signals: 0, ai_trading: 1, auto_trading: 2 };
 
@@ -337,9 +267,15 @@ const FALLBACK_RATES: Record<string, number> = {
 export async function convertToUsd(amount: number, currency: string, sdk: ClientSdk): Promise<number | null> {
     if (currency === 'USD') return amount;
 
+    const now = Date.now();
     const cached = rateCache.get(currency);
-    if (cached && cached.expires > Date.now()) {
+    if (cached && cached.expires > now) {
         return amount * cached.rate;
+    }
+    // Drop expired entries so the cache can't grow unbounded over time (C8).
+    if (cached) rateCache.delete(currency);
+    for (const [cur, entry] of rateCache) {
+        if (entry.expires <= now) rateCache.delete(cur);
     }
 
     try {

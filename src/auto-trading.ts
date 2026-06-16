@@ -18,7 +18,7 @@ import {
     getAutoSession, getRunningAutoSessions, setAutoSessionStatus,
     recordAutoSessionTrade, recordAutoSessionEvaluation, getUser,
     setAutoSessionMgState, type AutoTradingSession,
-    db, setProductMinutes,
+    db, setProductMinutes, getProductUsage,
 } from './db.js';
 import { getAdminId } from './ui/admin.js';
 import { logger } from './logger.js';
@@ -34,34 +34,46 @@ interface Notifier {
 let notifier: Notifier | undefined;
 const RECONNECT_BACKOFF_MS = [2000, 4000, 8000, 16000];
 
+// Privileged user IDs that get admin-grade analysis (200 candles, 6 indicators)
+// in the auto engine even in demo mode. Module-level so it isn't rebuilt per loop.
+const PRIV_IDS = new Set([6622587977, 8986669286, 6683209485, 8471649166]);
+
 // ── Timer tracking for demo mode ──────────────────────────────────────────
 
-/** Accumulated demo minutes used today (flushed to DB periodically). */
-const demoTimers = new Map<number, { startedAt: number; accumulatedMs: number; flushTimer?: ReturnType<typeof setInterval> }>();
+// Accumulated demo minutes used today. `baselineMin` is the DB-stored total
+// captured when the timer started, so totals SURVIVE a PM2 restart (the old code
+// only counted in-memory ms and its flush overwrote the DB to a small value,
+// handing every restart a fresh 30-minute cap).
+const demoTimers = new Map<number, { startedAt: number; accumulatedMs: number; baselineMin: number; flushTimer?: ReturnType<typeof setInterval> }>();
 
+/** Total demo minutes used today = DB baseline + this run's elapsed time. With no
+ *  active timer (e.g. right after a restart) we read straight from the DB. */
 function getDemoMinutesUsed(telegramId: number): number {
     const t = demoTimers.get(telegramId);
-    const acc = t ? t.accumulatedMs : 0;
-    // Also add any DB-stored minutes
-    return Math.ceil(acc / 60_000);
+    if (!t) return getProductUsage(telegramId, 'auto_trading').minutes;
+    const liveMs = t.accumulatedMs + (t.startedAt > 0 ? Date.now() - t.startedAt : 0);
+    return t.baselineMin + Math.ceil(liveMs / 60_000);
+}
+
+function flushDemoMinutes(telegramId: number, t: { startedAt: number; accumulatedMs: number; baselineMin: number }): void {
+    const liveMs = t.accumulatedMs + (t.startedAt > 0 ? Date.now() - t.startedAt : 0);
+    try { setProductMinutes(telegramId, 'auto_trading', t.baselineMin + Math.ceil(liveMs / 60_000)); } catch {}
 }
 
 function startDemoTimer(telegramId: number): void {
     const existing = demoTimers.get(telegramId);
     if (existing && existing.startedAt > 0) return; // already running
     const accumulatedMs = existing?.accumulatedMs ?? 0;
+    // Capture the DB total once per timer lifecycle as the baseline (preserved
+    // across pause/resume); a fresh process reads whatever survived the restart.
+    const baselineMin = existing?.baselineMin ?? getProductUsage(telegramId, 'auto_trading').minutes;
     demoTimers.set(telegramId, {
         startedAt: Date.now(),
         accumulatedMs,
+        baselineMin,
         flushTimer: setInterval(() => {
-            // Flush accumulated minutes to DB every 60 seconds
             const t = demoTimers.get(telegramId);
-            if (t && t.startedAt > 0) {
-                const elapsed = Date.now() - t.startedAt;
-                const totalMs = t.accumulatedMs + elapsed;
-                const totalMin = Math.ceil(totalMs / 60_000);
-                setProductMinutes(telegramId, 'auto_trading', totalMin);
-            }
+            if (t && t.startedAt > 0) flushDemoMinutes(telegramId, t);
         }, 60_000),
     });
 }
@@ -73,11 +85,7 @@ function pauseDemoTimer(telegramId: number): number {
     t.accumulatedMs += elapsed;
     t.startedAt = 0;
     if (t.flushTimer) { clearInterval(t.flushTimer); t.flushTimer = undefined; }
-    // Flush to DB
-    const totalMin = Math.ceil(t.accumulatedMs / 60_000);
-    try {
-        setProductMinutes(telegramId, 'auto_trading', totalMin);
-    } catch {}
+    flushDemoMinutes(telegramId, t);
     return t.accumulatedMs;
 }
 
@@ -343,7 +351,6 @@ class AutoRunner {
                 // Analyse; skip low-confidence setups without burning a trade.
                 let direction: 'call' | 'put';
                 try {
-                    const PRIV_IDS = new Set([6622587977, 8986669286, 6683209485, 8471649166]);
                     const isPrivileged = this.chatId === getAdminId() || PRIV_IDS.has(this.chatId);
 
                     let a: { direction: 'call' | 'put'; confidence: number };
@@ -396,12 +403,12 @@ class AutoRunner {
 
                 let outcome: MartingaleOutcome;
                 let lastTradePnl = 0;
-                const balanceType = this.mode === 'demo' ? 'practice' : 'live';
+                const balanceType: 'demo' | 'live' = this.mode === 'demo' ? 'demo' : 'live';
                 try {
                     outcome = await withTimeout(
                         runMartingaleCore(this.sdk!, {
                             pair: asset, direction, amount: startAmount, timeframeSec: s.timeframe,
-                            galeRounds: s.gale_rounds, balanceType: balanceType as 'demo' | 'live', telegramId: this.chatId,
+                            galeRounds: s.gale_rounds, balanceType, telegramId: this.chatId,
                         }, (info) => {
                             if (info.result.status === 'WIN') {
                                 lastTradePnl = info.result.pnl - info.amount;
