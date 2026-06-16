@@ -1012,11 +1012,14 @@ export function downgradeExpiredAccess(): number {
     return (result as { changes: number }).changes;
 }
 
-/** Cache the user's funded USD balance and (optionally) bump their access level. */
-export function setUserFundedBalance(telegramId: number, fundedUsd: number, accessLevel?: string): void {
+/** Cache the user's funded USD balance and (optionally) bump their access level.
+ *  When accessLevel is provided, access_expires_at is also written: callers pass
+ *  the token expiry to preserve it, or omit it to clear a stale expiry (the common
+ *  balance-derived case). */
+export function setUserFundedBalance(telegramId: number, fundedUsd: number, accessLevel?: string, accessExpiresAt?: string | null): void {
     if (accessLevel) {
-        db.prepare('UPDATE users SET funded_balance_usd = ?, access_level = ? WHERE telegram_id = ?')
-            .run(fundedUsd, accessLevel, telegramId);
+        db.prepare('UPDATE users SET funded_balance_usd = ?, access_level = ?, access_expires_at = ? WHERE telegram_id = ?')
+            .run(fundedUsd, accessLevel, accessExpiresAt ?? null, telegramId);
     } else {
         db.prepare('UPDATE users SET funded_balance_usd = ? WHERE telegram_id = ?').run(fundedUsd, telegramId);
     }

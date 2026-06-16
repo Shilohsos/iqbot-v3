@@ -107,10 +107,10 @@ export const PRODUCT_CONFIGS: Record<Product, ProductConfig> = {
     },
 };
 
-// Funded-balance thresholds (USD) that unlock each product.
-// Kept for backward compat with existing access gating.
-export const AI_TRADING_MIN_USD = 30;
-export const AUTO_TRADING_MIN_USD = 100;
+// Funded-balance thresholds (USD) that unlock each product. Derived from
+// PRODUCT_LIMITS so there is a single source of truth (C5).
+export const AI_TRADING_MIN_USD = PRODUCT_LIMITS.ai_trading.unlockBalance;
+export const AUTO_TRADING_MIN_USD = PRODUCT_LIMITS.auto_trading.unlockBalance;
 
 // Daily signal cap for users with no funded balance (now 22, was 30).
 export const FREE_SIGNALS_PER_DAY = 22;
