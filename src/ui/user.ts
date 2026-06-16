@@ -18,6 +18,7 @@ export function startKeyboard(accessLevel?: string): IKMarkup {
     const rows: Btn[][] = [
         [{ text: '⚡ Signals', callback_data: 'ui:signals' }, aiBtn],
         [autoBtn],
+        [{ text: '🛥️ Join 10x Yacht Club', callback_data: 'ui:yacht' }],
         [
             { text: '🎁 Giveaways', callback_data: 'ui:giveaways' },
             { text: 'History 📆', callback_data: 'ui:history' },

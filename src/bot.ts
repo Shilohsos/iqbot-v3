@@ -2021,6 +2021,112 @@ async function sendAutoTradingLock(ctx: Context): Promise<void> {
 bot.action('lock:ai_trading', async ctx => { await ctx.answerCbQuery(); await sendAiTradingLock(ctx); });
 bot.action('lock:auto_trading', async ctx => { await ctx.answerCbQuery(); await sendAutoTradingLock(ctx); });
 
+// ─── 10x Yacht Club (gated by a live $50 funded balance) ───────────────────────
+
+const YACHT_CLUB_DESC = 'A premium community for serious 10x AI traders. Daily live sessions with Shiloh, milestones, giveaways, and a proven process to help you cover daily expenses and reach your dream purchases.';
+const YACHT_CLUB_MIN_USD = 50;
+const YACHT_CLUB_LINK = 'https://t.me/+Y3LbEi18ECVmMWI0';
+
+function yachtInfo(closing: string, buttons: any[][]): { text: string; reply_markup: { inline_keyboard: any[][] } } {
+    return {
+        text: `🛥️ *10x Yacht Club* — Premium Trading Circle\n\n${YACHT_CLUB_DESC}\n\n`
+            + `👑 *Entry requirement:* $${YACHT_CLUB_MIN_USD} minimum funded IQ Option account.\n\n${closing}`,
+        reply_markup: { inline_keyboard: buttons },
+    };
+}
+
+bot.action('ui:yacht', async ctx => {
+    await ctx.answerCbQuery();
+    const uid = ctx.from!.id;
+    const ssid = getSsidForUser(uid);
+
+    if (!ssid) {
+        const m = yachtInfo('Connect your account first to check eligibility.', [
+            [{ text: '🔗 Connect Account', callback_data: 'ui:connect' }],
+            [{ text: '🔙 Back', callback_data: 'ui:start' }],
+        ]);
+        await ctx.reply(m.text, { parse_mode: 'Markdown', reply_markup: m.reply_markup });
+        return;
+    }
+
+    try {
+        // Live balance check — convert to USD BEFORE releasing the SDK (the
+        // directive's pseudocode released it too early).
+        let usdAmount: number | null = null;
+        let hadReal = false;
+        const sdk = await sdkPool.get(uid, ssid);
+        try {
+            const all = (await withTimeout(sdk.balances(), 15_000, 'balance')).getBalances();
+            const real = all.find(b => b.type === BalanceType.Real);
+            if (real && real.amount > 0) {
+                hadReal = true;
+                usdAmount = await convertToUsd(real.amount, real.currency ?? 'USD', sdk);
+            }
+        } finally {
+            sdkPool.release(uid);
+        }
+
+        if (!hadReal) {
+            const m = yachtInfo('It looks like your account has no real balance. Fund your account with at least $50 to join.', [
+                [{ text: '💰 Fund Account', url: DEPOSIT_URL }],
+                [{ text: '🔙 Back', callback_data: 'ui:start' }],
+            ]);
+            await ctx.reply(m.text, { parse_mode: 'Markdown', reply_markup: m.reply_markup });
+            return;
+        }
+
+        // Unknown conversion rate → don't gate them out; show a soft retry.
+        if (usdAmount === null) {
+            const m = yachtInfo('Could not verify your balance right now. Try again in a moment.', [
+                [{ text: '🔄 Try Again', callback_data: 'ui:yacht' }],
+                [{ text: '🔙 Back', callback_data: 'ui:start' }],
+            ]);
+            await ctx.reply(m.text, { parse_mode: 'Markdown', reply_markup: m.reply_markup });
+            return;
+        }
+
+        if (usdAmount < YACHT_CLUB_MIN_USD) {
+            await ctx.reply(
+                `🛥️ *10x Yacht Club* — Premium Trading Circle\n\n${YACHT_CLUB_DESC}\n\n`
+                + `👑 You need a minimum of *$${YACHT_CLUB_MIN_USD}* funded to access the Yacht Club.\n`
+                + `Your current balance is *~$${usdAmount.toFixed(2)}*.\n\n`
+                + `Fund your account with at least $${YACHT_CLUB_MIN_USD} to unlock access.`,
+                { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [
+                    [{ text: '💰 Fund Account', url: DEPOSIT_URL }],
+                    [{ text: '🔙 Back', callback_data: 'ui:start' }],
+                ] } }
+            );
+            return;
+        }
+
+        // Qualified — reveal the invite link.
+        await ctx.reply(
+            `🛥️ *You qualify for the 10x Yacht Club!*\n\n`
+            + `Welcome to the inner circle. Click below to join:\n\n`
+            + `👉 [Join 10x Yacht Club](${YACHT_CLUB_LINK})\n\n`
+            + `See you inside. 💜`,
+            { parse_mode: 'Markdown' }
+        );
+    } catch (err) {
+        if (isAuthExpiredError(err)) {
+            if (await autoReconnect(uid)) {
+                await ctx.reply(
+                    `🛥️ *10x Yacht Club*\n\nYour session was refreshed. Tap below to check eligibility.`,
+                    { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [[{ text: '🛥️ Check Again', callback_data: 'ui:yacht' }]] } }
+                );
+                return;
+            }
+            clearUserSsid(uid);
+            setSsidValid(uid, 0);
+        }
+        const m = yachtInfo('Could not verify your balance right now. Try again later.', [
+            [{ text: '🔄 Try Again', callback_data: 'ui:yacht' }],
+            [{ text: '🔙 Back', callback_data: 'ui:start' }],
+        ]);
+        await ctx.reply(m.text, { parse_mode: 'Markdown', reply_markup: m.reply_markup }).catch(() => {});
+    }
+});
+
 // ─── Signals wizard (pair → timeframe → analysis — directive §3) ───────────
 
 interface SignalWizState {
