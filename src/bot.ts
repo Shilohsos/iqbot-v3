@@ -909,7 +909,7 @@ async function hasAccessLive(uid: number, need: Product): Promise<boolean> {
 
 function isAuthExpiredError(err: unknown): boolean {
     const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
-    return msg.includes('authenticate') || msg.includes('authoriz') || msg.includes('unauthor')
+    return msg.includes('authenticat') || msg.includes('authoriz') || msg.includes('unauthor')
         || msg.includes('ssid') || msg.includes('session expired') || msg.includes('not authenticated')
         || msg.includes('invalid token') || msg.includes('401')
         || msg.includes('wrong credentials') || msg.includes('invalid_credentials');
@@ -2249,11 +2249,10 @@ bot.action(/^stf:(\d+)$/, async ctx => {
     const user = getUser(uid);
     const pair = state.pair;
     const timeframe = parseInt(ctx.match[1], 10);
-    const ssid = getSsidForUser(uid);
+    let ssid = getSsidForUser(uid);
     if (!ssid) {
-        await ctx.reply('⚠️ Session expired. Reconnect your account.', {
-            reply_markup: { inline_keyboard: [[{ text: '🔗 Connect Account', callback_data: 'ui:connect' }]] },
-        });
+        // No SSID — prompt them to connect
+        await ctx.reply('❌ Not connected. Use /connect first.');
         signalWizSessions.delete(chatId);
         return;
     }
@@ -2300,22 +2299,49 @@ bot.action(/^stf:(\d+)$/, async ctx => {
     const analysisTier = isPremium ? 'MASTER' : 'DEMO';
 
     let analysis: AnalysisResult;
-    try {
-        const sdk = await sdkPool.get(uid, ssid);
-        analysis = await analyzePairWithSdk(sdk, pair, timeframe, analysisTier, analysisCandles);
-    } catch (err) {
-        // Auth-expired errors must invalidate the SSID (or auto-reconnect) so the
-        // user isn't stuck tapping into the same friendly error forever.
-        if (await handlePossibleAuthExpiry(err, ctx, false)) {
-            await ctx.telegram.deleteMessage(chatId, animMsg.message_id).catch(() => {});
-            return;
+    let analysisRetried = false;
+    while (true) {
+        try {
+            const sdk = await sdkPool.get(uid, ssid);
+            try {
+                analysis = await analyzePairWithSdk(sdk, pair, timeframe, analysisTier, analysisCandles);
+            } finally {
+                sdkPool.release(uid);
+            }
+            break; // success
+        } catch (err) {
+            if (analysisRetried || !isAuthExpiredError(err)) {
+                // Exhausted retries or non-auth error
+                if (await handlePossibleAuthExpiry(err, ctx, false)) {
+                    await ctx.telegram.deleteMessage(chatId, animMsg.message_id).catch(() => {});
+                    return;
+                }
+                await ctx.telegram.editMessageText(chatId, animMsg.message_id, undefined,
+                    friendlyError(err, '⚠️ Could not read the market. Try another signal.')).catch(() => {});
+                await ctx.reply('Try again 👇', { reply_markup: { inline_keyboard: [[{ text: '🔄 New Signal', callback_data: 'ui:signals' }]] } });
+                return;
+            }
+            // Auth error on first attempt — try silent re-login
+            analysisRetried = true;
+            if (!(ctx.from?.id && await autoReconnect(ctx.from.id))) {
+                if (await handlePossibleAuthExpiry(err, ctx, false)) {
+                    await ctx.telegram.deleteMessage(chatId, animMsg.message_id).catch(() => {});
+                    return;
+                }
+                await ctx.telegram.editMessageText(chatId, animMsg.message_id, undefined,
+                    friendlyError(err, '⚠️ Could not read the market. Try another signal.')).catch(() => {});
+                await ctx.reply('Try again 👇', { reply_markup: { inline_keyboard: [[{ text: '🔄 New Signal', callback_data: 'ui:signals' }]] } });
+                return;
+            }
+            // Reconnected — retry the analysis loop, fresh SSID will be picked up by getSsidForUser
+            ssid = getSsidForUser(uid);
+            if (!ssid) {
+                await handlePossibleAuthExpiry(err, ctx, false);
+                return;
+            }
+            await ctx.telegram.editMessageText(chatId, animMsg.message_id, undefined,
+                '✅ Reconnected! Fetching your signal...').catch(() => {});
         }
-        await ctx.telegram.editMessageText(chatId, animMsg.message_id, undefined,
-            friendlyError(err, '⚠️ Could not read the market. Try another signal.')).catch(() => {});
-        await ctx.reply('Try again 👇', { reply_markup: { inline_keyboard: [[{ text: '🔄 New Signal', callback_data: 'ui:signals' }]] } });
-        return;
-    } finally {
-        sdkPool.release(uid);
     }
 
     await ctx.telegram.deleteMessage(chatId, animMsg.message_id).catch(() => {});
