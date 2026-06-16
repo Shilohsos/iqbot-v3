@@ -49,6 +49,11 @@ import { convertToUsd } from './access.js';
 export type { GiveawayEventInput, GiveawayEvent };
 export { getGiveawayEvents, getActiveGiveaways, getGiveawayEvent, getRealAndFabricatedCounts };
 
+// Re-login callback injected from bot.ts (which owns autoReconnect) so the
+// balance check can recover from an expired SSID without a circular import.
+let reconnectFn: ((telegramId: number) => Promise<string | null>) | undefined;
+export function setGiveawayReconnect(fn: (telegramId: number) => Promise<string | null>): void { reconnectFn = fn; }
+
 // Legacy-Markdown escape (parse_mode:'Markdown' only supports escaping _ * ` [).
 // Admin-set titles containing those chars would otherwise break message parsing.
 function escapeMd(s: string): string { return s.replace(/[_*`[]/g, '\\$&'); }
@@ -156,8 +161,9 @@ export async function participate(giveawayId: number, telegramId: number): Promi
                 },
             };
         }
-        try {
-            const sdk = await sdkPool.get(telegramId, user.ssid);
+        // Returns a failing ParticipateResult, or null when the balance clears.
+        const checkBalance = async (sid: string): Promise<ParticipateResult | null> => {
+            const sdk = await sdkPool.get(telegramId, sid);
             try {
                 const balances = (await sdk.balances()).getBalances();
                 const real = balances.find((b: { type: unknown }) => b.type === BalanceType.Real);
@@ -185,17 +191,35 @@ export async function participate(giveawayId: number, telegramId: number): Promi
                         },
                     };
                 }
+                return null; // balance clears the threshold
             } finally {
                 sdkPool.release(telegramId);
             }
-        } catch {
-            return {
-                success: false,
-                message: `❌ Could not verify your balance. Please try again later or contact admin.`,
-                replyMarkup: {
-                    inline_keyboard: [[{ text: '👾 Contact Admin', url: process.env.ADMIN_CONTACT_LINK ?? 'https://t.me/shiloh_is_10xing' }]],
-                },
-            };
+        };
+
+        const couldNotVerify: ParticipateResult = {
+            success: false,
+            message: `❌ Could not verify your balance. Please try again later or contact admin.`,
+            replyMarkup: {
+                inline_keyboard: [[{ text: '👾 Contact Admin', url: process.env.ADMIN_CONTACT_LINK ?? 'https://t.me/shiloh_is_10xing' }]],
+            },
+        };
+
+        try {
+            const fail = await checkBalance(user.ssid);
+            if (fail) return fail;
+        } catch (err) {
+            // On an expired SSID, re-login once for a fresh one and retry.
+            const msg = err instanceof Error ? err.message : String(err);
+            const isAuth = /auth|ssid|unauthor|401|session expired/i.test(msg);
+            const freshSsid = (isAuth && reconnectFn) ? await reconnectFn(telegramId).catch(() => null) : null;
+            if (!freshSsid) return couldNotVerify;
+            try {
+                const fail = await checkBalance(freshSsid);
+                if (fail) return fail;
+            } catch {
+                return couldNotVerify;
+            }
         }
     }
 

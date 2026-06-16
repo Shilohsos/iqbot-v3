@@ -29,6 +29,9 @@ import { BalanceType } from './index.js';
 interface Notifier {
     sendMessage(chatId: number, text: string, extra?: unknown): Promise<{ message_id: number }>;
     editMessageText(chatId: number, msgId: number, inlineId: undefined, text: string, extra?: unknown): Promise<unknown>;
+    /** Re-login with stored creds and return the fresh SSID, or null on failure.
+     *  Injected from bot.ts (which owns autoReconnect/loginAndCaptureSsid). */
+    reconnect(telegramId: number): Promise<string | null>;
 }
 
 let notifier: Notifier | undefined;
@@ -126,6 +129,7 @@ class AutoRunner {
     private statusMsgId: number | undefined;
     private assets: string[];
     private lastWsNotify = 0;
+    private ssid = '';   // current SSID; updated when reconnect() re-logs in for a fresh one
     public readonly mode: 'demo' | 'live';
 
     constructor(public readonly session: AutoTradingSession, mode?: 'demo' | 'live') {
@@ -140,7 +144,10 @@ class AutoRunner {
         this.sdk = await createSdk(ssid);
     }
 
-    /** Reconnect with exponential backoff; returns false if all attempts fail. */
+    /** Reconnect with exponential backoff. First retries the same SSID (transient
+     *  WebSocket drop); if that keeps failing the SSID is likely expired, so we
+     *  re-login for a fresh SSID and build the SDK from that. Returns false only
+     *  if everything fails. The fresh SSID is adopted for the rest of the run. */
     private async reconnect(ssid: string): Promise<boolean> {
         for (const delay of RECONNECT_BACKOFF_MS) {
             if (this.stopping) return false;
@@ -152,6 +159,20 @@ class AutoRunner {
             } catch {
                 logger.warn('auto', `reconnect attempt failed for ${this.chatId}`);
             }
+        }
+        // Same-SSID reconnect exhausted — the SSID is probably expired. Re-login
+        // for a fresh one (directive Fix 2).
+        try {
+            const freshSsid = notifier ? await notifier.reconnect(this.chatId) : null;
+            if (freshSsid) {
+                this.ssid = freshSsid;
+                try { await this.sdk?.shutdown(); } catch { /* already gone */ }
+                this.sdk = await createSdk(freshSsid);
+                logger.info('auto', `re-logged in for ${this.chatId} with a fresh SSID`);
+                return true;
+            }
+        } catch {
+            logger.warn('auto', `fresh re-login failed for ${this.chatId}`);
         }
         return false;
     }
@@ -271,6 +292,7 @@ class AutoRunner {
     }
 
     async start(ssid: string): Promise<void> {
+        this.ssid = ssid;
         try {
             await this.connect(ssid);
         } catch {
@@ -297,6 +319,7 @@ class AutoRunner {
     }
 
     private async loop(ssid: string): Promise<void> {
+        this.ssid = ssid;
         try {
             while (!this.stopping) {
                 const s = getAutoSession(this.chatId);
@@ -317,7 +340,7 @@ class AutoRunner {
                 try {
                     balance = await withTimeout(this.liveBalance(), 10_000, 'liveBalance');
                 } catch (err) {
-                    if (!(await this.reconnect(ssid))) {
+                    if (!(await this.reconnect(this.ssid))) {
                         setAutoSessionStatus(this.chatId, 'paused', 'reconnect_failed');
                         await this.notify('🚀 Auto Trading paused — lost connection to your account. Resume when ready.', true);
                         break;
@@ -339,7 +362,7 @@ class AutoRunner {
                 } catch (err) {
                     const msg = err instanceof Error ? err.message : String(err);
                     if (/^TIMEOUT:/i.test(msg)) {
-                        if (await this.maybeNotifyWsError(msg)) await this.reconnect(ssid);
+                        if (await this.maybeNotifyWsError(msg)) await this.reconnect(this.ssid);
                     }
                     /* other errors: treat as none open; analysis will surface real errors */
                 }
@@ -380,13 +403,13 @@ class AutoRunner {
                     direction = a.direction;
                 } catch (err) {
                     const msg = err instanceof Error ? err.message : String(err);
-                    if (/auth|ssid|unauthor|401/i.test(msg) && !(await this.reconnect(ssid))) {
+                    if (/auth|ssid|unauthor|401/i.test(msg) && !(await this.reconnect(this.ssid))) {
                         setAutoSessionStatus(this.chatId, 'paused', 'reconnect_failed');
                         await this.notify('🚀 Auto Trading paused — your session expired. Reconnect and resume.', true);
                         break;
                     }
                     if (await this.maybeNotifyWsError(msg)) {
-                        await this.reconnect(ssid);
+                        await this.reconnect(this.ssid);
                     }
                     await new Promise(r => setTimeout(r, 3000));
                     continue;
@@ -428,8 +451,12 @@ class AutoRunner {
                     setAutoSessionMgState(this.chatId, false);
                     const msg = err instanceof Error ? err.message : String(err);
                     logger.warn('auto', `trade run failed for ${this.chatId}: ${msg}`);
-                    if (await this.maybeNotifyWsError(msg)) {
-                        if (!(await this.reconnect(ssid))) {
+                    // Auth expiry OR dropped WebSocket → reconnect (fresh SSID if the
+                    // old one is dead) and retry the asset via the loop. Pause only if
+                    // reconnect fails outright (directive Fix 4).
+                    const isAuth = /auth|ssid|unauthor|401/i.test(msg);
+                    if (isAuth || await this.maybeNotifyWsError(msg)) {
+                        if (!(await this.reconnect(this.ssid))) {
                             setAutoSessionStatus(this.chatId, 'paused', 'reconnect_failed');
                             await this.notify('🚀 Auto Trading paused — lost connection to your account. Resume when ready.', true);
                             break;

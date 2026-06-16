@@ -104,6 +104,7 @@ import {
     recordTrade as giveawayRecordTrade, selectWinners as giveawaySelectWinners,
     getActiveGiveaways, getGiveawayEvents, getGiveawayEvent, getRealAndFabricatedCounts,
     processUpdateQueue, processNotificationsQueue,
+    setGiveawayReconnect,
     type GiveawayEventInput,
 } from './giveaway.js';
 import { analyzePair, analyzePairWithSdk, type AnalysisResult } from './analysis.js';
@@ -1226,6 +1227,8 @@ async function runMartingale(
     const userId = ctx.from!.id;
     const effectiveRounds = martingaleRounds ?? getUserMartingaleSettings(userId).maxRounds;
     activeTradeSessions.set(userId, (activeTradeSessions.get(userId) ?? 0) + 1);
+    // Declared out here so the finally can shut it down (see auth-retry below).
+    let createdAdminSdk: ClientSdk | undefined;
     try {
     const runId = crypto.randomUUID();
     const roundTimeoutMs = (timeframeSec + 90) * 1000 + 180_000;
@@ -1262,41 +1265,82 @@ async function runMartingale(
         } catch {}
     };
 
+    // SDK can drop between analysis and execution (or between rounds). Keep a
+    // mutable handle so an auth-expiry reconnect can swap in a fresh connection
+    // for the rest of the run. authRetried bounds it to one reconnect per run.
+    let activeSdk = existingSdk;
+    let activeSsid = ssid;
+    let authRetried = false;
+    const isAdminUser = userId === getAdminId();
+
+    // Render the standard "trade could not be placed" message (used when a trade
+    // fails for good, including after an exhausted auth retry).
+    const showTradeError = async (err: unknown): Promise<void> => {
+        const errMsg = err instanceof Error ? err.message : 'Unknown error';
+        logLines[logLines.length - 1] = `⚡ Trade 1|⚠️ ${fmtMoney(currentAmount, currency)} → error`;
+        await syncLog();
+        const isBalanceError = /4112|investment amount|smaller.*minimum|insufficient.*balance/i.test(errMsg);
+        const catchReply = isBalanceError
+            ? await ctx.reply(
+                '🚫 *You do not have an active balance*\n\nFund your account now with as little as $10 to start trading.',
+                { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [
+                    [{ text: '💳 Fund Account', url: 'https://iqoption.com/pwa/payments/deposit' }],
+                    [{ text: '🔄 New Opportunity', callback_data: 'ui:trade' }],
+                ] } }
+            )
+            : await ctx.reply(friendlyError(err, '⚠️ Trade could not be placed. Try again.'), {
+                reply_markup: { inline_keyboard: [[{ text: '🔄 New Opportunity', callback_data: 'ui:trade' }]] },
+            });
+        sentMessages.push(catchReply.message_id);
+        scheduleCleanup();
+    };
+
     for (let round = 1; round <= effectiveRounds + 1; round++) {
         logLines.push(`⚡ Trade 1|🟡 ${fmtMoney(currentAmount, currency)} → in flight`);
         await syncLog();
 
         const roundTrade: TradeRequest = { pair, direction, amount: currentAmount, martingaleRunId: runId, timeframeSec, balanceType, telegramId: ctx.from!.id };
 
+        const execRound = (): Promise<TradeResult> =>
+            activeSdk
+                ? withTimeout(executeTradeWithSdk(activeSdk, roundTrade), roundTimeoutMs, 'trade')
+                : withTimeout(executeTrade(activeSsid, roundTrade), roundTimeoutMs, 'trade');
+
         let result: TradeResult;
         try {
-            result = existingSdk
-                ? await withTimeout(executeTradeWithSdk(existingSdk, roundTrade), roundTimeoutMs, 'trade')
-                : await withTimeout(executeTrade(ssid, roundTrade), roundTimeoutMs, 'trade');
+            result = await execRound();
         } catch (err: unknown) {
-            const errMsg = err instanceof Error ? err.message : 'Unknown error';
-            logLines[logLines.length - 1] = `⚡ Trade 1|⚠️ ${fmtMoney(currentAmount, currency)} → error`;
-            await syncLog();
-            
-            // FRIENDLY BALANCE ERROR
-            const isBalanceError = /4112|investment amount|smaller.*minimum|insufficient.*balance/i.test(errMsg);
-            const catchReply = isBalanceError
-                ? await ctx.reply(
-                    '🚫 *You do not have an active balance*\n\nFund your account now with as little as $10 to start trading.',
-                    {
-                        parse_mode: 'Markdown',
-                        reply_markup: { inline_keyboard: [
-                            [{ text: '💳 Fund Account', url: 'https://iqoption.com/pwa/payments/deposit' }],
-                            [{ text: '🔄 New Opportunity', callback_data: 'ui:trade' }],
-                        ]},
+            // Auth expiry mid-trade: reconnect once and rebuild the SDK with a
+            // fresh SSID, then retry this round (directive Fix 1). Only retry once
+            // per run, and only for auth errors.
+            if (isAuthExpiredError(err) && !authRetried) {
+                authRetried = true;
+                const reconnected = isAdminUser ? await adminAutoReconnect() : await autoReconnect(userId);
+                const freshSsid = isAdminUser ? getAdminSsid() : getSsidForUser(userId);
+                if (reconnected && freshSsid) {
+                    activeSsid = freshSsid;
+                    try {
+                        if (isAdminUser) {
+                            createdAdminSdk = await createSdk(freshSsid);
+                            activeSdk = createdAdminSdk;
+                        } else {
+                            activeSdk = await sdkPool.get(userId, freshSsid);
+                        }
+                    } catch { /* keep prior handle; execRound falls back to ssid path */ }
+                    try {
+                        result = await execRound();
+                    } catch (err2: unknown) {
+                        await showTradeError(err2);
+                        return;
                     }
-                )
-                : await ctx.reply(friendlyError(err, '⚠️ Trade could not be placed. Try again.'), {
-                    reply_markup: { inline_keyboard: [[{ text: '🔄 New Opportunity', callback_data: 'ui:trade' }]] },
-                });
-            sentMessages.push(catchReply.message_id);
-            scheduleCleanup();
-            return;
+                } else {
+                    await showTradeError(err);
+                    return;
+                }
+            } else {
+                await showTradeError(err);
+                return;
+            }
         }
 
         const roundPnl = result.status === 'WIN' ? result.pnl : result.status === 'TIE' ? 0 : -currentAmount;
@@ -1428,6 +1472,9 @@ async function runMartingale(
         if (getDailyDemoCount(ctx.from!.id) > 0) await showDemoUpsell(ctx, sentMessages);
     }
     } finally {
+        // Shut down a replacement admin SDK created during an auth retry (the
+        // caller's finally only knows about the original handle).
+        if (createdAdminSdk) { try { await createdAdminSdk.shutdown(); } catch {} }
         const prev = activeTradeSessions.get(userId) ?? 0;
         if (prev <= 1) activeTradeSessions.delete(userId);
         else activeTradeSessions.set(userId, prev - 1);
@@ -6611,6 +6658,16 @@ initAutoEngine({
     sendMessage: (chatId, text, extra) => bot.telegram.sendMessage(chatId, text, extra as never),
     editMessageText: (chatId, msgId, _inline, text, extra) =>
         bot.telegram.editMessageText(chatId, msgId, undefined, text, extra as never),
+    // Re-login with stored creds and hand back the fresh SSID for the auto engine.
+    reconnect: async (telegramId) => {
+        const ok = await autoReconnect(telegramId);
+        return ok ? (getSsidForUser(telegramId) ?? null) : null;
+    },
+});
+// Same re-login callback for the giveaway balance check (Fix 6).
+setGiveawayReconnect(async (telegramId) => {
+    const ok = await autoReconnect(telegramId);
+    return ok ? (getSsidForUser(telegramId) ?? null) : null;
 });
 autoEngine.restoreAll().catch(err => {
     console.error('[AUTO] Failed to restore auto-trading sessions:', err);
