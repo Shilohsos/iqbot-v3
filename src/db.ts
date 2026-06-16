@@ -142,6 +142,8 @@ if (!finalUserCols.includes('funded_balance_usd'))
     db.exec('ALTER TABLE users ADD COLUMN funded_balance_usd REAL NOT NULL DEFAULT 0');
 if (!finalUserCols.includes('total_signals_used'))
     db.exec('ALTER TABLE users ADD COLUMN total_signals_used INTEGER NOT NULL DEFAULT 0');
+if (!finalUserCols.includes('live_signals_used'))
+    db.exec('ALTER TABLE users ADD COLUMN live_signals_used INTEGER NOT NULL DEFAULT 0');
 
 // onboarding_tracking lazy migration — add last_followup_msg_id for existing DBs
 try {
@@ -201,6 +203,8 @@ try {
     const atsCols = (db.prepare("PRAGMA table_info(auto_trading_sessions)").all() as { name: string }[]).map(r => r.name);
     if (!atsCols.includes('evaluations'))
         db.exec('ALTER TABLE auto_trading_sessions ADD COLUMN evaluations INTEGER NOT NULL DEFAULT 0');
+    if (!atsCols.includes('mode'))
+        db.exec("ALTER TABLE auto_trading_sessions ADD COLUMN mode TEXT NOT NULL DEFAULT 'live'");
 } catch {}
 
 // Signal tracking — result checking at expiry, martingale progression
@@ -315,6 +319,17 @@ db.exec(`
     date TEXT,
     trade_count INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (telegram_id, date)
+  )
+`);
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS daily_product_usage (
+    telegram_id INTEGER,
+    date TEXT,
+    product TEXT NOT NULL,
+    usage_count INTEGER NOT NULL DEFAULT 0,
+    minutes_used INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (telegram_id, date, product)
   )
 `);
 
@@ -775,7 +790,7 @@ export function getTopTradersToday(limit = 20): Array<{ telegram_id: number; use
 
 // ─── Users ───────────────────────────────────────────────────────────────────
 
-export type ApprovalStatus = 'pending' | 'approved' | 'manual' | 'rejected' | 'paused';
+export type ApprovalStatus = 'pending' | 'approved' | 'rejected' | 'paused';
 
 export interface UserRecord {
     telegram_id: number;
@@ -820,9 +835,13 @@ export interface AutoTradingSession {
     trades_done: number;
     evaluations: number;
     pnl: number;
+    mode?: 'demo' | 'live';
     last_error?: string | null;
     started_at?: string;
     last_trade_at?: string | null;
+    mg_active: number;
+    mg_next_amount: number;
+    status_msg_id?: number | null;
 }
 
 export interface SignalTrackRecord {
@@ -908,10 +927,6 @@ export function approveUser(telegramId: number, affiliateData?: string): void {
             affiliate_data  = COALESCE(?, affiliate_data)
         WHERE telegram_id = ?
     `).run(affiliateData ?? null, telegramId);
-}
-
-export function setManualApproval(telegramId: number): void {
-    db.prepare(`UPDATE users SET approval_status = 'manual' WHERE telegram_id = ?`).run(telegramId);
 }
 
 export function rejectUser(telegramId: number): void {
@@ -1057,20 +1072,22 @@ export function getTotalSignalsToday(): number {
 
 export function upsertAutoSession(s: {
     telegram_id: number; currency: string; amount: number; assets: string[];
-    timeframe: number; gale_rounds: number;
+    timeframe: number; gale_rounds: number; mode?: 'demo' | 'live';
 }): void {
+    const mode = s.mode ?? 'live';
     db.prepare(`
         INSERT INTO auto_trading_sessions
             (telegram_id, currency, amount, assets, timeframe, gale_rounds, status,
-             current_asset_index, trades_done, evaluations, pnl, last_error, started_at, last_trade_at)
+             current_asset_index, trades_done, evaluations, pnl, last_error, started_at, last_trade_at, mode, status_msg_id)
         VALUES (@telegram_id, @currency, @amount, @assets, @timeframe, @gale_rounds, 'running',
-                0, 0, 0, 0, NULL, datetime('now'), NULL)
+                0, 0, 0, 0, NULL, datetime('now'), NULL, @mode, NULL)
         ON CONFLICT(telegram_id) DO UPDATE SET
             currency = excluded.currency, amount = excluded.amount, assets = excluded.assets,
             timeframe = excluded.timeframe, gale_rounds = excluded.gale_rounds,
             status = 'running', current_asset_index = 0, trades_done = 0, evaluations = 0, pnl = 0,
-            last_error = NULL, started_at = datetime('now'), last_trade_at = NULL
-    `).run({ ...s, assets: JSON.stringify(s.assets) });
+            last_error = NULL, started_at = datetime('now'), last_trade_at = NULL, mode = excluded.mode,
+            status_msg_id = NULL
+    `).run({ ...s, assets: JSON.stringify(s.assets), mode });
 }
 
 export function getAutoSession(telegramId: number): AutoTradingSession | undefined {
@@ -1107,6 +1124,15 @@ export function recordAutoSessionEvaluation(telegramId: number, nextAssetIndex: 
             last_trade_at = datetime('now')
         WHERE telegram_id = ?
     `).run(nextAssetIndex, telegramId);
+}
+
+/** Persist martingale gale state so a restart can resume mid-sequence. */
+export function setAutoSessionMgState(telegramId: number, active: boolean, nextAmount?: number): void {
+    db.prepare(`
+        UPDATE auto_trading_sessions
+        SET mg_active = ?, mg_next_amount = ?
+        WHERE telegram_id = ?
+    `).run(active ? 1 : 0, nextAmount ?? 0, telegramId);
 }
 
 // ── Signal tracking ──────────────────────────────────────────────────────────
@@ -1215,14 +1241,13 @@ export function getRecentApprovals(hours = 24): UserRecord[] {
 
 export function getPendingManualUsers(): UserRecord[] {
     return db.prepare(`
-        SELECT * FROM users WHERE approval_status IN ('pending', 'manual') ORDER BY created_at DESC
+        SELECT * FROM users WHERE approval_status IN ('pending') ORDER BY created_at DESC
     `).all() as UserRecord[];
 }
 
 export interface ApprovalStats {
     approved: number;
     pending: number;
-    manual: number;
     rejected: number;
     total: number;
 }
@@ -1232,7 +1257,6 @@ export function getApprovalStats(): ApprovalStats {
         SELECT
             SUM(CASE WHEN approval_status = 'approved'  THEN 1 ELSE 0 END) AS approved,
             SUM(CASE WHEN approval_status = 'pending'   THEN 1 ELSE 0 END) AS pending,
-            SUM(CASE WHEN approval_status = 'manual'    THEN 1 ELSE 0 END) AS manual,
             SUM(CASE WHEN approval_status = 'rejected'  THEN 1 ELSE 0 END) AS rejected,
             COUNT(*)                                                         AS total
         FROM users
@@ -1240,7 +1264,6 @@ export function getApprovalStats(): ApprovalStats {
     return {
         approved: row.approved ?? 0,
         pending:  row.pending  ?? 0,
-        manual:   row.manual   ?? 0,
         rejected: row.rejected ?? 0,
         total:    row.total    ?? 0,
     };
@@ -1662,7 +1685,7 @@ export function getAuditReport(): AuditReport {
             COUNT(*) AS new_users,
             SUM(CASE WHEN approval_status = 'approved'
                       AND approved_at >= datetime('now', '-1 day') THEN 1 ELSE 0 END) AS auto_approved,
-            SUM(CASE WHEN approval_status = 'manual' THEN 1 ELSE 0 END) AS manual_pending
+            0 AS manual_pending
         FROM users
         WHERE created_at >= datetime('now', '-1 day')
     `).get() as { new_users: number; auto_approved: number; manual_pending: number };
@@ -2026,6 +2049,7 @@ export function getRealTraderLeaderboard(): Array<{ telegram_id: number; usernam
         FROM leaderboard l
         LEFT JOIN users u ON u.telegram_id = l.telegram_id
         WHERE l.date = ?
+          AND l.telegram_id NOT IN (1615652240, 6622587977, 8986669286, 6683209485, 8471649166)
         ORDER BY total_pnl DESC
     `).all(today) as Array<{ telegram_id: number; username: string | null; total_pnl: number }>;
 }
@@ -2794,6 +2818,63 @@ export function incrementDailyDemoCount(telegramId: number): number {
         ON CONFLICT(telegram_id, date) DO UPDATE SET trade_count = trade_count + 1
     `).run(telegramId, today);
     return getDailyDemoCount(telegramId);
+}
+
+// ─── Daily product usage tracking (mode system 2026-06-15) ──────────────────
+
+export function getProductUsage(telegramId: number, product: string): { used: number; minutes: number } {
+    const today = new Date().toISOString().slice(0, 10);
+    const row = db.prepare(
+        'SELECT usage_count, minutes_used FROM daily_product_usage WHERE telegram_id = ? AND date = ? AND product = ?'
+    ).get(telegramId, today, product) as { usage_count: number; minutes_used: number } | undefined;
+    return { used: row?.usage_count ?? 0, minutes: row?.minutes_used ?? 0 };
+}
+
+export function incrementProductUsage(telegramId: number, product: string): number {
+    const today = new Date().toISOString().slice(0, 10);
+    db.prepare(`
+        INSERT INTO daily_product_usage (telegram_id, date, product, usage_count, minutes_used)
+        VALUES (?, ?, ?, 1, 0)
+        ON CONFLICT(telegram_id, date, product) DO UPDATE SET usage_count = usage_count + 1
+    `).run(telegramId, today, product);
+    return getProductUsage(telegramId, product).used;
+}
+
+export function addProductMinutes(telegramId: number, product: string, minutes: number): number {
+    const today = new Date().toISOString().slice(0, 10);
+    db.prepare(`
+        INSERT INTO daily_product_usage (telegram_id, date, product, usage_count, minutes_used)
+        VALUES (?, ?, ?, 0, ?)
+        ON CONFLICT(telegram_id, date, product) DO UPDATE SET minutes_used = minutes_used + ?
+    `).run(telegramId, today, product, minutes, minutes);
+    return getProductUsage(telegramId, product).minutes;
+}
+
+export function setProductMinutes(telegramId: number, product: string, minutes: number): void {
+    const today = new Date().toISOString().slice(0, 10);
+    db.prepare(`
+        INSERT INTO daily_product_usage (telegram_id, date, product, usage_count, minutes_used)
+        VALUES (?, ?, ?, 0, ?)
+        ON CONFLICT(telegram_id, date, product) DO UPDATE SET minutes_used = ?
+    `).run(telegramId, today, product, minutes, minutes);
+}
+
+/** Live signals counter — tracks how many LIVE signals a funded user has used today.
+ *  First SIGNALS_PREMIUM_COUNT (5) get premium analysis; after that, drainage. */
+export function getLiveSignalsUsed(telegramId: number): number {
+    const row = db.prepare('SELECT live_signals_used FROM users WHERE telegram_id = ?')
+        .get(telegramId) as { live_signals_used: number } | undefined;
+    return row?.live_signals_used ?? 0;
+}
+
+export function incrementLiveSignalsUsed(telegramId: number): number {
+    db.prepare('UPDATE users SET live_signals_used = live_signals_used + 1 WHERE telegram_id = ?').run(telegramId);
+    return getLiveSignalsUsed(telegramId);
+}
+
+/** Reset live signals counter — call daily or when balance drops below threshold. */
+export function resetLiveSignalsUsed(telegramId: number): void {
+    db.prepare('UPDATE users SET live_signals_used = 0 WHERE telegram_id = ?').run(telegramId);
 }
 
 // ─── Sequence media ───────────────────────────────────────────────────────────

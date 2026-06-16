@@ -1,4 +1,4 @@
-import { db, getUser } from './db.js';
+import { db, getUser, getAutoSession } from './db.js';
 import { createSdk } from './trade.js';
 import type { Telegraf } from 'telegraf';
 
@@ -92,17 +92,21 @@ export async function recoverMissedTradeResults(bot: Telegraf): Promise<void> {
             if (recoveredStatus) {
                 resolved.push(`#${row.trade_id}: ${recoveredStatus} ($${recoveredPnl})`);
 
-                // Notify the user their trade result was recovered.
-                const emoji = recoveredStatus === 'WIN' ? '✅' : recoveredStatus === 'LOSS' ? '❌' : '🤝';
-                const currency = getUser(row.telegram_id)?.currency || 'USD';
-                const pnlStr = recoveredPnl >= 0 ? `+${recoveredPnl.toFixed(2)}` : recoveredPnl.toFixed(2);
-                try {
-                    await bot.telegram.sendMessage(row.telegram_id,
-                        `${emoji} Trade recovered: ${row.pair} ${row.direction.toUpperCase()} — ${recoveredStatus}\n` +
-                        `Amount: ${row.amount.toFixed(2)} ${currency} | PnL: ${pnlStr} ${currency}`,
-                    );
-                } catch {
-                    // User may have blocked the bot — not critical.
+                // Notify the user — but skip for auto-trading users (the status card
+                // already shows results; recovery messages are just noise).
+                const hasAutoSession = getAutoSession(row.telegram_id) !== null;
+                if (!hasAutoSession) {
+                    const emoji = recoveredStatus === 'WIN' ? '✅' : recoveredStatus === 'LOSS' ? '❌' : '🤝';
+                    const currency = getUser(row.telegram_id)?.currency || 'USD';
+                    const pnlStr = recoveredPnl >= 0 ? `+${recoveredPnl.toFixed(2)}` : recoveredPnl.toFixed(2);
+                    try {
+                        await bot.telegram.sendMessage(row.telegram_id,
+                            `${emoji} Trade recovered: ${row.pair} ${row.direction.toUpperCase()} — ${recoveredStatus}\n` +
+                            `Amount: ${row.amount.toFixed(2)} ${currency} | PnL: ${pnlStr} ${currency}`,
+                        );
+                    } catch {
+                        // User may have blocked the bot — not critical.
+                    }
                 }
             }
         } catch {

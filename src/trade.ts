@@ -210,7 +210,8 @@ export async function runMartingaleCore(
         await onRound?.({ round, amount: currentAmount, result });
 
         if (result.status === 'WIN' || result.status === 'TIE') {
-            totalPnl += result.status === 'WIN' ? result.pnl : 0;
+            // Gale losses are recovery rounds — only the final outcome affects P&L
+            totalPnl = result.status === 'WIN' ? (result.pnl - currentAmount) : 0;
             return { status: result.status, totalPnl, rounds: round };
         }
         if (result.status === 'ERROR' || result.status === 'TIMEOUT') {

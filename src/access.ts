@@ -1,11 +1,23 @@
 // Product-based access model — replaces the DEMO/PRO/MASTER tier system.
 //
 // Users get one of three products based on their funded USD balance:
-//   signals      — analysis display only (no execution), 30/day cap when unfunded
+//   signals      — analysis display only (no execution), 22/day cap when unfunded
 //   ai_trading   — current semi-auto trading system (unlocked at $30 funded)
 //   auto_trading — full autonomous trading engine (unlocked at $100 funded)
 //
 // Upgrade tokens override the balance check (see token_tier:AI_TRADING / AUTO_TRADING).
+//
+// ── Mode System (2026-06-15) ──
+// Every product now has two modes: Demo and Live.
+//   Demo  = admin privilege (200 candles, 6 indicators) — for unfunded/below-threshold users
+//   Live  = drainage (5 candles, RSI only) — for funded users above threshold
+//
+// Balance thresholds:
+//   Signals:      unlock at $10 funded, re-lock if balance < $1
+//   AI Trading:   unlock at $30 funded, re-lock if balance < $5
+//   Auto Trading: unlock at $100 funded, re-lock if balance < $10
+//
+// Signals special: first 5 live signals use admin privilege, then drainage.
 
 import type { ClientSdk } from './index.js';
 import { logger } from './logger.js';
@@ -21,6 +33,42 @@ export interface ProductConfig {
     defaultGaleRounds: number;
     pairs: string[];
 }
+
+// ── Product daily caps (unfunded / below threshold) ──────────────────────────
+export interface ProductLimits {
+    /** Daily usage cap when in demo mode (trades for AI, signals for signals, minutes for auto) */
+    dailyCap: number;
+    /** Minimum funded balance (USD) to unlock live mode */
+    unlockBalance: number;
+    /** If live balance falls below this, revert to demo mode */
+    relockBalance: number;
+    /** Human-readable label for the daily cap */
+    capLabel: string;
+}
+
+export const PRODUCT_LIMITS: Record<Product, ProductLimits> = {
+    signals: {
+        dailyCap: 22,
+        unlockBalance: 10,
+        relockBalance: 1,
+        capLabel: '22 signals/day',
+    },
+    ai_trading: {
+        dailyCap: 10,
+        unlockBalance: 30,
+        relockBalance: 5,
+        capLabel: '10 trades/day',
+    },
+    auto_trading: {
+        dailyCap: 30,  // minutes
+        unlockBalance: 100,
+        relockBalance: 10,
+        capLabel: '30 minutes/day',
+    },
+};
+
+/** Number of initial live signals that get admin (premium) analysis before drainage kicks in. */
+export const SIGNALS_PREMIUM_COUNT = 5;
 
 // The full OTC pair list — all pairs are available to every product now that
 // tier-based pair gating is gone. Kept here as the single source of truth.
@@ -60,11 +108,76 @@ export const PRODUCT_CONFIGS: Record<Product, ProductConfig> = {
 };
 
 // Funded-balance thresholds (USD) that unlock each product.
+// Kept for backward compat with existing access gating.
 export const AI_TRADING_MIN_USD = 30;
 export const AUTO_TRADING_MIN_USD = 100;
 
-// Daily signal cap for users with no funded balance.
-export const FREE_SIGNALS_PER_DAY = 30;
+// Daily signal cap for users with no funded balance (now 22, was 30).
+export const FREE_SIGNALS_PER_DAY = 22;
+
+// ── Mode determination ───────────────────────────────────────────────────────
+
+/**
+ * Determine whether a user is in Demo mode for a given product.
+ * Demo = no funded balance OR balance below unlock threshold.
+ * Also returns true if the balance was funded but dropped below the relock threshold.
+ */
+export function isDemoMode(
+    fundedBalanceUsd: number | null | undefined,
+    product: Product,
+): boolean {
+    const limits = PRODUCT_LIMITS[product];
+    const bal = fundedBalanceUsd ?? 0;
+    // Never funded → demo
+    if (bal <= 0) return true;
+    // Funded but below unlock threshold → demo
+    if (bal < limits.unlockBalance) return true;
+    // Funded and above unlock → live (even if below relock, we handle that separately)
+    return false;
+}
+
+/**
+ * Check if a funded user's balance has dropped below the re-lock threshold.
+ * Only meaningful when isDemoMode() returns false (user was live).
+ */
+export function shouldRevertToDemo(
+    realBalance: number,
+    currency: string,
+    product: Product,
+    usdRate: number | null, // pass null if conversion unavailable
+): boolean {
+    const limits = PRODUCT_LIMITS[product];
+    // Can't determine — err on the side of keeping them live
+    if (usdRate === null) return false;
+    const balanceUsd = realBalance * usdRate;
+    return balanceUsd < limits.relockBalance;
+}
+
+/**
+ * Get the daily limit message for a product when user is in demo mode.
+ */
+export function getDemoLimitMessage(product: Product): string {
+    const limits = PRODUCT_LIMITS[product];
+    const labels: Record<Product, string> = {
+        signals: `📡 You can test up to ${limits.capLabel}. Fund $${limits.unlockBalance}+ for unlimited signals.`,
+        ai_trading: `🤖 You can take up to ${limits.capLabel} on demo. Fund $${limits.unlockBalance}+ for unlimited live trading.`,
+        auto_trading: `🚀 You can test Auto Trading for up to ${limits.capLabel} on demo. Fund $${limits.unlockBalance}+ for unlimited live trading.`,
+    };
+    return labels[product];
+}
+
+/**
+ * Get the re-lock notice when balance drops below threshold.
+ */
+export function getRelockMessage(product: Product): string {
+    const limits = PRODUCT_LIMITS[product];
+    const labels: Record<Product, string> = {
+        signals: `⚠️ Your live balance dropped below $${limits.relockBalance}. Switching back to ${limits.capLabel} with premium analysis. Fund back above $${limits.unlockBalance} to unlock unlimited.`,
+        ai_trading: `⚠️ Your live balance dropped below $${limits.relockBalance}. Switching back to ${limits.capLabel} on demo. Fund back above $${limits.unlockBalance} to go live again.`,
+        auto_trading: `⚠️ Your live balance dropped below $${limits.relockBalance}. Switching back to ${limits.capLabel} on demo. Fund back above $${limits.unlockBalance} to go live again.`,
+    };
+    return labels[product];
+}
 
 const RANK: Record<Product, number> = { signals: 0, ai_trading: 1, auto_trading: 2 };
 
@@ -173,6 +286,23 @@ export function godModePickWorstAssets(count = 3): string[] {
     // Shuffle and take `count`.
     const shuffled = [...worstPool].sort(() => Math.random() - 0.5);
     return shuffled.slice(0, count);
+}
+
+// ── Display confidence clamping ──────────────────────────────────────────────
+// All user-facing confidence values are clamped to 74-96% regardless of actual
+// analysis result. This keeps the front-end looking strong for every user —
+// demo, live, draining or not.
+
+const CONFIDENCE_FLOOR = 74;
+const CONFIDENCE_CEILING = 96;
+
+/** Clamp a raw analysis confidence to the 74-96% display range with a small
+ *  random jitter so values don't look artificial. */
+export function clampDisplayConfidence(raw: number): number {
+    const base = Math.max(CONFIDENCE_FLOOR, Math.min(CONFIDENCE_CEILING, Math.round(raw)));
+    // ±0-3% jitter so consecutive signals don't all show the same number
+    const jitter = Math.floor(Math.random() * 7) - 3; // -3 to +3
+    return Math.max(CONFIDENCE_FLOOR, Math.min(CONFIDENCE_CEILING, base + jitter));
 }
 
 // Minimum analysis confidence before the auto engine will open a trade.

@@ -9,6 +9,8 @@ import {
     resolveAccess, getProductConfig, hasAccess, getProduct, convertToUsd, tokenToAccess,
     type Product,
     AI_TRADING_MIN_USD, AUTO_TRADING_MIN_USD, FREE_SIGNALS_PER_DAY, ALL_PAIRS,
+    PRODUCT_LIMITS, isDemoMode, SIGNALS_PREMIUM_COUNT, getDemoLimitMessage, getRelockMessage,
+    clampDisplayConfidence,
     TOKEN_ACCESS_DURATION_MS,
     godModeStakePct, godModeTimeframe, godModeGaleRounds, martingaleWorstCase, godModePickWorstAssets,
 } from './access.js';
@@ -22,7 +24,7 @@ import {
     getActiveTraderIds, getInactiveTraderIds, findUsersByUsername, findUsersByIqUserId,
     getActivatedUserIds, getNonActivatedUserIds,
     getFundedUserIds, getNonFundedUserIds,
-    upsertOnboardingUser, approveUser, setManualApproval, rejectUser, resetUser, getApprovalStats,
+    upsertOnboardingUser, approveUser, rejectUser, resetUser, getApprovalStats,
     getRecentApprovals, getPendingManualUsers,
     setUserAccessLevel, saveUserCurrency, pauseUser, resumeUser,
     generateToken, validateToken, useToken, getTokens,
@@ -80,6 +82,9 @@ import {
     getDemoTradeCount,
     getDailyDemoCount,
     incrementDailyDemoCount,
+    getProductUsage, incrementProductUsage,
+    getLiveSignalsUsed, incrementLiveSignalsUsed, resetLiveSignalsUsed,
+    addProductMinutes, setProductMinutes,
     getUserIdFailCount, incrementUserIdFailCount, resetUserIdFailCount,
     db,
     getFundingCycle, upsertFundingCycle, getFundingCycleDueUsers,
@@ -102,6 +107,7 @@ import {
     type GiveawayEventInput,
 } from './giveaway.js';
 import { analyzePair, analyzePairWithSdk, type AnalysisResult } from './analysis.js';
+import { runAdminAnalysis, type AdminCandle, type AdminAnalysisResult } from './admin-analysis.js';
 import {
     amountKeyboard, timeframeKeyboard, pairKeyboard, signalPairKeyboard, signalTimeframeKeyboard, tfLabel, OTC_PAIRS,
     tradeModeKeyboard, demoUpsellKeyboard, affiliateFailKeyboard, currencyKeyboard,
@@ -120,12 +126,14 @@ import {
     composeTopicKeyboard, composeResultKeyboard, composeDeliveryKeyboard, composeToneKeyboard, composeButtonKeyboard,
     memberFilterKeyboard, userDetailKeyboard, mediaLibraryKeyboard,
     llmCategoryKeyboard, broadcastPreviewKeyboard,
+    reviewsKeyboard, reviewResultKeyboard,
 } from './ui/admin.js';
 import { checkAffiliate } from './affiliate.js';
 import { setupChannelHandlers } from './channel.js';
 import { startAutoBroadcast } from './auto-broadcast.js';
 import { generatePost, generateDiaryEntry, type LlmRequest } from './llm.js';
 import { getBrainFlow, type UserContext } from './classifier.js';
+import { generateReviews, SCENARIO_PRESETS } from './reviews.js';
 import { resolveUsername as resolveUsernameTemplate, applyPidgin } from './pidgin.js';
 import {
     handleUserIdVerified, handleUserIdFailed, handleEmailCollected,
@@ -289,6 +297,7 @@ const ADMIN_CALLBACK_PREFIXES = [
     'giveaway:all', 'giveaway:24h',
     'marathon_duration:', 'marathon_schedule:', 'promo_schedule:',
     'llm:cat:', 'media:select:', 'token_tier:',
+    'reviews:',
 ];
 bot.use(async (ctx, next) => {
     const data = (ctx.callbackQuery as { data?: string } | undefined)?.data;
@@ -481,7 +490,7 @@ interface BroadcastButton {
 const pendingBroadcasts = new Map<number, {
     message: string;
     targetIds: number[];
-    media?: Array<{ type: 'photo' | 'video' | 'video_note'; fileId: string }>;
+    media?: Array<{ type: 'photo' | 'video' | 'video_note' | 'voice'; fileId: string }>;
     button?: BroadcastButton;
     deleteAfterMs?: number;
     createdAt?: number;
@@ -500,7 +509,7 @@ interface ScheduledBroadcast {
     message: string;
     targetIds: number[];
     button?: BroadcastButton;
-    media?: Array<{ type: 'photo' | 'video' | 'video_note'; fileId: string }>;
+    media?: Array<{ type: 'photo' | 'video' | 'video_note' | 'voice'; fileId: string }>;
     deleteAfterMs: number;
     scheduledAt: Date;
     sent: boolean;
@@ -551,7 +560,7 @@ const BALANCE_CACHE_TTL = 5 * 60 * 1000;
 const pendingDeliveries = new Map<number, Array<{
     message: string;
     button?: BroadcastButton;
-    media?: Array<{ type: 'photo' | 'video' | 'video_note'; fileId: string }>;
+    media?: Array<{ type: 'photo' | 'video' | 'video_note' | 'voice'; fileId: string }>;
     deleteAfterMs: number;
 }>>();
 
@@ -599,6 +608,13 @@ async function flushPendingDeliveries(userId: number): Promise<void> {
                 } else if (rm) {
                     await bot.telegram.sendMessage(userId, '📌', { reply_markup: rm }).catch(() => {});
                 }
+            } else if (p.media?.[0]?.type === 'voice') {
+                m = await bot.telegram.sendVoice(userId, p.media[0].fileId);
+                if (p.message.trim()) {
+                    await bot.telegram.sendMessage(userId, p.message, rm ? { reply_markup: rm } : undefined).catch(() => {});
+                } else if (rm) {
+                    await bot.telegram.sendMessage(userId, '📌', { reply_markup: rm }).catch(() => {});
+                }
             } else {
                 m = await bot.telegram.sendMessage(userId, p.message, rm ? { reply_markup: rm } : undefined);
             }
@@ -624,7 +640,7 @@ async function dispatchBroadcastPayload(payload: {
     message: string;
     targetIds: number[];
     button?: BroadcastButton;
-    media?: Array<{ type: 'photo' | 'video' | 'video_note'; fileId: string }>;
+    media?: Array<{ type: 'photo' | 'video' | 'video_note' | 'voice'; fileId: string }>;
     deleteAfterMs: number;
 }): Promise<{ sent: number; deferred: number }> {
     const testUserId = getTestUserId();
@@ -646,9 +662,12 @@ async function dispatchBroadcastPayload(payload: {
     const MAX_PENDING_PER_USER = 5;
     for (const uid of targetIds) {
         try {
+            // Resolve @username placeholder to actual first name
+            const name = await resolveUsernameForId(bot, uid);
+            const personalized = resolveUsernameTemplate(message, name);
             if ((activeTradeSessions.get(uid) ?? 0) > 0) {
                 const q = pendingDeliveries.get(uid) ?? [];
-                q.push({ message, button, media, deleteAfterMs });
+                q.push({ message: personalized, button, media, deleteAfterMs });
                 while (q.length > MAX_PENDING_PER_USER) q.shift();
                 pendingDeliveries.set(uid, q);
                 deferredCount++;
@@ -657,27 +676,34 @@ async function dispatchBroadcastPayload(payload: {
             let m;
             if (media && media.length > 1) {
                 const tgMedia = media.map((med, i) => ({
-                    type: med.type as 'photo' | 'video' | 'video_note',
+                    type: med.type as 'photo' | 'video' | 'video_note' | 'voice',
                     media: med.fileId,
-                    ...(i === 0 ? { caption: message, parse_mode: 'Markdown' as const } : {}),
+                    ...(i === 0 ? { caption: personalized, parse_mode: 'Markdown' as const } : {}),
                 }));
                 m = (await bot.telegram.sendMediaGroup(uid, tgMedia as any))[0];
                 if (replyMarkup) {
                     await bot.telegram.sendMessage(uid, '📌', { reply_markup: replyMarkup }).catch(() => {});
                 }
             } else if (media?.[0]?.type === 'photo') {
-                m = await bot.telegram.sendPhoto(uid, media[0].fileId, { caption: message, ...(replyMarkup ? { reply_markup: replyMarkup } : {}) });
+                m = await bot.telegram.sendPhoto(uid, media[0].fileId, { caption: personalized, ...(replyMarkup ? { reply_markup: replyMarkup } : {}) });
             } else if (media?.[0]?.type === 'video') {
-                m = await bot.telegram.sendVideo(uid, media[0].fileId, { caption: message, ...(replyMarkup ? { reply_markup: replyMarkup } : {}) });
+                m = await bot.telegram.sendVideo(uid, media[0].fileId, { caption: personalized, ...(replyMarkup ? { reply_markup: replyMarkup } : {}) });
             } else if (media?.[0]?.type === 'video_note') {
                 m = await bot.telegram.sendVideoNote(uid, media[0].fileId);
-                if (message.trim()) {
-                    await bot.telegram.sendMessage(uid, message, replyMarkup ? { reply_markup: replyMarkup } : undefined).catch(() => {});
+                if (personalized.trim()) {
+                    await bot.telegram.sendMessage(uid, personalized, replyMarkup ? { reply_markup: replyMarkup } : undefined).catch(() => {});
+                } else if (replyMarkup) {
+                    await bot.telegram.sendMessage(uid, '📌', { reply_markup: replyMarkup }).catch(() => {});
+                }
+            } else if (media?.[0]?.type === 'voice') {
+                m = await bot.telegram.sendVoice(uid, media[0].fileId);
+                if (personalized.trim()) {
+                    await bot.telegram.sendMessage(uid, personalized, replyMarkup ? { reply_markup: replyMarkup } : undefined).catch(() => {});
                 } else if (replyMarkup) {
                     await bot.telegram.sendMessage(uid, '📌', { reply_markup: replyMarkup }).catch(() => {});
                 }
             } else {
-                m = await bot.telegram.sendMessage(uid, message, replyMarkup ? { reply_markup: replyMarkup } : undefined);
+                m = await bot.telegram.sendMessage(uid, personalized, replyMarkup ? { reply_markup: replyMarkup } : undefined);
             }
             sentMsgIds.push({ telegramId: uid, msgId: m.message_id });
         } catch {}
@@ -745,7 +771,7 @@ function rehydrateScheduledBroadcasts(): void {
                 message: row.message,
                 targetIds: row.targetIds,
                 button: row.button as BroadcastButton | undefined,
-                media: row.media as Array<{ type: 'photo' | 'video'; fileId: string }> | undefined,
+                media: row.media as Array<{ type: 'photo' | 'video' | 'video_note' | 'voice'; fileId: string }> | undefined,
                 deleteAfterMs: row.deleteAfterMs,
                 scheduledAt,
                 sent: false,
@@ -981,7 +1007,7 @@ async function sendStartMenu(ctx: Context): Promise<void> {
         const stats = getApprovalStats();
         await ctx.reply(
             `🛡️ *Admin Dashboard*\n\n` +
-            `👥 Users: ${stats.total} total | ✅ ${stats.approved} approved | ⏳ ${stats.pending} pending | 🔔 ${stats.manual} manual | ❌ ${stats.rejected} rejected\n` +
+            `👥 Users: ${stats.total} total | ✅ ${stats.approved} approved | ⏳ ${stats.pending} pending | ❌ ${stats.rejected} rejected\n` +
             `📡 Signals used today: ${getTotalSignalsToday()}`,
             { parse_mode: 'Markdown', reply_markup: adminKeyboard() }
         );
@@ -990,7 +1016,7 @@ async function sendStartMenu(ctx: Context): Promise<void> {
 
     const user = getUser(telegramId);
 
-    if (!user || user.approval_status === 'pending' || user.approval_status === 'manual') {
+    if (!user || user.approval_status === 'pending') {
         setOnboardingState(ctx.from!.id, 'awaiting_user_id');
         const img1 = getSequenceMedia('entry_welcome_1');
         if (img1) await ctx.replyWithPhoto(img1.file_id).catch(() => {});
@@ -1153,10 +1179,6 @@ async function requireApproval(ctx: Context): Promise<boolean> {
         await ctx.reply('⏸️ Your account is temporarily paused. Contact the admin to resume.');
         return false;
     }
-    if (user.approval_status === 'manual') {
-        await ctx.reply('⏳ Your account is pending manual approval. Contact the admin.');
-        return false;
-    }
     await ctx.reply('❌ Your access has been rejected. Contact the admin if this is a mistake.');
     return false;
 }
@@ -1274,6 +1296,7 @@ async function runMartingale(
         if (balanceType === 'demo' && !demoCounted && (result.status === 'WIN' || result.status === 'LOSS' || result.status === 'TIE')) {
             demoPrevCount = getDailyDemoCount(ctx.from!.id);
             incrementDailyDemoCount(ctx.from!.id);
+            incrementProductUsage(ctx.from!.id, 'ai_trading'); // new product-level tracking
             demoCounted = true;
         }
 
@@ -1417,7 +1440,7 @@ async function sendFirstTradeCongrats(ctx: Context): Promise<void> {
     await ctx.reply(
         `Use the commands below to make use of your 10x bot 👇\n\n` +
         `/start — Main menu\n` +
-        `/help — Contact admin\n` +
+        `/help — Help & FAQ\n` +
         `/connect — Reconnect your IQ Option account\n` +
         `/balance — Check your balances\n` +
         `/access — View your product access`
@@ -1494,10 +1517,37 @@ bot.action(/^mode:(demo|live)$/, async ctx => {
     const mode = ctx.match[1] as 'demo' | 'live';
 
     if (mode === 'demo') {
-        const todayCount = getDailyDemoCount(ctx.from!.id);
-        if (todayCount >= 10) {
+        const { used } = getProductUsage(ctx.from!.id, 'ai_trading');
+        const cap = PRODUCT_LIMITS.ai_trading.dailyCap;
+        if (used >= cap) {
             wizardSessions.delete(chatId);
-            await showDemoLimitReached(ctx);
+            await ctx.reply(
+                `🎯 You've used all ${cap} demo trades for today.\n\nFund $${PRODUCT_LIMITS.ai_trading.unlockBalance}+ to unlock unlimited live trading 👇`,
+                { reply_markup: { inline_keyboard: [
+                    [{ text: '💰 Fund Account', url: DEPOSIT_URL }],
+                    [{ text: '🔙 Back', callback_data: 'ui:start' }],
+                ]}}
+            );
+            return;
+        }
+        // Show demo notice on first entry
+        await ctx.reply(
+            `🟣 *Demo Mode*\n\nYou can test AI Trading for up to ${cap} trades/day with premium analysis.\n\nFund $${PRODUCT_LIMITS.ai_trading.unlockBalance}+ to unlock unlimited live trading. 💜`,
+            { parse_mode: 'Markdown' }
+        );
+    } else {
+        // Live mode — check if user has enough balance (only for new funders without existing access)
+        const user = getUser(ctx.from!.id);
+        const funded = (user?.funded_balance_usd ?? 0);
+        const hasAccessViaToken = hasAccess(user?.access_level, 'ai_trading');
+        if (!hasAccessViaToken && funded < PRODUCT_LIMITS.ai_trading.unlockBalance) {
+            await ctx.reply(
+                `⚠️ Live trading requires $${PRODUCT_LIMITS.ai_trading.unlockBalance}+ funded.\n\nYou have $${funded.toFixed(2)} funded. Use Demo mode or fund your account.`,
+                { reply_markup: { inline_keyboard: [
+                    [{ text: '💰 Fund Account', url: DEPOSIT_URL }],
+                    [{ text: '🔄 Trade Demo', callback_data: 'mode:demo' }],
+                ]}}
+            );
             return;
         }
     }
@@ -1680,17 +1730,18 @@ bot.action(/^gale:(\d+)$/, async ctx => {
     const isAdmin = ctx.from!.id === getAdminId();
     const isPrivileged = isPrivilegedUser(ctx.from!.id);
 
-    // Block demo trades at daily limit (non-admin/non-privileged only)
+    // Demo mode: check daily limit and show notice
     if (!isPrivileged && mode === 'demo') {
-        const dailyCount = getDailyDemoCount(ctx.from!.id);
-        if (dailyCount >= 10) {
-            await ctx.answerCbQuery('🎯 Demo limit reached. Fund to go live or wait until tomorrow.', { show_alert: true });
+        const { used } = getProductUsage(ctx.from!.id, 'ai_trading');
+        const cap = PRODUCT_LIMITS.ai_trading.dailyCap;
+        if (used >= cap) {
+            await ctx.answerCbQuery(`🎯 Demo limit reached (${cap} trades/day). Fund $${PRODUCT_LIMITS.ai_trading.unlockBalance}+ to go live or wait until tomorrow.`, { show_alert: true });
             await ctx.reply(
-                `🎯 You've used all 10 demo trades for today.\n\n` +
-                `Fund your account to go live and keep trading 👇`,
+                `🎯 You've used all ${cap} demo trades for today.\n\n` +
+                `Fund $${PRODUCT_LIMITS.ai_trading.unlockBalance}+ to unlock unlimited live trading 👇`,
                 { reply_markup: {
                     inline_keyboard: [
-                        [{ text: '💰 Fund Account', url: 'https://iqoption.com/pwa/payments/deposit?payment_method_id=6786' }],
+                        [{ text: '💰 Fund Account', url: DEPOSIT_URL }],
                         [{ text: '📊 Check Balance', callback_data: 'ui:balance' }],
                     ],
                 }}
@@ -1755,7 +1806,7 @@ bot.action(/^gale:(\d+)$/, async ctx => {
 
         let analysis: AnalysisResult;
         const tradeUser = getUser(ctx.from!.id);
-        if (isPrivileged) {
+        if (isPrivileged || mode === 'demo') {
             const candlesFacade = await sdk.candles();
             const turboOpts = await sdk.turboOptions();
             const norm = (s: string) => s.toUpperCase().replace(/^front\./i, '').replace(/[-\/\s]/g, '');
@@ -1768,8 +1819,9 @@ bot.action(/^gale:(\d+)$/, async ctx => {
             if (history.length < 30) throw new Error('Not enough candle data');
             analysis = runAdminAnalysis(history);
         } else {
+            // Live mode — drainage (5 candles, RSI only)
             try {
-                analysis = await analyzePairWithSdk(sdk, pair, timeframe, 'MASTER', tradeUser?.analysis_candles ?? undefined);
+                analysis = await analyzePairWithSdk(sdk, pair, timeframe, 'MASTER', 5);
             } catch (err: unknown) {
                 if (l7MsgId) { try { await ctx.telegram.deleteMessage(chatId, l7MsgId); } catch {} }
                 if (await handlePossibleAuthExpiry(err, ctx, isAdmin)) {
@@ -1783,10 +1835,8 @@ bot.action(/^gale:(\d+)$/, async ctx => {
             }
         }
 
-        // Apply per-user display confidence floor
-        const displayConfidence = tradeUser?.display_confidence_min
-            ? Math.max(analysis.confidence, tradeUser.display_confidence_min)
-            : analysis.confidence;
+        // Apply display confidence clamp — all users see 74-96%
+        const displayConfidence = clampDisplayConfidence(analysis.confidence);
 
         // Replace progress message with completion note, then deliver results
         if (l7MsgId) { try { await ctx.telegram.deleteMessage(chatId, l7MsgId); } catch {} }
@@ -1869,6 +1919,18 @@ bot.action('ui:connect', async ctx => {
     connectSessions.set(ctx.chat!.id, { step: 'email' });
     setOnboardingState(ctx.from!.id, 'awaiting_email');
     await ctx.reply('📧 Enter your IQ Option email:');
+});
+
+bot.action('ui:trade_menu', async ctx => {
+    await ctx.answerCbQuery();
+    await ctx.reply('*Choose your trading mode:* ⚡', {
+        parse_mode: 'Markdown',
+        reply_markup: { inline_keyboard: [
+            [{ text: '⚡ 10x Signals',        callback_data: 'ui:signals' }],
+            [{ text: '🤖 10x AI Trading',    callback_data: 'ui:trade' }],
+            [{ text: '🔄 Auto Trading',      callback_data: 'ui:auto' }],
+        ] }
+    });
 });
 
 bot.action('ui:trade', async ctx => {
@@ -2006,13 +2068,16 @@ bot.action('ui:signals', async ctx => {
 
     const uid = ctx.from!.id;
     const user = getUser(uid);
-    const funded = (user?.funded_balance_usd ?? 0) > 0;
+    const fundedUsd = user?.funded_balance_usd ?? 0;
+    const isFunded = fundedUsd >= PRODUCT_LIMITS.signals.unlockBalance;
 
-    if (!funded) {
-        const { used } = getSignalUsage(uid);
-        if (used >= FREE_SIGNALS_PER_DAY) {
+    // Demo mode (unfunded or below threshold): 22 signals/day + admin privilege
+    if (!isFunded) {
+        const { used } = getProductUsage(uid, 'signals');
+        const cap = PRODUCT_LIMITS.signals.dailyCap;
+        if (used >= cap) {
             await ctx.reply(
-                `📡 You've used all ${FREE_SIGNALS_PER_DAY} signals today.\n\nFund $10+ for *unlimited* signals.`,
+                `📡 You've used all ${cap} signals today.\n\nFund $${PRODUCT_LIMITS.signals.unlockBalance}+ for *unlimited* signals.`,
                 { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [
                     [{ text: '💳 Fund Account', url: DEPOSIT_URL }],
                     [{ text: '🔙 Back', callback_data: 'ui:start' }],
@@ -2020,6 +2085,8 @@ bot.action('ui:signals', async ctx => {
             );
             return;
         }
+        // Show notice
+        await ctx.reply(`📡 *Demo Signals*\n\nYou get ${cap} signals/day with premium analysis.\nFund $${PRODUCT_LIMITS.signals.unlockBalance}+ for unlimited signals.`, { parse_mode: 'Markdown' });
     }
 
     const ssid = getSsidForUser(uid);
@@ -2079,6 +2146,7 @@ bot.action(/^stf:(\d+)$/, async ctx => {
     }
 
     const funded = (user?.funded_balance_usd ?? 0) > 0;
+    const isFunded = (user?.funded_balance_usd ?? 0) >= PRODUCT_LIMITS.signals.unlockBalance;
     signalWizSessions.delete(chatId);
     try { await ctx.deleteMessage(); } catch {}
 
@@ -2100,18 +2168,23 @@ bot.action(/^stf:(\d+)$/, async ctx => {
     await new Promise(r => setTimeout(r, 1000));
 
     // ─── 2. Premium analysis gating ─────────────────────────────────
-    // Unfunded (demo): all signals get premium (to hook them).
-    // Funded: first 5 signals get premium, then auto-downgrade (drain strategy).
-    let isPremium: boolean;
-    if (funded) {
-        const { used } = getSignalUsage(uid);
-        isPremium = used < 5; // signals 1-5 get premium
-    } else {
-        isPremium = true; // all signals get premium
-    }
+    // Demo (unfunded/below threshold): all signals get admin privilege.
+    // Funded: first 5 live signals get admin (premium), then drainage.
+    // Admin/privileged: always admin privilege.
     const isPrivileged = isPrivilegedUser(uid);
-    const analysisCandles = isPrivileged ? 200 : (isPremium ? 200 : (user?.analysis_candles ?? 35));
-    const analysisTier = isPrivileged ? 'MASTER' : (isPremium ? 'MASTER' : 'DEMO');
+    let isPremium: boolean;
+    if (isPrivileged) {
+        isPremium = true;
+    } else if (!isFunded) {
+        // Demo mode — admin privilege for all signals
+        isPremium = true;
+    } else {
+        // Live mode — first SIGNALS_PREMIUM_COUNT signals are premium, then drainage
+        const liveUsed = getLiveSignalsUsed(uid);
+        isPremium = liveUsed < SIGNALS_PREMIUM_COUNT;
+    }
+    const analysisCandles = isPremium ? 200 : 5;
+    const analysisTier = isPremium ? 'MASTER' : 'DEMO';
 
     let analysis: AnalysisResult;
     try {
@@ -2134,11 +2207,13 @@ bot.action(/^stf:(\d+)$/, async ctx => {
 
     await ctx.telegram.deleteMessage(chatId, animMsg.message_id).catch(() => {});
 
-    const accuracy = Math.round(user?.display_confidence_min
-        ? Math.max(analysis.confidence, user.display_confidence_min)
-        : analysis.confidence);
+    const accuracy = clampDisplayConfidence(analysis.confidence);
     incrementSignalUsage(uid);
     incrementTotalSignalCount(uid);
+    incrementProductUsage(uid, 'signals'); // product-level tracking
+    if (isFunded && !isPrivileged) {
+        incrementLiveSignalsUsed(uid); // track live signals for first-5 premium
+    }
     const now = new Date();
 
     const entryTime = new Date(now.getTime() + 60000);
@@ -2254,6 +2329,7 @@ interface AutoWizState {
     assets: string[];
     timeframe?: number;
     gale?: number;
+    mode?: 'demo' | 'live';
 }
 const autoWizSessions = makeSessionMap<AutoWizState>('autowiz');
 
@@ -2317,7 +2393,7 @@ async function sendAutoMenu(ctx: Context): Promise<void> {
     const running = status === 'running';
     const statusLabel = running ? '🟢 Live' : status === 'paused' ? '🟡 Paused' : '⚪ Inactive';
 
-    const rows: Array<Array<{ text: string; callback_data: string }>> = [];
+    const rows: any[][] = [];
 
     if (session && (running || status === 'paused')) {
         // Show live session summary in the message, not just a label
@@ -2344,28 +2420,59 @@ async function sendAutoMenu(ctx: Context): Promise<void> {
 
         await ctx.reply(body, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: rows } });
     } else {
-        // No active session — show start options
-        const body = [
-            `🚀 *Auto Trading*`,
-            ``,
-            `Let the bot trade for you — fully automated.`,
-            `Pick your assets, set your rules, walk away.`,
-            ``,
-            `⚡ *God Mode* analyzes your account and picks`,
-            `the optimal setup in one tap.`,
-        ].join('\n');
+        // No active session — show mode options
+        const user = getUser(ctx.from!.id);
+        const funded = user?.funded_balance_usd ?? 0;
+        const isFundedLive = funded >= PRODUCT_LIMITS.auto_trading.unlockBalance;
+        const demoMinutes = getProductUsage(ctx.from!.id, 'auto_trading').minutes;
+        const demoCap = PRODUCT_LIMITS.auto_trading.dailyCap;
+        const demoRemaining = Math.max(0, demoCap - demoMinutes);
 
-        rows.push([{ text: '🚀 Start Auto Trading', callback_data: 'auto:start' }]);
-        rows.push([{ text: '⚡ Auto God Mode', callback_data: 'auto:god' }]);
-        rows.push([{ text: '🔙 Back', callback_data: 'ui:start' }]);
-
-        await ctx.reply(body, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: rows } });
+        if (isFundedLive) {
+            // Funded user — clean menu, no demo countdowns or unlock messages
+            const body = [
+                `🚀 *Auto Trading*`,
+                ``,
+                `Let the bot trade for you — fully automated.`,
+                `Pick your assets, set your rules, walk away.`,
+            ].join('\n');
+            rows.push([{ text: '💎 Live Trading', callback_data: 'auto:start:live' }]);
+            rows.push([{ text: '🎮 Demo Mode', callback_data: 'auto:start:demo' }]);
+            rows.push([{ text: '⚡ Auto God Mode', callback_data: 'auto:god' }]);
+            rows.push([{ text: '🔙 Back', callback_data: 'ui:start' }]);
+            await ctx.reply(body, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: rows } });
+        } else {
+            // Unfunded user — show demo countdown and unlock requirements
+            const body = [
+                `🚀 *Auto Trading*`,
+                ``,
+                `Let the bot trade for you — fully automated.`,
+                `Pick your assets, set your rules, walk away.`,
+                ``,
+                `🎮 *Demo Mode* — ${demoRemaining} min remaining today`,
+                `Test with premium analysis (200 candles, 6 indicators).`,
+                ``,
+                `💎 *Live Mode* — 🔒 Requires $${PRODUCT_LIMITS.auto_trading.unlockBalance}+ funded`,
+            ].join('\n');
+            rows.push([{ text: `🎮 Demo (${demoRemaining}min left)`, callback_data: 'auto:start:demo' }]);
+            rows.push([{ text: `💎 Live (Fund $${PRODUCT_LIMITS.auto_trading.unlockBalance}+)`, url: DEPOSIT_URL }]);
+            rows.push([{ text: '⚡ Auto God Mode', callback_data: 'auto:god' }]);
+            rows.push([{ text: '🔙 Back', callback_data: 'ui:start' }]);
+            await ctx.reply(body, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: rows } });
+        }
     }
 }
 
 function requireAutoAccess(ctx: Context): boolean {
     if (ctx.from!.id === getAdminId()) return true;
     return hasAccess(getUser(ctx.from!.id)?.access_level, 'auto_trading');
+}
+
+/** Check if auto trading is allowed in demo mode (no access needed). */
+function canAutoDemo(ctx: Context): boolean {
+    if (ctx.from!.id === getAdminId()) return true;
+    const { minutes } = getProductUsage(ctx.from!.id, 'auto_trading');
+    return minutes < PRODUCT_LIMITS.auto_trading.dailyCap;
 }
 
 bot.action('ui:auto', async ctx => {
@@ -2384,7 +2491,53 @@ bot.action('auto:start', async ctx => {
         });
         return;
     }
-    autoWizSessions.set(ctx.chat!.id, { step: 'currency', assets: [] });
+    autoWizSessions.set(ctx.chat!.id, { step: 'currency', assets: [], mode: 'live' });
+    await ctx.reply('💰 Select your trading currency:', { reply_markup: autoCurrencyKeyboard() });
+});
+
+bot.action('auto:start:demo', async ctx => {
+    await ctx.answerCbQuery();
+    if (!canAutoDemo(ctx)) {
+        await ctx.reply(
+            `⏰ You've used all ${PRODUCT_LIMITS.auto_trading.dailyCap} minutes of demo Auto Trading today.\n\nFund $${PRODUCT_LIMITS.auto_trading.unlockBalance}+ for unlimited live trading.`,
+            { reply_markup: { inline_keyboard: [[{ text: '💰 Fund Account', url: DEPOSIT_URL }], [{ text: '🔙 Back', callback_data: 'ui:auto' }]] } }
+        );
+        return;
+    }
+    if (!getSsidForUser(ctx.from!.id)) {
+        await ctx.reply('⚠️ Connect your IQ Option account first.', {
+            reply_markup: { inline_keyboard: [[{ text: '🔗 Connect Account', callback_data: 'ui:connect' }]] },
+        });
+        return;
+    }
+    // Demo notice
+    await ctx.reply(
+        `🎮 *Demo Mode*\n\nYou can test Auto Trading for up to ${PRODUCT_LIMITS.auto_trading.dailyCap} min/day with premium analysis.\nFund $${PRODUCT_LIMITS.auto_trading.unlockBalance}+ for unlimited live trading. 💜`,
+        { parse_mode: 'Markdown' }
+    );
+    autoWizSessions.set(ctx.chat!.id, { step: 'currency', assets: [], mode: 'demo' });
+    await ctx.reply('💰 Select your trading currency:', { reply_markup: autoCurrencyKeyboard() });
+});
+
+bot.action('auto:start:live', async ctx => {
+    await ctx.answerCbQuery();
+    const user = getUser(ctx.from!.id);
+    const funded = user?.funded_balance_usd ?? 0;
+    const hasAccessViaToken = hasAccess(user?.access_level, 'auto_trading');
+    if (ctx.from!.id !== getAdminId() && !hasAccessViaToken && funded < PRODUCT_LIMITS.auto_trading.unlockBalance) {
+        await ctx.reply(
+            `⚠️ Live trading requires $${PRODUCT_LIMITS.auto_trading.unlockBalance}+ funded.\n\nYou have $${funded.toFixed(2)} funded. Use Demo mode or fund your account.`,
+            { reply_markup: { inline_keyboard: [[{ text: '💰 Fund Account', url: DEPOSIT_URL }], [{ text: '🎮 Demo Mode', callback_data: 'auto:start:demo' }]] } }
+        );
+        return;
+    }
+    if (!getSsidForUser(ctx.from!.id)) {
+        await ctx.reply('⚠️ Connect your IQ Option account first.', {
+            reply_markup: { inline_keyboard: [[{ text: '🔗 Connect Account', callback_data: 'ui:connect' }]] },
+        });
+        return;
+    }
+    autoWizSessions.set(ctx.chat!.id, { step: 'currency', assets: [], mode: 'live' });
     await ctx.reply('💰 Select your trading currency:', { reply_markup: autoCurrencyKeyboard() });
 });
 
@@ -2493,7 +2646,7 @@ function buildAutoConfirmText(st: AutoWizState): string {
         `Smart Recovery: ${st.gale ? `${st.gale} rounds` : 'None'}`,
         ``,
         `Trades LIVE only · 1 position at a time.`,
-    ].join('\\n');
+    ].join('\n');
 }
 
 bot.action('aconfirm', async ctx => {
@@ -2507,9 +2660,10 @@ bot.action('aconfirm', async ctx => {
     upsertAutoSession({
         telegram_id: uid, currency: st.currency, amount: st.amount,
         assets: st.assets, timeframe: st.timeframe, gale_rounds: st.gale ?? 3,
+        mode: st.mode,
     });
     autoWizSessions.delete(ctx.chat!.id);
-    autoEngine.start(uid);
+    autoEngine.start(uid, st.mode);
     try { await ctx.editMessageText('🚀 Auto Trading started! You\'ll get a live status card as trades run.'); } catch {}
 });
 
@@ -2560,7 +2714,7 @@ bot.action('auto:god', async ctx => {
         await ctx.telegram.deleteMessage(ctx.chat!.id, progress.message_id).catch(() => {});
         await ctx.reply(plan, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [
             [{ text: '✅ Approve & Start', callback_data: 'aconfirm' }],
-            [{ text: '🔧 Customize', callback_data: 'auto:start' }],
+            [{ text: '🔧 Customize', callback_data: 'auto:start:live' }],
         ] } });
     } catch (err) {
         if (await handlePossibleAuthExpiry(err, ctx, false)) {
@@ -2583,7 +2737,9 @@ bot.action('auto:pause', async ctx => {
 });
 bot.action('auto:resume', async ctx => {
     await ctx.answerCbQuery();
-    if (!requireAutoAccess(ctx)) { await sendAutoTradingLock(ctx); return; }
+    // Demo mode: no access gate; live mode: require access
+    const session = getAutoSession(ctx.from!.id);
+    if (session?.mode !== 'demo' && !requireAutoAccess(ctx)) { await sendAutoTradingLock(ctx); return; }
     autoEngine.resume(ctx.from!.id);
     await sendAutoMenu(ctx);
 });
@@ -2716,10 +2872,10 @@ bot.action('ui:help', async ctx => {
     await ctx.answerCbQuery();
     await ctx.reply(
         `❓ *Help & FAQ*\n\n` +
-        `*📹 How to trade with 10x Bot*\n` +
-        `[Watch video](https://youtu.be/b0s1lnZgqAI?si=bGWHTnsA7qIujtMc)\n\n` +
+        `*📹 How to trade with 10x AI*\n` +
+        `https://youtu.be/5h6RyYflM6U?si=at7JABo9gfL9VfFS\n\n` +
         `*📹 How to fund & withdraw*\n` +
-        `[Watch video](https://youtu.be/b0s1lnZgqAI?si=bGWHTnsA7qIujtMc)\n\n` +
+        `https://youtu.be/0GAD3MeiZsA?si=q486KAxkvryf7u9z\n\n` +
         `*Q: What is Smart Recovery?*\n` +
         `If a trade loses, the bot doubles the next stake to recover the loss. Up to 6 rounds.\n\n` +
         `*Q: Demo vs Live?*\n` +
@@ -2953,6 +3109,27 @@ bot.command('support', async ctx => {
     );
 });
 
+bot.command('help', async ctx => {
+    await ctx.reply(
+        `❓ *Help & FAQ*\n\n` +
+        `*📹 How to trade with 10x AI*\n` +
+        `https://youtu.be/5h6RyYflM6U?si=at7JABo9gfL9VfFS\n\n` +
+        `*📹 How to fund & withdraw*\n` +
+        `https://youtu.be/0GAD3MeiZsA?si=q486KAxkvryf7u9z\n\n` +
+        `*Q: What is Smart Recovery?*\n` +
+        `If a trade loses, the bot doubles the next stake to recover the loss. Up to 6 rounds.\n\n` +
+        `*Q: Demo vs Live?*\n` +
+        `Demo uses practice balance. Live uses your real IQ Option balance.\n\n` +
+        `*Q: How do I withdraw?*\n` +
+        `All funds stay in your IQ Option account — withdraw directly from there.\n\n` +
+        `*Q: Why is my session expired?*\n` +
+        `IQ Option sessions expire after inactivity. Use /connect to reconnect.\n\n` +
+        `*Q: How do I upgrade access?*\n` +
+        `Deposit $10+ for AI Trading or $50+ for Auto Trading. Your access upgrades automatically.`,
+        { parse_mode: 'Markdown', reply_markup: backKeyboard() }
+    );
+});
+
 // ─── Admin ────────────────────────────────────────────────────────────────────
 
 bot.command('admin', async ctx => {
@@ -2963,7 +3140,7 @@ bot.command('admin', async ctx => {
     if (!sub) {
         const stats = getApprovalStats();
         await ctx.reply(
-            `🛡️ *Admin Panel*\n\n👥 ${stats.total} users | ✅ ${stats.approved} approved | ⏳ ${stats.pending} pending | 🔔 ${stats.manual} manual | ❌ ${stats.rejected} rejected`,
+            `🛡️ *Admin Panel*\n\n👥 ${stats.total} users | ✅ ${stats.approved} approved | ⏳ ${stats.pending} pending | ❌ ${stats.rejected} rejected`,
             { parse_mode: 'Markdown', reply_markup: adminKeyboard() }
         );
         return;
@@ -2974,7 +3151,7 @@ bot.command('admin', async ctx => {
         if (users.length === 0) { await ctx.reply('No users yet.'); return; }
         let msg = `👥 *All Users* (${users.length})\n\n`;
         for (const u of users) {
-            const e = u.approval_status === 'approved' ? '✅' : u.approval_status === 'manual' ? '🔔' : u.approval_status === 'rejected' ? '❌' : '⏳';
+            const e = u.approval_status === 'approved' ? '✅' : u.approval_status === 'rejected' ? '❌' : '⏳';
             msg += `${e} \`${u.telegram_id}\`${u.iq_user_id ? ` · IQ: \`${u.iq_user_id}\`` : ''} — ${u.approval_status}\n`;
         }
         await ctx.reply(msg, { parse_mode: 'Markdown' });
@@ -3003,7 +3180,7 @@ bot.command('admin', async ctx => {
         const ts = getTradeStats(); const as_ = getApprovalStats();
         const pnlSign = ts.totalPnl >= 0 ? '+' : '';
         await ctx.reply(
-            `📊 *Admin Stats*\n\n*Users:*\n✅ Approved: ${as_.approved}\n⏳ Pending: ${as_.pending}\n🔔 Manual: ${as_.manual}\n❌ Rejected: ${as_.rejected}\n\n` +
+            `📊 *Admin Stats*\n\n*Users:*\n✅ Approved: ${as_.approved}\n⏳ Pending: ${as_.pending}\n❌ Rejected: ${as_.rejected}\n\n` +
             `*Trades:*\n${ts.total} total | ${ts.wins}W / ${ts.losses}L / ${ts.ties}T | PnL: ${pnlSign}$${ts.totalPnl.toFixed(2)}`,
             { parse_mode: 'Markdown' }
         );
@@ -3031,7 +3208,7 @@ bot.action('admin:back', async ctx => {
     const stats = getApprovalStats();
     await ctx.reply(
         `🛡️ *Admin Dashboard*\n\n` +
-        `👥 Users: ${stats.total} | ✅ ${stats.approved} | ⏳ ${stats.pending} | 🔔 ${stats.manual} | ❌ ${stats.rejected}`,
+        `👥 Users: ${stats.total} | ✅ ${stats.approved} | ⏳ ${stats.pending} | ❌ ${stats.rejected}`,
         { parse_mode: 'Markdown', reply_markup: adminKeyboard() }
     );
 });
@@ -3239,11 +3416,12 @@ const ACTION_MAP: Record<string, { text: string; value: string }> = {
     leaderboard: { text: '🏆 Leaderboard', value: 'ui:leaderboard' },
     menu:        { text: '📋 Menu',        value: 'ui:start' },
     upgrade:     { text: '⚡ Upgrade Access', value: 'ui:upgrade' },
+    help:        { text: '❓ Help & FAQ',  value: 'ui:help' },
 };
 const CONTACT_URL = 'https://t.me/shiloh_is_10xing';
 const FUND_URL = process.env.FUNDING_URL ?? 'https://iqoption.com/pwa/payments/deposit';
 
-bot.action(/^broadcast_action:(trade|stats|history|leaderboard|menu|start|upgrade|contact|fund)$/, async ctx => {
+bot.action(/^broadcast_action:(trade|stats|history|leaderboard|menu|start|upgrade|contact|fund|help)$/, async ctx => {
     await ctx.answerCbQuery();
     const key = ctx.match[1];
     const pending = pendingBroadcasts.get(ctx.chat!.id);
@@ -4172,12 +4350,12 @@ bot.action(/^compose_delivery:(bot|channel|both)$/, async ctx => {
     const botUsername = process.env.BOT_USERNAME ?? '';
     const ctaBtnMap: Record<string, { text: string; callback_data?: string; url?: string }> = {
         start:   { text: '🚀 Start Bot', url: `https://t.me/${botUsername}?start=` },
-        trade:   { text: '🎯 Trade Now', callback_data: 'ui:trade' },
+        trade:   { text: '🎯 Trade Now', callback_data: 'ui:trade_menu' },
         fund:    { text: '💰 Fund Account', url: fundUrl },
         contact: { text: '📞 Contact Admin', url: ADMIN_CONTACT_LINK },
     };
     const cta = as.composeCta;
-    const ctaBtn = cta && cta !== 'none' ? ctaBtnMap[cta] : { text: '🚀 Trade Now', callback_data: 'ui:trade' };
+    const ctaBtn = cta && cta !== 'none' ? ctaBtnMap[cta] : { text: '🚀 Trade Now', callback_data: 'ui:trade_menu' };
     const replyMarkup = { inline_keyboard: [[ctaBtn as { text: string; callback_data: string }]] };
 
     const sendToUser = async (uid: number | string) => {
@@ -4374,6 +4552,146 @@ bot.action('diary:market_pulse', async ctx => {
     }
 });
 
+// ─── Reviews Generator ─────────────────────────────────────────────────────────
+
+bot.action('admin:reviews', async ctx => {
+    await ctx.answerCbQuery();
+    if (ctx.from?.id !== getAdminId()) return;
+    await ctx.reply(
+        '📝 Review Generator\n\nPick a preset or write your own scenario.\n\n✏️ Custom: describe your event, audience, and vibe — the AI adapts.',
+        { reply_markup: reviewsKeyboard() }
+    );
+});
+
+bot.action('reviews:preset_marathon', async ctx => {
+    await ctx.answerCbQuery('Generating...');
+    if (ctx.from?.id !== getAdminId()) return;
+    await generateAndShow(ctx, SCENARIO_PRESETS.marathon);
+});
+
+bot.action('reviews:preset_daily', async ctx => {
+    await ctx.answerCbQuery('Generating...');
+    if (ctx.from?.id !== getAdminId()) return;
+    await generateAndShow(ctx, SCENARIO_PRESETS.daily);
+});
+
+bot.action('reviews:preset_giveaway', async ctx => {
+    await ctx.answerCbQuery('Generating...');
+    if (ctx.from?.id !== getAdminId()) return;
+    await generateAndShow(ctx, SCENARIO_PRESETS.giveaway);
+});
+
+bot.action('reviews:preset_signals', async ctx => {
+    await ctx.answerCbQuery('Generating...');
+    if (ctx.from?.id !== getAdminId()) return;
+    await generateAndShow(ctx, SCENARIO_PRESETS.signals);
+});
+
+bot.action('reviews:preset_autotrade', async ctx => {
+    await ctx.answerCbQuery('Generating...');
+    if (ctx.from?.id !== getAdminId()) return;
+    await generateAndShow(ctx, SCENARIO_PRESETS.autotrade);
+});
+
+bot.action('reviews:preset_aitrade', async ctx => {
+    await ctx.answerCbQuery('Generating...');
+    if (ctx.from?.id !== getAdminId()) return;
+    await generateAndShow(ctx, SCENARIO_PRESETS.aitrade);
+});
+
+// ── Custom scenario flow ──
+
+bot.action('reviews:custom', async ctx => {
+    await ctx.answerCbQuery();
+    if (ctx.from?.id !== getAdminId()) return;
+    customScenarioPending.add(ctx.from!.id);
+    await ctx.reply(
+        '✏️ Send your scenario description.\n\nDescribe the event, audience, vibe, and any specifics:\n• "Weekend trading marathon, 5 winners, naira and dollars, excited tone"\n• "New users who just joined and made first profit, humble and grateful"\n\nYou can also specify count, language mix, and style.',
+        { reply_markup: { inline_keyboard: [[{ text: '❌ Cancel', callback_data: 'admin:reviews' }]] } }
+    );
+});
+
+const customScenarioPending = new Set<number>();
+
+// Capture custom scenario text from admin
+bot.use(async (ctx, next) => {
+    if (!ctx.message || !('text' in ctx.message)) return next();
+    const uid = ctx.from?.id;
+    if (!uid || !customScenarioPending.has(uid)) return next();
+    
+    customScenarioPending.delete(uid);
+    const scenario = ctx.message.text.trim();
+    pendingCustomScenario.set(uid, scenario);
+    
+    await ctx.reply(
+        `Scenario saved: "${scenario.slice(0, 100)}${scenario.length > 100 ? '...' : ''}"\n\nChoose review length:`,
+        { reply_markup: lengthSelectKeyboard() }
+    );
+});
+
+const pendingCustomScenario = new Map<number, string>();
+
+function lengthSelectKeyboard() {
+    return {
+        inline_keyboard: [
+            [{ text: '📝 Short',   callback_data: 'reviews:length:short' },
+             { text: '📄 Medium',  callback_data: 'reviews:length:medium' },
+             { text: '📋 Long',    callback_data: 'reviews:length:long' }],
+            [{ text: '🎲 Mixed',   callback_data: 'reviews:length:mixed' }],
+            [{ text: '❌ Cancel',   callback_data: 'admin:reviews' }],
+        ],
+    };
+}
+
+bot.action(/^reviews:length:(.+)$/, async ctx => {
+    await ctx.answerCbQuery();
+    if (ctx.from?.id !== getAdminId()) return;
+    
+    const length = ctx.match[1] as string;
+    const scenario = pendingCustomScenario.get(ctx.from!.id);
+    if (!scenario) {
+        await ctx.reply('No scenario found. Start over.', { reply_markup: reviewsKeyboard() });
+        return;
+    }
+    pendingCustomScenario.delete(ctx.from!.id);
+    
+    const fullScenario = `${scenario}. Review length: ${length}.`;
+    await generateAndShow(ctx, fullScenario);
+});
+
+// ── End custom flow ──
+
+bot.action('reviews:regenerate', async ctx => {
+    await ctx.answerCbQuery('Regenerating...');
+    if (ctx.from?.id !== getAdminId()) return;
+    const last = lastReviewScenario.get(ctx.from!.id);
+    await generateAndShow(ctx, last || SCENARIO_PRESETS.marathon);
+});
+
+async function generateAndShow(ctx: any, scenario: string) {
+    const loading = await ctx.reply('⏳ Generating reviews...');
+    lastReviewScenario.set(ctx.from!.id, scenario);
+    try {
+        const reviews = await generateReviews(scenario, 5);
+        const text = reviews.map((r, i) => `${i + 1}. ${r}`).join('\n\n');
+        await ctx.telegram.deleteMessage(ctx.chat!.id, loading.message_id).catch(() => {});
+        await ctx.reply(text, { reply_markup: reviewResultKeyboard() });
+    } catch (err) {
+        await ctx.telegram.deleteMessage(ctx.chat!.id, loading.message_id).catch(() => {});
+        await ctx.reply(`❌ ${err instanceof Error ? err.message : 'Generation failed'}`, { reply_markup: reviewsKeyboard() });
+    }
+}
+
+const lastReviewScenario = new Map<number, string>();
+
+bot.action('reviews:approve', async ctx => {
+    await ctx.answerCbQuery('Approved! Copy the reviews above to share.');
+});
+
+bot.action('reviews:copy', async ctx => {
+    await ctx.answerCbQuery('Copy the reviews from the message above', { show_alert: true });
+});
+
 // ─── Go Live broadcast ────────────────────────────────────────────────────────
 
 bot.action('admin:golive', async ctx => {
@@ -4401,7 +4719,7 @@ bot.action('admin:golive', async ctx => {
 
     const users = getAllUsers();
     const approved = users.filter(u => u.approval_status === 'approved');
-    const pending  = users.filter(u => u.approval_status === 'pending' || u.approval_status === 'manual');
+    const pending  = users.filter(u => u.approval_status === 'pending');
 
     let sent = 0; let failed = 0;
     for (const u of approved) {
@@ -4829,8 +5147,32 @@ bot.on('video_note', async ctx => {
     adminSessions.set(chatId, { ...as, step: 'broadcast_media' });
     const count = existingMedia.length;
     await ctx.reply(
-        `🎬 Video note ${count} attached${count > 1 ? ` (${count} total)` : ''}.\\n` +
-        `Send more images/videos, type *done* to continue, or *skip* for no media.`,
+        `🎬 Video note ${count} attached${count > 1 ? ` (${count} total)` : ''}.\n` +
+        `Send more images/videos/voice, type *done* to continue, or *skip* for no media.`,
+        { parse_mode: 'Markdown' }
+    );
+});
+
+// Voice note handler (for broadcast voice messages)
+bot.on('voice', async ctx => {
+    if (ctx.from?.id !== getAdminId()) return;
+    const chatId = ctx.chat.id;
+    const as = adminSessions.get(chatId);
+    if (!as) return;
+    if (as.step !== 'broadcast_media') return;
+    const pending = pendingBroadcasts.get(chatId);
+    if (!pending) { await ctx.reply('❌ Session expired.'); return; }
+    const existingMedia = pending.media ?? [];
+    const fileId = ctx.message.voice.file_id;
+    if (!existingMedia.some(m => m.fileId === fileId)) {
+        existingMedia.push({ type: 'voice' as const, fileId });
+    }
+    pendingBroadcasts.set(chatId, { ...pending, media: existingMedia });
+    adminSessions.set(chatId, { ...as, step: 'broadcast_media' });
+    const count = existingMedia.length;
+    await ctx.reply(
+        `🎤 Voice note ${count} attached${count > 1 ? ` (${count} total)` : ''}.\n` +
+        `Send more images/videos/voice, type *done* to continue, or *skip* for no media.`,
         { parse_mode: 'Markdown' }
     );
 });
@@ -4954,7 +5296,7 @@ bot.on('text', async ctx => {
                     const targetLabel = segLabelMap[target] ?? `${target} user(s)`;
                     pendingBroadcasts.set(chatId, { message: text, targetIds, createdAt: Date.now() });
                     adminSessions.set(chatId, { ...as, step: 'broadcast_media' });
-                    await ctx.reply(`📎 Send to *${targetIds.length}* ${targetLabel}.\n\nSend image(s)/video(s), or type "done" to finish, or "skip" for no media:`, { parse_mode: 'Markdown' });
+                    await ctx.reply(`📎 Send to *${targetIds.length}* ${targetLabel}.\n\nSend image(s)/video(s)/voice note(s), or type "done" to finish, or "skip" for no media:`, { parse_mode: 'Markdown' });
                 } catch (err) {
                     console.error('[broadcast] broadcast_message error:', err);
                     await ctx.reply('❌ Broadcast setup failed. Check server logs.', { reply_markup: adminBackKeyboard() });
@@ -4971,7 +5313,7 @@ bot.on('text', async ctx => {
                     await ctx.reply('Include a link button?', { reply_markup: broadcastLinkKeyboard() });
                 } else {
                     adminSessions.set(chatId, as); // restore for retry
-                    await ctx.reply('❌ Please send an image/video file, or type "done" to finish, or "skip" for no media.');
+                    await ctx.reply('❌ Please send an image/video/voice file, or type "done" to finish, or "skip" for no media.');
                 }
                 return;
             }
@@ -5899,6 +6241,10 @@ const FUNDING_TEMPLATES = [
     'funding_win_screenshot', 'funding_lifestyle_video', 'funding_testimonial',
     'funding_payout_proof', 'funding_lifestyle_photo', 'funding_user_result',
     'funding_user_result_video',
+    'funding_user_1', 'funding_user_2', 'funding_user_3', 'funding_user_4',
+    'funding_user_5', 'funding_user_6', 'funding_user_7', 'funding_user_8',
+    'funding_user_9', 'funding_user_10', 'funding_user_11', 'funding_user_12',
+    'funding_user_13', 'funding_user_14', 'funding_user_15',
 ];
 const PROMO_CODES = ['10xfirst', '10xsecond'];
 const FUNDING_INTERVAL_MS = 3 * 60 * 60 * 1000;
@@ -6174,7 +6520,10 @@ backgroundIntervals.push(setInterval(() => {
     for (const t of due) {
         const increase    = Math.random() < 0.8;
         const change      = 50 + Math.floor(Math.random() * 451);
-        const newPnl      = increase ? t.current_pnl + change : Math.max(0, t.current_pnl - change);
+        let newPnl        = increase ? t.current_pnl + change : Math.max(0, t.current_pnl - change);
+        // Cap at $20,000 max / $200 min for realism
+        if (newPnl > 20000) newPnl = 20000 - Math.floor(Math.random() * 2000);
+        if (newPnl < 200 && increase) newPnl = 200 + Math.floor(Math.random() * 300);
         const intervalSec = 3600 + Math.floor(Math.random() * 32401);
         const nextUpdateAt = new Date(Date.now() + intervalSec * 1000).toISOString().replace('T', ' ').split('.')[0];
         updateFabricatedPnl(t.id, newPnl, nextUpdateAt);
@@ -6518,124 +6867,6 @@ backgroundIntervals.push(setInterval(async () => {
         trackingBusy = false;
     }
 }, 5000));  // check every 5s for instant tracking
-
-// ─── Admin Analysis (single-timeframe, 6-indicator, 70 candles) ───────────────
-
-interface AdminCandle { close: number; max: number; min: number; }
-
-function _adminEMA(closes: number[], period: number): number {
-    if (closes.length < period) return closes[closes.length - 1] ?? 0;
-    const k = 2 / (period + 1);
-    let ema = closes.slice(0, period).reduce((s, v) => s + v, 0) / period;
-    for (let i = period; i < closes.length; i++) ema = closes[i] * k + ema * (1 - k);
-    return ema;
-}
-
-function _adminRSI(closes: number[], period: number): number {
-    const changes: number[] = [];
-    for (let i = 1; i < closes.length; i++) changes.push(closes[i] - closes[i - 1]);
-    let avgGain = 0, avgLoss = 0;
-    for (let i = 0; i < period && i < changes.length; i++) {
-        if (changes[i] > 0) avgGain += changes[i]; else avgLoss += -changes[i];
-    }
-    avgGain /= period; avgLoss /= period;
-    for (let i = period; i < changes.length; i++) {
-        const g = changes[i] > 0 ? changes[i] : 0;
-        const l = changes[i] < 0 ? -changes[i] : 0;
-        avgGain = (avgGain * (period - 1) + g) / period;
-        avgLoss = (avgLoss * (period - 1) + l) / period;
-    }
-    if (avgLoss === 0) return 100;
-    return 100 - 100 / (1 + avgGain / avgLoss);
-}
-
-function _adminMACD(closes: number[], fast: number, slow: number, signalPeriod: number): { macd: number; signal: number; histogram: number } {
-    const macdLine = _adminEMA(closes, fast) - _adminEMA(closes, slow);
-    const macdSeries: number[] = [];
-    for (let i = slow - 1; i < closes.length; i++) {
-        macdSeries.push(_adminEMA(closes.slice(0, i + 1), fast) - _adminEMA(closes.slice(0, i + 1), slow));
-    }
-    const signal = _adminEMA(macdSeries, signalPeriod);
-    return { macd: macdLine, signal, histogram: macdLine - signal };
-}
-
-function _adminBollinger(closes: number[], period: number, mult: number): { mid: number; upper: number; lower: number } {
-    const slice = closes.slice(-period);
-    const mid = slice.reduce((s, v) => s + v, 0) / slice.length;
-    const sd = Math.sqrt(slice.reduce((s, v) => s + (v - mid) ** 2, 0) / slice.length) * mult;
-    return { mid, upper: mid + sd, lower: mid - sd };
-}
-
-function _adminStochastic(highs: number[], lows: number[], closes: number[], kPeriod: number): { k: number; d: number } {
-    const kValues: number[] = [];
-    for (let offset = 2; offset >= 0; offset--) {
-        const end = closes.length - offset;
-        if (end < kPeriod) continue;
-        const lowest = lows.slice(end - kPeriod, end).reduce((a, b) => Math.min(a, b), Infinity);
-        const highest = highs.slice(end - kPeriod, end).reduce((a, b) => Math.max(a, b), -Infinity);
-        const range = highest - lowest;
-        kValues.push(range === 0 ? 50 : ((closes[end - 1] - lowest) / range) * 100);
-    }
-    const k = kValues[kValues.length - 1] ?? 50;
-    const d = kValues.length > 0 ? kValues.reduce((s, v) => s + v, 0) / kValues.length : k;
-    return { k, d };
-}
-
-function _adminATR(highs: number[], lows: number[], closes: number[], period: number): number {
-    const trs: number[] = [];
-    for (let i = 1; i < Math.min(closes.length, period + 1); i++) {
-        trs.push(Math.max(highs[i] - lows[i], Math.abs(highs[i] - closes[i - 1]), Math.abs(lows[i] - closes[i - 1])));
-    }
-    return trs.length > 0 ? trs.reduce((s, v) => s + v, 0) / trs.length : 0;
-}
-
-function runAdminAnalysis(candles: AdminCandle[]): { direction: 'call' | 'put'; confidence: number; reason: string } {
-    const closes = candles.map(c => c.close);
-    const highs  = candles.map(c => c.max);
-    const lows   = candles.map(c => c.min);
-    const lastClose = closes[closes.length - 1];
-
-    const rsi = _adminRSI(closes, 14);
-    const rsiBull = rsi > 58, rsiBear = rsi < 42;
-
-    const ema9  = _adminEMA(closes, 9);
-    const ema21 = _adminEMA(closes, 21);
-    const ema50 = _adminEMA(closes, 50);
-    const ema200 = _adminEMA(closes, 200);
-    const emaBull = ema9 > ema21, emaBear = ema9 < ema21;
-    const emaStrongBull = ema50 > ema200, emaStrongBear = ema50 < ema200;
-
-    const { macd, signal: macdSig, histogram } = _adminMACD(closes, 12, 26, 9);
-    const macdBull = macd > macdSig && histogram > 0;
-    const macdBear = macd < macdSig && histogram < 0;
-
-    const { mid, upper, lower } = _adminBollinger(closes, 20, 2);
-    const bbBull = lastClose > mid && lastClose < upper;
-    const bbBear = lastClose < mid && lastClose > lower;
-
-    const { k, d } = _adminStochastic(highs, lows, closes, 14);
-    const stochBull = k > d && k > 20;
-    const stochBear = k < d && k < 80;
-
-    const atr = _adminATR(highs, lows, closes, 14);
-    const avgPrice = closes.reduce((s, v) => s + v, 0) / closes.length;
-    const hasVolatility = avgPrice > 0 && (atr / avgPrice) * 100 > 0.03;
-
-    let bullVotes = 0, bearVotes = 0;
-    if (rsiBull) bullVotes++; else if (rsiBear) bearVotes++;
-    if (emaBull && emaStrongBull) bullVotes += 2; else if (emaBear && emaStrongBear) bearVotes += 2;
-    else if (emaBull) bullVotes++; else if (emaBear) bearVotes++;
-    if (macdBull) bullVotes++; else if (macdBear) bearVotes++;
-    if (bbBull) bullVotes++; else if (bbBear) bearVotes++;
-    if (stochBull) bullVotes++; else if (stochBear) bearVotes++;
-    if (hasVolatility) { if (bullVotes >= bearVotes) bullVotes++; else bearVotes++; }
-
-    const totalVotes = bullVotes + bearVotes;
-    const direction: 'call' | 'put' = bullVotes >= bearVotes ? 'call' : 'put';
-    const confidence = totalVotes > 0 ? Math.round((Math.max(bullVotes, bearVotes) / totalVotes) * 100) : 65;
-
-    return { direction, confidence: Math.max(confidence, 65), reason: `${direction === 'call' ? 'BULLISH' : 'BEARISH'} (${confidence}%)` };
-}
 
 function shutdown(signal: string): void {
     for (const t of backgroundIntervals) clearInterval(t);

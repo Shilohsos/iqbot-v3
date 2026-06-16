@@ -10,15 +10,10 @@ type IKMarkup = { inline_keyboard: Btn[][] };
 export function startKeyboard(accessLevel?: string): IKMarkup {
     const supportUrl = process.env.ADMIN_CONTACT_LINK ?? 'https://t.me/shiloh_is_10xing';
 
-    const aiUnlocked = hasAccess(accessLevel, 'ai_trading');
-    const autoUnlocked = hasAccess(accessLevel, 'auto_trading');
-
-    const aiBtn: Btn = aiUnlocked
-        ? { text: '🤖 AI Trading', callback_data: 'ui:trade' }
-        : { text: '🔒 AI Trading', callback_data: 'lock:ai_trading' };
-    const autoBtn: Btn = autoUnlocked
-        ? { text: '🚀 Auto Trading', callback_data: 'ui:auto' }
-        : { text: '🔒 Auto Trading', callback_data: 'lock:auto_trading' };
+    // All products are available to everyone — demo mode gates via daily caps
+    // in the individual handlers. No lock icons.
+    const aiBtn: Btn = { text: '🤖 AI Trading', callback_data: 'ui:trade' };
+    const autoBtn: Btn = { text: '🚀 Auto Trading', callback_data: 'ui:auto' };
 
     const rows: Btn[][] = [
         [{ text: '⚡ Signals', callback_data: 'ui:signals' }, aiBtn],

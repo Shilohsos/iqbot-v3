@@ -86,7 +86,7 @@ export async function handleConnected(ctx: Context, telegramId: number, balanceT
     const name = firstName(ctx);
     let msg: string;
     if (balanceText) {
-        msg = `✅ Connected ${name}! 💜\n\n${balanceText}\n\nYou're now locked in. The 10x Special Bot is live and ready.\n\n👇 Tap below to take your first trade.`;
+        msg = `✅ Connected ${name}! 💜\n\n${balanceText}\n\nYou're now locked in. The 10x Special Bot is live and ready.\n\n📹 How to use 10x AI:\nhttps://youtu.be/5h6RyYflM6U?si=at7JABo9gfL9VfFS\n\n📹 How to fund & withdraw:\nhttps://youtu.be/0GAD3MeiZsA?si=q486KAxkvryf7u9z\n\n👇 Tap below to take your first trade.`;
     } else {
         const t = getTemplateByKey('connected_success');
         msg = t ? resolveUsername(t.message, name) : `✅ Connected ${name}! 💜\n\nYou're locked in. The bot is ready.`;
@@ -97,6 +97,7 @@ export async function handleConnected(ctx: Context, telegramId: number, balanceT
     await ctx.reply(
         `Here are your commands:\n\n` +
         `/start — Open main menu\n` +
+        `/help — Help & FAQ\n` +
         `/refresh — Reset everything and start over\n` +
         `/connect — Reconnect your IQ Option account\n\n` +
         `Tap the menu button below to begin 👇`,

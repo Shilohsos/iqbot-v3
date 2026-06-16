@@ -54,6 +54,7 @@ export function adminKeyboard(): IKMarkup {
                 { text: '✍️ Compose Post', callback_data: 'admin:compose' },
             ],
             [{ text: '📔 Admin Diary',     callback_data: 'admin:diary' }],
+            [{ text: '📝 Reviews',        callback_data: 'admin:reviews' }],
             [{ text: '🟢 Go Live',         callback_data: 'admin:golive' }],
             [{ text: '🔙 Back', callback_data: 'ui:start' }],
         ],
@@ -202,6 +203,7 @@ export function broadcastActionKeyboard(): IKMarkup {
             [{ text: '⚡ Upgrade Access',   callback_data: 'broadcast_action:upgrade' }],
             [{ text: '📞 Contact Admin',   callback_data: 'broadcast_action:contact' }],
             [{ text: '💰 Fund Account',    callback_data: 'broadcast_action:fund' }],
+            [{ text: '❓ Help & FAQ',     callback_data: 'broadcast_action:help' }],
         ],
     };
 }
@@ -451,6 +453,35 @@ export function composeDeliveryKeyboard(): IKMarkup {
             [{ text: '📢 Channel Only',        callback_data: 'compose_delivery:channel' }],
             [{ text: '📱 Both Bot + Channel',  callback_data: 'compose_delivery:both' }],
             [{ text: '🔙 Cancel',              callback_data: 'admin:back' }],
+        ],
+    };
+}
+
+// ── Reviews Generator ──
+
+export function reviewsKeyboard(): IKMarkup {
+    return {
+        inline_keyboard: [
+            [{ text: '🏃 Marathon',         callback_data: 'reviews:preset_marathon' }],
+            [{ text: '🎁 Giveaway',         callback_data: 'reviews:preset_giveaway' }],
+            [{ text: '📊 Daily Wins',       callback_data: 'reviews:preset_daily' }],
+            [{ text: '📡 Signals',          callback_data: 'reviews:preset_signals' }],
+            [{ text: '🤖 Auto Trading',     callback_data: 'reviews:preset_autotrade' }],
+            [{ text: '🧠 AI Trading',       callback_data: 'reviews:preset_aitrade' }],
+            [{ text: '✏️ Custom',           callback_data: 'reviews:custom' }],
+            [{ text: '🔄 Regenerate',       callback_data: 'reviews:regenerate' }],
+            [{ text: '🔙 Admin Menu',       callback_data: 'admin:back' }],
+        ],
+    };
+}
+
+export function reviewResultKeyboard(): IKMarkup {
+    return {
+        inline_keyboard: [
+            [{ text: '✅ Approve & Send',    callback_data: 'reviews:approve' }],
+            [{ text: '🔄 Regenerate',        callback_data: 'reviews:regenerate' }],
+            [{ text: '📋 Copy Text',         callback_data: 'reviews:copy' }],
+            [{ text: '🔙 Back',              callback_data: 'admin:reviews' }],
         ],
     };
 }

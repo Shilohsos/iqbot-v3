@@ -1,16 +1,24 @@
 // Auto Trading engine (directive §5). A long-lived background loop per user that
-// rotates through up to 3 chosen assets, analyses each, and trades LIVE only —
-// keeping exactly one position open at a time. Independent of the request-scoped
+// rotates through up to 3 chosen assets, analyses each, and trades LIVE or DEMO.
+// Keeps exactly one position open at a time. Independent of the request-scoped
 // sdkPool (whose idle TTL would evict a multi-hour session), each runner owns its
 // own SDK connection for the life of the session.
+//
+// ── Mode System (2026-06-15) ──
+// Demo mode: admin privilege (200 candles, 6 indicators), 30 min/day timer.
+// Live mode: drainage (5 candles, RSI only), unlimited above $100/$10 thresholds.
+// Timer: wall-clock, pauses on stop, resumes on start.
 
 import type { ClientSdk } from './index.js';
 import { createSdk, runMartingaleCore, type MartingaleOutcome } from './trade.js';
 import { analyzePairWithSdk } from './analysis.js';
-import { AUTO_CONFIDENCE_FLOOR } from './access.js';
+import { runAdminAnalysis, type AdminCandle } from './admin-analysis.js';
+import { AUTO_CONFIDENCE_FLOOR, PRODUCT_LIMITS } from './access.js';
 import {
     getAutoSession, getRunningAutoSessions, setAutoSessionStatus,
-    recordAutoSessionTrade, recordAutoSessionEvaluation, getUser, type AutoTradingSession,
+    recordAutoSessionTrade, recordAutoSessionEvaluation, getUser,
+    setAutoSessionMgState, type AutoTradingSession,
+    db, setProductMinutes,
 } from './db.js';
 import { getAdminId } from './ui/admin.js';
 import { logger } from './logger.js';
@@ -26,6 +34,59 @@ interface Notifier {
 let notifier: Notifier | undefined;
 const RECONNECT_BACKOFF_MS = [2000, 4000, 8000, 16000];
 
+// ── Timer tracking for demo mode ──────────────────────────────────────────
+
+/** Accumulated demo minutes used today (flushed to DB periodically). */
+const demoTimers = new Map<number, { startedAt: number; accumulatedMs: number; flushTimer?: ReturnType<typeof setInterval> }>();
+
+function getDemoMinutesUsed(telegramId: number): number {
+    const t = demoTimers.get(telegramId);
+    const acc = t ? t.accumulatedMs : 0;
+    // Also add any DB-stored minutes
+    return Math.ceil(acc / 60_000);
+}
+
+function startDemoTimer(telegramId: number): void {
+    const existing = demoTimers.get(telegramId);
+    if (existing && existing.startedAt > 0) return; // already running
+    const accumulatedMs = existing?.accumulatedMs ?? 0;
+    demoTimers.set(telegramId, {
+        startedAt: Date.now(),
+        accumulatedMs,
+        flushTimer: setInterval(() => {
+            // Flush accumulated minutes to DB every 60 seconds
+            const t = demoTimers.get(telegramId);
+            if (t && t.startedAt > 0) {
+                const elapsed = Date.now() - t.startedAt;
+                const totalMs = t.accumulatedMs + elapsed;
+                const totalMin = Math.ceil(totalMs / 60_000);
+                setProductMinutes(telegramId, 'auto_trading', totalMin);
+            }
+        }, 60_000),
+    });
+}
+
+function pauseDemoTimer(telegramId: number): number {
+    const t = demoTimers.get(telegramId);
+    if (!t || t.startedAt <= 0) return t?.accumulatedMs ?? 0;
+    const elapsed = Date.now() - t.startedAt;
+    t.accumulatedMs += elapsed;
+    t.startedAt = 0;
+    if (t.flushTimer) { clearInterval(t.flushTimer); t.flushTimer = undefined; }
+    // Flush to DB
+    const totalMin = Math.ceil(t.accumulatedMs / 60_000);
+    try {
+        setProductMinutes(telegramId, 'auto_trading', totalMin);
+    } catch {}
+    return t.accumulatedMs;
+}
+
+function stopDemoTimer(telegramId: number): number {
+    const totalMs = pauseDemoTimer(telegramId);
+    demoTimers.delete(telegramId);
+    return totalMs;
+}
+
 function tfLabel(sec: number): string {
     return sec === 30 ? '30s' : sec === 60 ? '1m' : sec === 300 ? '5m' : `${sec}s`;
 }
@@ -38,15 +99,31 @@ function msToNextCandle(tfSec: number): number {
     return Math.max(3000, (next - now) * 1000 + 1500);
 }
 
+/** Race a promise against a timeout. Rejects with a timeout error if the
+ *  operation doesn't complete within `ms`. Prevents the auto-trading loop
+ *  from freezing indefinitely on a hung WebSocket. */
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error(`TIMEOUT:${label}`)), ms);
+        promise.then(
+            v => { clearTimeout(timer); resolve(v); },
+            e => { clearTimeout(timer); reject(e); },
+        );
+    });
+}
+
 class AutoRunner {
     private sdk: ClientSdk | undefined;
     private stopping = false;
     private statusMsgId: number | undefined;
     private assets: string[];
     private lastWsNotify = 0;
+    public readonly mode: 'demo' | 'live';
 
-    constructor(public readonly session: AutoTradingSession) {
+    constructor(public readonly session: AutoTradingSession, mode?: 'demo' | 'live') {
         this.assets = JSON.parse(session.assets) as string[];
+        this.mode = mode ?? 'live';
+        this.statusMsgId = session.status_msg_id ?? undefined;
     }
 
     private get chatId(): number { return this.session.telegram_id; }
@@ -79,8 +156,9 @@ class AutoRunner {
         const pnlFormatted = `${sign}${s.pnl.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${s.currency}`;
         const asset = this.assets[s.current_asset_index % this.assets.length];
         const statusEmoji = s.status === 'running' ? '🟢 Live' : s.status === 'paused' ? '🟡 Paused' : '⚪ Stopped';
+        const modeLabel = this.mode === 'demo' ? '🎮 Demo' : '💎 Live';
         const text = [
-            `🚀 *Auto Trading* · ${statusEmoji}`,
+            `🚀 *Auto Trading* · ${statusEmoji} · ${modeLabel}`,
             ``,
             `${asset} (${idx}/${this.assets.length}) · ${tfLabel(s.timeframe)} · ${s.gale_rounds}-round recovery`,
             `Trades: ${s.trades_done}   Scanned: ${s.evaluations}   P&L: ${pnlFormatted}`,
@@ -98,7 +176,11 @@ class AutoRunner {
                 await notifier?.editMessageText(this.chatId, this.statusMsgId, undefined, text, extra);
             } else {
                 const m = await notifier?.sendMessage(this.chatId, text, extra);
-                this.statusMsgId = m?.message_id;
+                if (m?.message_id) {
+                    this.statusMsgId = m.message_id;
+                    // Persist so we can edit after restart
+                    try { db.prepare('UPDATE auto_trading_sessions SET status_msg_id = ? WHERE telegram_id = ?').run(m.message_id, this.chatId); } catch {}
+                }
             }
         } catch { /* message edit races are non-fatal */ }
     }
@@ -116,7 +198,7 @@ class AutoRunner {
     /** Notify the user about a WebSocket hiccup at most once per minute so a
      *  flapping connection doesn't spam them. Returns true if the error was a WS error. */
     private async maybeNotifyWsError(msg: string): Promise<boolean> {
-        if (!/websocket|is closing|not open/i.test(msg)) return false;
+        if (!/websocket|is closing|not open|^TIMEOUT:/i.test(msg)) return false;
         const now = Date.now();
         if (now - this.lastWsNotify > 60_000) {
             this.lastWsNotify = now;
@@ -127,9 +209,57 @@ class AutoRunner {
 
     private async liveBalance(): Promise<number> {
         if (!this.sdk) return 0;
+        const balanceType = this.mode === 'demo' ? BalanceType.Demo : BalanceType.Real;
         const all = (await this.sdk.balances()).getBalances();
-        const real = all.find(b => b.type === BalanceType.Real) ?? all.find(b => b.type === undefined);
-        return real?.amount ?? 0;
+        const target = all.find(b => b.type === balanceType) ?? all.find(b => b.type === undefined);
+        const bal = target?.amount ?? 0;
+        // Demo accounts get $10K practice balance from IQ Option — if the SDK
+        // misreports it as 0, use the fallback so the engine doesn't pause.
+        if (this.mode === 'demo' && bal <= 0) return 10_000;
+        return bal;
+    }
+
+    // ── Demo timer check ──────────────────────────────────────────────────
+
+    private isDemoLimitReached(): boolean {
+        if (this.mode !== 'demo') return false;
+        const cap = PRODUCT_LIMITS.auto_trading.dailyCap; // 30 minutes
+        const used = getDemoMinutesUsed(this.chatId);
+        return used >= cap;
+    }
+
+    private async handleDemoLimit(): Promise<void> {
+        setAutoSessionStatus(this.chatId, 'paused', 'demo_limit');
+        stopDemoTimer(this.chatId);
+        await this.notify(
+            `⏰ You've used your ${PRODUCT_LIMITS.auto_trading.dailyCap} minutes of demo Auto Trading for today.\n\n` +
+            `Fund $${PRODUCT_LIMITS.auto_trading.unlockBalance}+ for unlimited live trading. 💜`,
+            false
+        );
+    }
+
+    // ── Analysis routing ──────────────────────────────────────────────────
+
+    private async analyzeAsset(asset: string, timeframeSec: number): Promise<{ direction: 'call' | 'put'; confidence: number }> {
+        if (!this.sdk) throw new Error('No SDK connection');
+
+        if (this.mode === 'demo') {
+            // Demo mode — admin privilege (200 candles, 6 indicators)
+            const turboOpts = await this.sdk.turboOptions();
+            const norm = (s: string) => s.toUpperCase().replace(/^front\./i, '').replace(/[-\/\s]/g, '');
+            const normalizedAsset = norm(asset);
+            const active = turboOpts.getActives().find(
+                a => norm(a.ticker) === normalizedAsset || norm(a.localizationKey) === normalizedAsset
+            );
+            if (!active) throw new Error(`Unknown pair: ${asset}`);
+            const candlesFacade = await this.sdk.candles();
+            const history = await candlesFacade.getCandles(active.id, timeframeSec, { count: 200 }) as AdminCandle[];
+            if (history.length < 30) throw new Error('Not enough candle data for admin analysis');
+            return runAdminAnalysis(history);
+        } else {
+            // Live mode — drainage (5 candles, RSI only)
+            return analyzePairWithSdk(this.sdk, asset, timeframeSec, 'MASTER', 5);
+        }
     }
 
     async start(ssid: string): Promise<void> {
@@ -141,17 +271,34 @@ class AutoRunner {
             engineUnregister(this.chatId);
             return;
         }
+
+        // Start demo timer if in demo mode
+        if (this.mode === 'demo') {
+            startDemoTimer(this.chatId);
+        }
+
         await this.renderStatus();
         void this.loop(ssid);
     }
 
-    stop(): void { this.stopping = true; }
+    stop(): void {
+        this.stopping = true;
+        if (this.mode === 'demo') {
+            stopDemoTimer(this.chatId);
+        }
+    }
 
     private async loop(ssid: string): Promise<void> {
         try {
             while (!this.stopping) {
                 const s = getAutoSession(this.chatId);
                 if (!s || s.status !== 'running') break;
+
+                // Demo mode: check time limit
+                if (this.mode === 'demo' && this.isDemoLimitReached()) {
+                    await this.handleDemoLimit();
+                    break;
+                }
 
                 const idx = s.current_asset_index % this.assets.length;
                 const asset = this.assets[idx];
@@ -160,7 +307,7 @@ class AutoRunner {
                 // Affordability guard — never fire a trade the balance can't cover.
                 let balance: number;
                 try {
-                    balance = await this.liveBalance();
+                    balance = await withTimeout(this.liveBalance(), 10_000, 'liveBalance');
                 } catch (err) {
                     if (!(await this.reconnect(ssid))) {
                         setAutoSessionStatus(this.chatId, 'paused', 'reconnect_failed');
@@ -179,9 +326,15 @@ class AutoRunner {
                 // and no-duplicate-asset rules — directive §5.4).
                 let hasOpen = false;
                 try {
-                    const positions = await this.sdk!.positions();
+                    const positions = await withTimeout(this.sdk!.positions(), 10_000, 'positions');
                     hasOpen = positions.getOpenedPositions().length > 0;
-                } catch { /* treat as none open; analysis will surface real errors */ }
+                } catch (err) {
+                    const msg = err instanceof Error ? err.message : String(err);
+                    if (/^TIMEOUT:/i.test(msg)) {
+                        if (await this.maybeNotifyWsError(msg)) await this.reconnect(ssid);
+                    }
+                    /* other errors: treat as none open; analysis will surface real errors */
+                }
                 if (hasOpen) {
                     await new Promise(r => setTimeout(r, 3000));
                     continue;
@@ -192,12 +345,22 @@ class AutoRunner {
                 try {
                     const PRIV_IDS = new Set([6622587977, 8986669286, 6683209485, 8471649166]);
                     const isPrivileged = this.chatId === getAdminId() || PRIV_IDS.has(this.chatId);
-                    const user = getUser(this.chatId);
-                    const userCandles = user?.analysis_candles ?? undefined;
-                    const privCandles = userCandles !== undefined
-                        ? userCandles
-                        : isPrivileged ? 200 : undefined;
-                    const a = await analyzePairWithSdk(this.sdk!, asset, s.timeframe, 'MASTER', privCandles);
+
+                    let a: { direction: 'call' | 'put'; confidence: number };
+                    if (this.mode === 'demo' || isPrivileged) {
+                        // Demo mode or privileged → admin analysis
+                        a = await withTimeout(
+                            this.analyzeAsset(asset, s.timeframe),
+                            15_000, 'analyze',
+                        );
+                    } else {
+                        // Live mode → drainage via analyzePairWithSdk
+                        a = await withTimeout(
+                            analyzePairWithSdk(this.sdk!, asset, s.timeframe, 'MASTER', 5),
+                            15_000, 'analyze',
+                        );
+                    }
+
                     // Only privileged users get the quality gate. Everyone else trades
                     // whatever direction the analysis returns, regardless of confidence.
                     if (isPrivileged && a.confidence < AUTO_CONFIDENCE_FLOOR) {
@@ -215,37 +378,72 @@ class AutoRunner {
                         await this.notify('🚀 Auto Trading paused — your session expired. Reconnect and resume.', true);
                         break;
                     }
-                    // A dropped WebSocket: tell the user once, reconnect, then retry.
                     if (await this.maybeNotifyWsError(msg)) {
                         await this.reconnect(ssid);
                     }
                     await new Promise(r => setTimeout(r, 3000));
                     continue;
                 }
+
+                // ── Martingale persistence: if a sequence was interrupted by a
+                // restart, resume at the correct gale amount instead of the base.
+                let startAmount = s.amount;
+                if (s.mg_active && s.mg_next_amount > 0) {
+                    startAmount = s.mg_next_amount;
+                    logger.info('auto', `resuming martingale for ${this.chatId} at amount ${startAmount}`);
+                }
+                setAutoSessionMgState(this.chatId, true, startAmount);
 
                 let outcome: MartingaleOutcome;
+                let lastTradePnl = 0;
+                const balanceType = this.mode === 'demo' ? 'practice' : 'live';
                 try {
-                    outcome = await runMartingaleCore(this.sdk!, {
-                        pair: asset, direction, amount: s.amount, timeframeSec: s.timeframe,
-                        galeRounds: s.gale_rounds, balanceType: 'live', telegramId: this.chatId,
-                    });
+                    outcome = await withTimeout(
+                        runMartingaleCore(this.sdk!, {
+                            pair: asset, direction, amount: startAmount, timeframeSec: s.timeframe,
+                            galeRounds: s.gale_rounds, balanceType: balanceType as 'demo' | 'live', telegramId: this.chatId,
+                        }, (info) => {
+                            if (info.result.status === 'WIN') {
+                                lastTradePnl = info.result.pnl - info.amount;
+                            } else if (info.result.status === 'LOSS') {
+                                lastTradePnl = -info.amount;
+                            } else {
+                                lastTradePnl = 0;
+                            }
+                            const nextAmt = info.result.status === 'LOSS'
+                                ? info.amount * 2
+                                : s.amount;
+                            setAutoSessionMgState(this.chatId, true, nextAmt);
+                        }),
+                        600_000, 'runMartingaleCore',
+                    );
                 } catch (err) {
+                    setAutoSessionMgState(this.chatId, false);
                     const msg = err instanceof Error ? err.message : String(err);
                     logger.warn('auto', `trade run failed for ${this.chatId}: ${msg}`);
-                    // Surface a dropped WebSocket once and reconnect before retrying.
                     if (await this.maybeNotifyWsError(msg)) {
-                        await this.reconnect(ssid);
+                        if (!(await this.reconnect(ssid))) {
+                            setAutoSessionStatus(this.chatId, 'paused', 'reconnect_failed');
+                            await this.notify('🚀 Auto Trading paused — lost connection to your account. Resume when ready.', true);
+                            break;
+                        }
                     }
                     await new Promise(r => setTimeout(r, 3000));
                     continue;
                 }
 
+                // Sequence complete — clear martingale state.
+                setAutoSessionMgState(this.chatId, false);
+                console.log(`[auto-trade] uid=${this.chatId} outcome=${outcome.status} totalPnl=${outcome.totalPnl} rounds=${outcome.rounds} mode=${this.mode}`);
                 recordAutoSessionTrade(this.chatId, nextIdx, outcome.totalPnl);
+                const s2 = getAutoSession(this.chatId);
+                console.log(`[auto-trade] uid=${this.chatId} AFTER record: sessionPnl=${s2?.pnl} trades=${s2?.trades_done}`);
                 const isError = outcome.status === 'ERROR' || outcome.status === 'TIMEOUT';
                 if (!isError) {
                     const emoji = outcome.status === 'WIN' ? '🟢' : outcome.status === 'TIE' ? '⚪' : '🔴';
-                    const sign = outcome.totalPnl >= 0 ? '+' : '';
-                    await this.renderStatus(`${emoji} ${outcome.status} ${sign}${outcome.totalPnl.toFixed(2)} ${s.currency}`);
+                    const displayPnl = outcome.status === 'WIN' ? lastTradePnl : outcome.totalPnl;
+                    const sign = displayPnl >= 0 ? '+' : '';
+                    await this.renderStatus(`${emoji} ${outcome.status} ${sign}${displayPnl.toFixed(2)} ${s.currency}`);
                 }
 
                 await new Promise(r => setTimeout(r, msToNextCandle(s.timeframe)));
@@ -256,6 +454,9 @@ class AutoRunner {
             const s = getAutoSession(this.chatId);
             if (s?.status === 'running') setAutoSessionStatus(this.chatId, 'stopped');
             await this.renderStatus();
+            if (this.mode === 'demo') {
+                stopDemoTimer(this.chatId);
+            }
             engineUnregister(this.chatId);
         }
     }
@@ -277,8 +478,12 @@ export const autoEngine = {
         return runners.has(telegramId);
     },
 
+    getDemoMinutes(telegramId: number): number {
+        return getDemoMinutesUsed(telegramId);
+    },
+
     /** Start (or restart) the engine for a user whose session row is already 'running'. */
-    start(telegramId: number): boolean {
+    start(telegramId: number, mode?: 'demo' | 'live'): boolean {
         if (runners.has(telegramId)) return true;
         const session = getAutoSession(telegramId);
         if (!session || session.status !== 'running') return false;
@@ -287,7 +492,7 @@ export const autoEngine = {
             setAutoSessionStatus(telegramId, 'paused', 'no_ssid');
             return false;
         }
-        const runner = new AutoRunner(session);
+        const runner = new AutoRunner(session, mode);
         runners.set(telegramId, runner);
         void runner.start(ssid);
         return true;
@@ -301,7 +506,13 @@ export const autoEngine = {
 
     pause(telegramId: number): void {
         setAutoSessionStatus(telegramId, 'paused');
-        runners.get(telegramId)?.stop();
+        const runner = runners.get(telegramId);
+        if (runner) {
+            if (runner.mode === 'demo') {
+                pauseDemoTimer(telegramId);
+            }
+            runner.stop();
+        }
     },
 
     /** Resume a paused session from where it left off. */
@@ -309,7 +520,9 @@ export const autoEngine = {
         const session = getAutoSession(telegramId);
         if (!session) return false;
         setAutoSessionStatus(telegramId, 'running', null);
-        return this.start(telegramId);
+        const runner = runners.get(telegramId);
+        const mode = runner?.mode ?? getAutoSessionMode(telegramId);
+        return this.start(telegramId, mode);
     },
 
     /** Rehydrate every 'running' session after a process restart (directive §5.5/E). */
@@ -321,10 +534,20 @@ export const autoEngine = {
                 setAutoSessionStatus(s.telegram_id, 'paused', 'reconnect_failed');
                 continue;
             }
-            const runner = new AutoRunner(s);
+            const mode = getAutoSessionMode(s.telegram_id);
+            const runner = new AutoRunner(s, mode);
             runners.set(s.telegram_id, runner);
             void runner.start(ssid);
         }
         if (sessions.length) logger.info('auto', `restored ${sessions.length} auto-trading session(s)`);
     },
 };
+
+/** Read the stored mode from the auto_trading_sessions table (or default to 'live'). */
+function getAutoSessionMode(telegramId: number): 'demo' | 'live' {
+    try {
+        const row = db.prepare('SELECT mode FROM auto_trading_sessions WHERE telegram_id = ?').get(telegramId) as { mode?: string } | undefined;
+        if (row?.mode === 'demo') return 'demo';
+    } catch {}
+    return 'live';
+}

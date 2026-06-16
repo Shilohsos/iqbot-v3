@@ -4,11 +4,28 @@ import {
     getTestUserId, getNextBroadcastAt, saveNextBroadcastAt,
     getMessageIndex, saveMessageIndex,
     getLastBroadcastMsgId, saveLastBroadcastMsgId,
-    getConfig,
+    getConfig, getUser,
 } from './db.js';
+import { resolveUsername } from './pidgin.js';
 
 const RATE_LIMIT_MS = 50;
 const INTERVAL_MS   = 3_600_000; // 1 hour
+const NAME_CACHE_TTL = 10 * 60 * 1000; // 10 min
+
+const nameCache = new Map<number, { name: string; expires: number }>();
+
+async function resolveName(bot: Telegraf, telegramId: number): Promise<string> {
+    const cached = nameCache.get(telegramId);
+    if (cached && cached.expires > Date.now()) return cached.name;
+    try {
+        const chat = await bot.telegram.getChat(telegramId);
+        const name = (chat as any).first_name ?? 'there';
+        nameCache.set(telegramId, { name, expires: Date.now() + NAME_CACHE_TTL });
+        return name;
+    } catch {
+        return 'there';
+    }
+}
 
 async function fireBroadcast(bot: Telegraf): Promise<void> {
     if (getConfig('features_paused') === '1') {
@@ -21,13 +38,11 @@ async function fireBroadcast(bot: Telegraf): Promise<void> {
         return;
     }
 
-    // Check manual broadcast cooldown — pause auto for 30min after admin sends manually
     const cooldownRaw = getConfig('manual_broadcast_cooldown');
     if (cooldownRaw) {
         const cooldownUntil = new Date(cooldownRaw).getTime();
         if (Date.now() < cooldownUntil) {
-            const remainingMin = Math.ceil((cooldownUntil - Date.now()) / 60_000);
-            console.log(`[auto-broadcast] skipped — manual broadcast cooldown active (${remainingMin}m remaining)`);
+            console.log('[auto-broadcast] skipped — manual broadcast cooldown active');
             return;
         }
     }
@@ -39,12 +54,19 @@ async function fireBroadcast(bot: Telegraf): Promise<void> {
     const testUserId = getTestUserId();
     let targets: number[];
     if (testUserId) {
-        console.log(`[test-mode] sending only to test user ${testUserId}`);
         targets = [testUserId];
     } else {
-        targets = getBroadcastTargetIds().filter(id => id > 0);
+        targets = getBroadcastTargetIds()
+            .filter(id => id > 0)
+            .filter(tid => {
+                const u = getUser(tid);
+                if (!u) return false;
+                return (u.funded_balance_usd ?? 0) > 0
+                    || u.access_level === 'ai_trading'
+                    || u.access_level === 'auto_trading';
+            });
         if (targets.length === 0) {
-            console.log('[auto-broadcast] skipped — no eligible users in DB');
+            console.log('[auto-broadcast] skipped — no eligible users');
             return;
         }
     }
@@ -52,15 +74,17 @@ async function fireBroadcast(bot: Telegraf): Promise<void> {
     let sent = 0;
     for (const tid of targets) {
         try {
-            // Delete previous broadcast message (DB-persisted — survives restarts)
             const prevMsgId = getLastBroadcastMsgId(tid);
             if (prevMsgId) {
                 try { await bot.telegram.deleteMessage(tid, prevMsgId); } catch {}
             }
 
+            const name = await resolveName(bot, tid);
+            const personalized = resolveUsername(msg.content, name);
+
             const sentMsg = await bot.telegram.sendPhoto(tid, msg.image_file_id!, {
-                caption: msg.content,
-                reply_markup: { inline_keyboard: [[{ text: 'Trade Now 👇', callback_data: 'ui:trade' }]] },
+                caption: personalized,
+                reply_markup: { inline_keyboard: [[{ text: 'Trade Now', callback_data: 'ui:trade_menu' }]] },
             });
             saveLastBroadcastMsgId(tid, sentMsg.message_id);
             sent++;
@@ -72,7 +96,7 @@ async function fireBroadcast(bot: Telegraf): Promise<void> {
 
     if (sent > 0) {
         markBroadcastSent(msg.id, sent);
-        console.log(`[auto-broadcast] msg#${msg.id} sent to ${sent}/${targets.length} targets`);
+        console.log('[auto-broadcast] sent to ' + sent + '/' + targets.length);
     }
 }
 
@@ -82,11 +106,7 @@ function scheduleNext(bot: Telegraf): void {
     console.log('[auto-broadcast] next broadcast in 1.0h');
 
     setTimeout(async () => {
-        try {
-            await fireBroadcast(bot);
-        } catch (err) {
-            console.error('[auto-broadcast] error:', err instanceof Error ? err.message : err);
-        }
+        try { await fireBroadcast(bot); } catch {}
         scheduleNext(bot);
     }, INTERVAL_MS);
 }
@@ -96,28 +116,18 @@ export function startAutoBroadcast(bot: Telegraf): void {
     if (saved) {
         const msUntil = new Date(saved).getTime() - Date.now();
         if (msUntil > 0) {
-            console.log(`[auto-broadcast] resuming — fires in ${(msUntil / 3_600_000).toFixed(1)}h`);
             setTimeout(async () => {
-                try {
-                    await fireBroadcast(bot);
-                } catch (err) {
-                    console.error('[auto-broadcast] error:', err instanceof Error ? err.message : err);
-                }
+                try { await fireBroadcast(bot); } catch {}
                 scheduleNext(bot);
             }, msUntil);
         } else {
-            console.log('[auto-broadcast] past due — firing in 30s grace period');
             setTimeout(async () => {
-                try {
-                    await fireBroadcast(bot);
-                } catch (err) {
-                    console.error('[auto-broadcast] error:', err instanceof Error ? err.message : err);
-                }
+                try { await fireBroadcast(bot); } catch {}
                 scheduleNext(bot);
             }, 30_000);
         }
     } else {
         scheduleNext(bot);
     }
-    console.log('[auto-broadcast] started (1h fixed interval, image-gated, DB-persisted, persistent auto-delete)');
+    console.log('[auto-broadcast] started (1h, segment-gated, @username support)');
 }
