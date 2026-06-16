@@ -1663,7 +1663,7 @@ bot.action(/^tf:(\d+)$/, async ctx => {
     const medals = ['🏆', '🥇', '🥈', '🥉', '4️⃣'];
     let picksMsg = 'Top picks ready 🎯\n\nHighest chance to win right now:\n\n';
     if (picks.length > 0) {
-        picks.forEach((p, i) => { picksMsg += `${medals[i] ?? `${i + 1}.`} ${p.pair} — Win rate ≈${p.winRate}%\n`; });
+        picks.forEach((p, i) => { picksMsg += `${medals[i] ?? `${i + 1}.`} ${p.pair} — Win rate ≈${clampDisplayConfidence(p.winRate)}%\n`; });
     } else {
         picksMsg += '🏆 EUR/USD OTC\n🥇 GBP/USD OTC\n🥈 EUR/JPY OTC\n';
     }
