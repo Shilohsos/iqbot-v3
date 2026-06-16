@@ -9,7 +9,7 @@ import {
     resolveAccess, getProductConfig, hasAccess, getProduct, convertToUsd, tokenToAccess,
     type Product,
     AI_TRADING_MIN_USD, AUTO_TRADING_MIN_USD, FREE_SIGNALS_PER_DAY, ALL_PAIRS,
-    PRODUCT_LIMITS, isDemoMode, SIGNALS_PREMIUM_COUNT, getDemoLimitMessage, getRelockMessage,
+    PRODUCT_LIMITS, SIGNALS_PREMIUM_COUNT,
     clampDisplayConfidence,
     TOKEN_ACCESS_DURATION_MS,
     godModeStakePct, godModeTimeframe, godModeGaleRounds, martingaleWorstCase, godModePickWorstAssets,
