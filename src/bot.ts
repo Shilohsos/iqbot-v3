@@ -7,6 +7,7 @@ import { recoverMissedTradeResults } from './tradeRecovery.js';
 import { sdkPool } from './sdk-pool.js';
 import {
     resolveAccess, getProductConfig, hasAccess, getProduct, convertToUsd, tokenToAccess,
+    type Product,
     AI_TRADING_MIN_USD, AUTO_TRADING_MIN_USD, FREE_SIGNALS_PER_DAY, ALL_PAIRS,
     TOKEN_ACCESS_DURATION_MS,
     godModeStakePct, godModeTimeframe, godModeGaleRounds, martingaleWorstCase, godModePickWorstAssets,
@@ -811,6 +812,45 @@ async function syncAccessFromBalance(
     if (!wasFunded && usdAmount > 0) insertFunnelEvent('user_funded', JSON.stringify({ telegram_id: telegramId }));
     if (wasFunded && usdAmount <= 0) insertFunnelEvent('user_unfunded', JSON.stringify({ telegram_id: telegramId }));
     return newAccess;
+}
+
+/** Best-effort: query the user's LIVE IQ Option balance and refresh their
+ *  funded_balance_usd + access_level in the DB. Silent no-op on any failure
+ *  (no SSID, timeout, network) so callers can fall back to the cached value.
+ *  Handles auth expiry with one reconnect+retry. */
+async function refreshFundedBalanceFromLive(uid: number): Promise<void> {
+    let ssid = getSsidForUser(uid);
+    if (!ssid) return; // never connected — nothing to refresh
+    const fetchAndSync = async (sid: string): Promise<void> => {
+        const sdk = await sdkPool.get(uid, sid);
+        try {
+            const all = (await withTimeout(sdk.balances(), 15_000, 'balance')).getBalances();
+            const real = all.find(b => b.type === BalanceType.Real);
+            // No real balance → treat as $0; syncAccessFromBalance will keep them gated.
+            await syncAccessFromBalance(uid, real?.amount ?? 0, real?.currency ?? 'USD', sdk);
+        } finally {
+            sdkPool.release(uid);
+        }
+    };
+    try {
+        await fetchAndSync(ssid);
+    } catch (err) {
+        if (isAuthExpiredError(err) && await autoReconnect(uid)) {
+            ssid = getSsidForUser(uid);
+            if (ssid) { try { await fetchAndSync(ssid); } catch { /* give up — use cache */ } }
+        }
+        // Non-auth errors (timeout/network): fall back to cached value silently.
+    }
+}
+
+/** Access gate that refreshes the live balance FIRST if the user currently lacks
+ *  access — so a deposit made after connecting unlocks them immediately instead
+ *  of being blocked by a stale DB cache. Admin and token holders short-circuit. */
+async function hasAccessLive(uid: number, need: Product): Promise<boolean> {
+    if (uid === getAdminId()) return true;
+    if (hasAccess(getUser(uid)?.access_level, need)) return true;
+    await refreshFundedBalanceFromLive(uid);
+    return hasAccess(getUser(uid)?.access_level, need);
 }
 
 function isAuthExpiredError(err: unknown): boolean {
@@ -1835,12 +1875,14 @@ bot.action('ui:trade', async ctx => {
     await ctx.answerCbQuery();
     if (!await requireApproval(ctx)) return;
 
-    const user = getUser(ctx.from!.id);
     // AI Trading requires ai_trading access (funded $30+ or token). Admin bypasses.
-    if (ctx.from!.id !== getAdminId() && !hasAccess(user?.access_level, 'ai_trading')) {
+    // hasAccessLive refreshes the live balance if the cached access looks locked,
+    // so a user who funded after connecting isn't blocked by a stale DB value.
+    if (!await hasAccessLive(ctx.from!.id, 'ai_trading')) {
         await sendAiTradingLock(ctx);
         return;
     }
+    const user = getUser(ctx.from!.id);
     const hasValidSsid = user?.ssid && user.ssid_valid !== 0;
     if (!hasValidSsid) {
         const isExpired = !!user?.ssid;
@@ -2329,13 +2371,13 @@ function requireAutoAccess(ctx: Context): boolean {
 bot.action('ui:auto', async ctx => {
     await ctx.answerCbQuery();
     if (!await requireApproval(ctx)) return;
-    if (!requireAutoAccess(ctx)) { await sendAutoTradingLock(ctx); return; }
+    if (!await hasAccessLive(ctx.from!.id, 'auto_trading')) { await sendAutoTradingLock(ctx); return; }
     await sendAutoMenu(ctx);
 });
 
 bot.action('auto:start', async ctx => {
     await ctx.answerCbQuery();
-    if (!requireAutoAccess(ctx)) { await sendAutoTradingLock(ctx); return; }
+    if (!await hasAccessLive(ctx.from!.id, 'auto_trading')) { await sendAutoTradingLock(ctx); return; }
     if (!getSsidForUser(ctx.from!.id)) {
         await ctx.reply('⚠️ Connect your IQ Option account first.', {
             reply_markup: { inline_keyboard: [[{ text: '🔗 Connect Account', callback_data: 'ui:connect' }]] },
@@ -2475,7 +2517,7 @@ bot.action('aconfirm', async ctx => {
 
 bot.action('auto:god', async ctx => {
     await ctx.answerCbQuery();
-    if (!requireAutoAccess(ctx)) { await sendAutoTradingLock(ctx); return; }
+    if (!await hasAccessLive(ctx.from!.id, 'auto_trading')) { await sendAutoTradingLock(ctx); return; }
     const uid = ctx.from!.id;
     const ssid = getSsidForUser(uid);
     if (!ssid) {
