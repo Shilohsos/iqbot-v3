@@ -1862,7 +1862,7 @@ bot.action(/^gale:(\d+)$/, async ctx => {
             }
         }
 
-        // Apply display confidence clamp — all users see 74-96%
+        // Apply display confidence clamp — all users see 80-96%
         const displayConfidence = clampDisplayConfidence(analysis.confidence);
 
         // Replace progress message with completion note, then deliver results

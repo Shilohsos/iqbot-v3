@@ -1,0 +1,292 @@
+[
+  {
+    "id": "Review 8 — Jephthah Ihekwoaba",
+    "quote": "Sir I don't know how to thank you but I know deeply that God will bless you for me, I have so many financial issues and my family are looking up for me now I can tell them who my mentor is, I just made #5000 profit in just few hours using just #500. My work here I only earn #35000 monthly and that's not enough for me Sir, God will continue to bless you for me I know if I continue like this I will be able to reach my goal one day and it just happened because of you, thank you so much Sir God bless you for me",
+    "amount": "₦500 → ₦5,000 profit, salary ₦35,000/mo",
+    "tone": "Emotional, deeply grateful, family pressure, mentorship",
+    "phrases": "\"God will bless you for me\", \"my family are looking up for me\", \"I can tell them who my mentor is\"",
+    "category": "Life-changing, Emotional, Family"
+  },
+  {
+    "id": "Review 18 — Mr Toyin",
+    "quote": "I've made about 500k profit from using it in just 5 days now, this is really impressive I would say 👏💐",
+    "amount": "₦500,000 in 5 days (₦20k → +₦37,200 per trade shown)",
+    "tone": "Impressed, confident, understated",
+    "phrases": "\"500k profit\", \"5 days\", \"really impressive\"",
+    "category": "High-value, Speed"
+  },
+  {
+    "id": "Review 31 — \"Meet the grahams\" (Car Purchase)",
+    "quote": "I'm the newest car owner in town 😁 All thanks to you and 10x ai 🤩 It happened so quickly, less than 3 weeks, I'm still even processing how this was possible 🤭🙏",
+    "amount": "Car purchase (implicit: major life upgrade in <3 weeks)",
+    "tone": "Disbelief, overwhelming gratitude, life milestone",
+    "phrases": "\"newest car owner\", \"less than 3 weeks\", \"still processing how this was possible\"",
+    "category": "Life milestone, Speed, Elite"
+  },
+  {
+    "id": "Review 26 — OG M",
+    "quote": "This bot is actually life changing. I deposited $400 just a few days ago, and it's already almost doubled my money 😅 the win rate is insane! Honestly you deserve your flowers for this one 🙏",
+    "amount": "$400 → ~$726 in a few days",
+    "tone": "Genuine, impressed, giving credit",
+    "phrases": "\"life changing\", \"almost doubled\", \"win rate is insane\", \"deserve your flowers\"",
+    "category": "Life-changing, Doubling, Respect"
+  },
+  {
+    "id": "Review 20 — \"Chief\"",
+    "quote": "Chief I am up 113k from the 20k deposited yesterday ✊",
+    "amount": "₦20,000 → ₦113,500 in 1 day",
+    "tone": "Hard, streetwise, results-focused",
+    "phrases": "\"Chief\", \"up 113k\", \"from 20k\", \"yesterday\"",
+    "category": "Speed, High-value, Street"
+  },
+  {
+    "id": "Review 9 — Abking (Accidental Win)",
+    "quote": "I accidentally press 5000 instead of 500 and I am at 25k now 😂\" / \"I was surprised o cus I didn't notice till I saw 9k plus 😂",
+    "amount": "₦15,200 → ₦25,020 (accidental ₦5,000 trade → +₦9,300)",
+    "tone": "Funny, surprised, lucky",
+    "phrases": "\"accidentally press\", \"I was surprised o\", \"didn't notice till I saw 9k plus\"",
+    "category": "Humor, Luck, Relatable"
+  },
+  {
+    "id": "Review 10 — Abking (Follow-up)",
+    "quote": "Boss this is what I have done so far... Thank you very much 🙏 Please how long does withdrawal take to opay lemme remove my capital 😂",
+    "amount": "₦15,200 → ₦41,150",
+    "tone": "Grateful, ready to secure profits, casual",
+    "phrases": "\"remove my capital\", \"what I have done so far\"",
+    "category": "Profit-taking, Trust"
+  },
+  {
+    "id": "Review 29 — Jr",
+    "quote": "my trading journey has been a rollercoaster just as you said in your live but if you know how Happy I am now finding 10x 😢❤️\" → \"513$ now\" → \"This shit Is crazyyy",
+    "amount": "$513",
+    "tone": "Emotional, rollercoaster, raw excitement",
+    "phrases": "\"rollercoaster\", \"how Happy I am\", \"finding 10x\", \"This shit Is crazyyy\"",
+    "category": "Emotional, Raw, Journey"
+  },
+  {
+    "id": "Review 30 — Josh",
+    "quote": "Omo this 10x bot don dey do signals and wonders o\" / \"Made about $200 in 4 days now",
+    "amount": "$200 in 4 days",
+    "tone": "Nigerian Pidgin, casual, impressed",
+    "phrases": "\"omo\", \"don dey do\", \"signals and wonders\", \"$200 in 4 days\"",
+    "category": "Pidgin, Casual, Consistent"
+  },
+  {
+    "id": "Review 32 — Isaac",
+    "quote": "Doe's it means this bot don't bring loss at all????\" / \"Ive made over 60$",
+    "amount": "$60+",
+    "tone": "Amazed, skeptical-turned-believer",
+    "phrases": "\"don't bring loss at all\", \"over 60$\"",
+    "category": "Skeptic-to-believer"
+  },
+  {
+    "id": "Review 25 — Adrián Vega",
+    "quote": "The auto trading is still trading. 10x brother!\" → \"$170 this morning",
+    "amount": "$170 in one morning",
+    "tone": "Excited, brotherly, results-focused",
+    "phrases": "\"auto trading\", \"10x brother\", \"$170 this morning\"",
+    "category": "Auto Trading, Morning wins"
+  },
+  {
+    "id": "Review 24 — VIP Trader",
+    "quote": "We're printing with 10x 😍🔥\" → \"Yes sir\" (when asked if auto trading)",
+    "amount": "Balance ₦572,300, ₦20k → +₦37,200 trades",
+    "tone": "Confident, VIP energy, printing money",
+    "phrases": "\"We're printing\", \"Yes sir\"",
+    "category": "VIP, Printing, Whale"
+  },
+  {
+    "id": "Review 7 — Che",
+    "quote": "Started with 15,200 now at 26k....and the thing is I have been trading with fear so I only traded a few..",
+    "amount": "₦15,200 → ₦26,000",
+    "tone": "Honest, cautious, growing confidence",
+    "phrases": "\"trading with fear\", \"only traded a few\"",
+    "category": "Honest, Cautious"
+  },
+  {
+    "id": "Review 19 — Yusuf",
+    "quote": "it's good im making a a lot of profits\" / \"Made up to $70 so far\" / \"From $10",
+    "amount": "$10 → $70",
+    "tone": "Simple, factual, growing",
+    "phrases": "\"a lot of profits\", \"$70 so far\", \"From $10\"",
+    "category": "Small-to-medium, Clean"
+  },
+  {
+    "id": "Review 2 — Oluwaseun",
+    "quote": "Thanks, I funded $20 tonight and have made $6 already... Little but something 🔥",
+    "amount": "$20 → $26",
+    "tone": "Humble, honest, starting out"
+  },
+  {
+    "id": "Review 3 — Lekan",
+    "quote": "Wow. Just like magic.\" / \"Let's goooo\" / \"You are the best bro..\" / \"Keep it up boss",
+    "tone": "High energy, amazed"
+  },
+  {
+    "id": "Review 5 — Anonymous (Switcher)",
+    "quote": "In all honesty, I was registered on another group... But they didn't seem to offer the same guidance as you... I saw your message in the group asking people to wait till 1 to trade... That's honestly what made me want to switch teams\" → \"That is your supper power...",
+    "category": "Competitor comparison, Trust"
+  },
+  {
+    "id": "Review 8b — Unknown (Sincerity)",
+    "quote": "Thank you bro. I never knew I would meet a sincere person on this telegram oo",
+    "category": "Trust, Sincerity"
+  },
+  {
+    "id": "Review 4 — Moses Obum",
+    "quote": "First impression, amazing",
+    "category": "Quick-hit"
+  },
+  {
+    "id": "Review 17 — Uchechukwu Louis",
+    "quote": "Yes oo I'm in profit\" / \"Just like that?",
+    "amount": "₦900 → ₦1,674"
+  },
+  {
+    "id": "Review 12 — Trading Machine",
+    "quote": "Wow\" / \"Like magic\" / \"It's a win oo. Omo...\" / \"Incredible."
+  },
+  {
+    "id": "Review 15 — Trading Machine (Morning)",
+    "quote": "N5000+ made this morning\" / \"Break even\" / \"My first trade of the day"
+  },
+  {
+    "id": "Review 16 — Trading Machine (Growth)",
+    "quote": "Good morning. Yesterday, I was able to raise 15,200 to 20k."
+  },
+  {
+    "id": "Review 4c — User (\"Sir\")",
+    "quote": "Sir it's working now\" / \"Thank you so much Sir, God will bless you Sir",
+    "amount": "₦500 → ₦930"
+  },
+  {
+    "id": "Review 1 — Precious Oyayela",
+    "quote": "I'm here boss on the live session. VIP"
+  },
+  {
+    "id": "Review 6 — Eric Options User",
+    "quote": "So that's how it works\" / \"Okay"
+  },
+  {
+    "id": "Review 40 — \"Tuna\" (Whale)",
+    "quote": "Tuna again 🤣😂 no quitting in our DNA And guess how much I funded 45k naira oo not dollars oo and to my greatest surprise San billion Al did the remaining magic my first withdrawal this week was 140k after two days I withdrew 104k and currently 220k processing all in just one week of consistent trading Hmmmm may God continue to bless you sir just as you have been putting smile on peoples faces may God continue to put smile on your face also",
+    "amount": "₦45,000 funded → ₦600,000+ profits → ~₦500,000 withdrawn in 1 week",
+    "tone": "Overjoyed, loyal, God-fearing, \"San billion\" = Shiloh",
+    "phrases": "\"no quitting in our DNA\", \"San billion Al did the remaining magic\", \"putting smile on peoples faces\", \"still Dey process\"",
+    "category": "Whale, Withdrawals, Life-changing, Loyalty"
+  },
+  {
+    "id": "Review 41 — \"750k\" Whale",
+    "quote": "Boss man thank you\" / \"I have more than 750k in my account from the 90k I start with",
+    "amount": "₦90,000 → ₦750,000+",
+    "tone": "Humbled, massive growth, concise",
+    "phrases": "\"Boss man\", \"more than 750k\", \"from the 90k I start with\"",
+    "category": "Whale, 8x growth, Trust"
+  },
+  {
+    "id": "Review 42 — iPhone Purchase",
+    "quote": "I just got myself an iPhone 16 plus\" / \"Thank you very much sir\" / \"I've been withdrawing my profit with ease\" / \"I got it tod...",
+    "amount": "iPhone 16 Plus purchase (implicit: substantial)",
+    "tone": "Proud, grateful, lifestyle upgrade",
+    "phrases": "\"iPhone 16 plus\", \"withdrawing my profit with ease\", \"I got it today\"",
+    "category": "Lifestyle purchase, Proof, Withdrawal ease"
+  },
+  {
+    "id": "Review 43 — \"Aria\" (Consistent earner)",
+    "quote": "That's what I earned now sir\" / \"Thanks sir",
+    "amount": "USD/CHF OTC Blitz: +₦3,348 (x2), +₦1,674 on ₦900-₦1,800 stakes. Balance ₦57,870",
+    "tone": "Humble, consistent, grateful",
+    "category": "Consistent, Community"
+  },
+  {
+    "id": "Review 44 — Multi-win Trader",
+    "quote": "Morning boss\" / \"I want to try and double the capital for today's trade to see how it goes too sir",
+    "category": "Active trader, Volume"
+  },
+  {
+    "id": "Review 45 — Small wins, growing",
+    "quote": "My wins now ⭐",
+    "amount": "USD/NOK OTC +₦2,220 on ₦1,200, AUD/JPY OTC +₦4,440 on ₦2,400. Balance ₦15,439",
+    "tone": "Celebrating small wins, building",
+    "category": "Starting out, Growth"
+  },
+  {
+    "id": "Review 46 — \"₦225k → ₦1M in one day\"",
+    "quote": "Yesterday afternoon after the setup with 225,000naira. Now I have 1 million naira in my account. Now I believe it's not fake.",
+    "amount": "₦225,000 → ₦1,048,076.82 (~$1,350) in ONE day",
+    "tone": "Shocked believer — \"now I believe it's not fake\"",
+    "phrases": "\"after the setup\", \"Now I believe it's not fake\", \"Sanbillions AI\"",
+    "category": "Whale, Instant conversion, Proof of concept"
+  },
+  {
+    "id": "Review 47 — \"Deposited $150, account at ₦225k\"",
+    "quote": "Please check I have deposited 150$\" / \"Good morning sir",
+    "amount": "$150 funded → ₦225,294.62 balance",
+    "tone": "Serious, proof-seeking, morning business",
+    "category": "Funded, Growing"
+  },
+  {
+    "id": "Review 48 — \"$40 to $249 in a day\"",
+    "quote": "My helper my daddy my boss thanks only today oh from 40$ to 200 you too much boss",
+    "amount": "$40 → $249.30 in one day",
+    "tone": "Deeply grateful, father-figure language (\"my daddy\"), Pidgin",
+    "phrases": "\"my helper my daddy my boss\", \"from 40$ to 200\", \"you too much boss\"",
+    "category": "Rapid growth, Devotion, Pidgin"
+  },
+  {
+    "id": "Review 49 — \"$11 to $108 — learning the system\"",
+    "quote": "Bro Thank you for teaching me I na understand the diff btw what u've been saying and what I've been doing See something\" / \"Moving my account from $11 to that Assuming I was doing it right I will have make more\" / \"It close in profit Thank you sir 🙏",
+    "amount": "$11 → $108.59",
+    "tone": "Humble learner, breakthrough moment",
+    "phrases": "\"Thank you for teaching me\", \"I na understand the diff\", \"Assuming I was doing it right\"",
+    "category": "Education, Breakthrough, Gratitude"
+  },
+  {
+    "id": "Review 50 — \"$1,127 / Made 1 million naira\"",
+    "quote": "Now if the ask me have I ever made 1 million naira I'll tell them YES... Even before you collect salary\" / \"Asides competing for this global cuprun I've made $1000 which I've never had. Now I don't have to depend on my family. Thank you sir",
+    "amount": "$1,127.93 balance, made $1,000+",
+    "tone": "Financial independence, pride, family freedom",
+    "phrases": "\"before you collect salary\", \"I don't have to depend on my family\"",
+    "category": "Life-changing, Independence, Pride"
+  },
+  {
+    "id": "Review 51 — \"$600 + Global Cup Run\"",
+    "quote": "I just say Le me trade\" / \"I just open my account..\" / \"Boss I have $600 in my account\" / \"I'll never forget this I thought I should use trading to life but instead you pushed it tha Thank you sir God will reward you for this 🙏\" / \"TRADE SIGNAL YEN SEHHHH On my way to $1k\" / \"No forget that global cuprun slot ooooo Na me dey there oo",
+    "amount": "$602.37 → $677.62, on way to $1k",
+    "tone": "Pumped, competitive, aspirational (Canada trip)",
+    "phrases": "\"I just say Le me trade\", \"On my way to $1k\", \"Na me dey there oo\", \"Canada here I come\"",
+    "category": "Global Cup Run, Aspirational, Community"
+  },
+  {
+    "id": "Review 52 — \"$168 on AI Scalping\"",
+    "quote": "Got to $168 on that AI scalping session on the onboarding channel sir I'm locking in sir",
+    "amount": "$168.89",
+    "tone": "Locked in, focused, committed",
+    "phrases": "\"AI scalping session\", \"onboarding channel\", \"I'm locking in sir\"",
+    "category": "AI Trading, Commitment"
+  },
+  {
+    "id": "Review 53 — \"BOUNCEBACK strategy\"",
+    "quote": "Close in profit\" / \"Used the giveaway100\" / \"Thanks a lot bro\" / \"I'll BOUNCEBACK and show you\" / \"The BOUNCEBACK strategy is sweet to the belly boss.",
+    "amount": "Multiple $1-$2 positions, one -$16 loss (recovered)",
+    "tone": "Resilient, strategy believer, comeback story",
+    "phrases": "\"BOUNCEBACK and show you\", \"sweet to the belly boss\"",
+    "category": "Resilience, Strategy, Giveaway"
+  },
+  {
+    "id": "Review 54 — \"Bounce back strategy is the way\"",
+    "quote": "Wawuuu\" / \"I'm so happy\" / \"Done for the day – bounce back strategy is the way 🏆 ✅",
+    "amount": "Trading session: +₦1,720 (x3), +₦1,760, +₦5,800; losses -₦2,000 (x2), -₦4,000",
+    "tone": "Joyful, closing strong, strategy validated",
+    "phrases": "\"I'm so happy\", \"Done for the day\", \"bounce back strategy is the way\"",
+    "category": "Strategy, Daily grind, Joy"
+  },
+  {
+    "id": "Review 55 — \"$618 / I can't lie\"",
+    "quote": "guidance.\" / \"I achieve something also sir o Is not only this person I funded $29 and I'm in the GLOBAL CUPRUN too My account is at $600\" / \"I can't lie 😂😊",
+    "amount": "$29 funded → $618.42, in Global Cup Run",
+    "tone": "Competitive (\"me too!\"), honest, proud",
+    "phrases": "\"I achieve something also sir o\", \"Is not only this person\", \"I can't lie\"",
+    "category": "Global Cup Run, Friendly competition, Honesty"
+  }
+]

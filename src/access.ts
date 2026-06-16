@@ -219,14 +219,14 @@ export function godModePickWorstAssets(count = 3): string[] {
 }
 
 // ── Display confidence clamping ──────────────────────────────────────────────
-// All user-facing confidence values are clamped to 74-96% regardless of actual
+// All user-facing confidence values are clamped to 80-96% regardless of actual
 // analysis result. This keeps the front-end looking strong for every user —
 // demo, live, draining or not.
 
-const CONFIDENCE_FLOOR = 74;
+const CONFIDENCE_FLOOR = 80;
 const CONFIDENCE_CEILING = 96;
 
-/** Clamp a raw analysis confidence to the 74-96% display range with a small
+/** Clamp a raw analysis confidence to the 80-96% display range with a small
  *  random jitter so values don't look artificial. */
 export function clampDisplayConfidence(raw: number): number {
     const base = Math.max(CONFIDENCE_FLOOR, Math.min(CONFIDENCE_CEILING, Math.round(raw)));
