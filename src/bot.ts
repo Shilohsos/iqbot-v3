@@ -2098,103 +2098,15 @@ function yachtInfo(closing: string, buttons: any[][]): { text: string; reply_mar
 bot.action('ui:yacht', async ctx => {
     await ctx.answerCbQuery();
     const uid = ctx.from!.id;
-    const ssid = getSsidForUser(uid);
+    const name = ctx.from?.first_name ?? 'Trader';
 
-    if (!ssid) {
-        const m = yachtInfo('Connect your account first to check eligibility.', [
-            [{ text: '🔗 Connect Account', callback_data: 'ui:connect' }],
-            [{ text: '🔙 Back', callback_data: 'ui:start' }],
-        ]);
-        await ctx.reply(m.text, { parse_mode: 'Markdown', reply_markup: m.reply_markup });
-        return;
-    }
-
-    let usdAmount: number | null = null;
-    let hadReal = false;
-    try {
-        let balanceAttempt = 0;
-        while (balanceAttempt < 2) {
-            balanceAttempt++;
-            try {
-                const sdk = await sdkPool.get(uid, getSsidForUser(uid)!);
-                try {
-                    const all = (await withTimeout(sdk.balances(), 15_000, 'balance')).getBalances();
-                    const real = all.find(b => b.type === BalanceType.Real);
-                    if (real && real.amount > 0) {
-                        hadReal = true;
-                        usdAmount = await convertToUsd(real.amount, real.currency ?? 'USD', sdk);
-                    }
-                } finally {
-                    sdkPool.release(uid);
-                }
-                break; // success — exit retry loop
-            } catch (err) {
-                if (!isAuthExpiredError(err) || balanceAttempt >= 2) {
-                    // Non-auth error, or exhausted retries — propagate
-                    throw err;
-                }
-                // Auth error on first attempt — try silent re-login
-                if (!(await autoReconnect(uid))) {
-                    clearUserSsid(uid);
-                    setSsidValid(uid, 0);
-                    throw err;
-                }
-                // Reconnected! Loop back and retry with fresh SSID
-            }
-        }
-
-        if (!hadReal) {
-            const m = yachtInfo('It looks like your account has no real balance. Fund your account with at least $50 to join.', [
-                [{ text: '💰 Fund Account', url: DEPOSIT_URL }],
-                [{ text: '🔙 Back', callback_data: 'ui:start' }],
-            ]);
-            await ctx.reply(m.text, { parse_mode: 'Markdown', reply_markup: m.reply_markup });
-            return;
-        }
-
-        // Unknown conversion rate → don't gate them out; show a soft retry.
-        if (usdAmount === null) {
-            const m = yachtInfo('Could not verify your balance right now. Try again in a moment.', [
-                [{ text: '🔄 Try Again', callback_data: 'ui:yacht' }],
-                [{ text: '🔙 Back', callback_data: 'ui:start' }],
-            ]);
-            await ctx.reply(m.text, { parse_mode: 'Markdown', reply_markup: m.reply_markup });
-            return;
-        }
-
-        if (usdAmount < YACHT_CLUB_MIN_USD) {
-            await ctx.reply(
-                `🛥️ *10x Yacht Club* — Premium Trading Circle\n\n${YACHT_CLUB_DESC}\n\n`
-                + `👑 You need a minimum of *$${YACHT_CLUB_MIN_USD}* funded to access the Yacht Club.\n`
-                + `Your current balance is *~$${usdAmount.toFixed(2)}*.\n\n`
-                + `Fund your account with at least $${YACHT_CLUB_MIN_USD} to unlock access.`,
-                { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [
-                    [{ text: '💰 Fund Account', url: DEPOSIT_URL }],
-                    [{ text: '🔙 Back', callback_data: 'ui:start' }],
-                ] } }
-            );
-            return;
-        }
-
-        // Qualified — reveal the invite link.
-        await ctx.reply(
-            `🛥️ *You qualify for the 10x Yacht Club!*\n\n`
-            + `Welcome to the inner circle. Click below to join:\n\n`
-            + `👉 [Join 10x Yacht Club](${YACHT_CLUB_LINK})\n\n`
-            + `See you inside. 💜`,
-            { parse_mode: 'Markdown' }
-        );
-    } catch (err) {
-        if (isAuthExpiredError(err)) {
-            clearUserSsid(uid);
-            setSsidValid(uid, 0);
-        }
-        const m = yachtInfo('Could not verify your balance right now. Try again later.', [
-            [{ text: '🔄 Try Again', callback_data: 'ui:yacht' }],
-            [{ text: '🔙 Back', callback_data: 'ui:start' }],
-        ]);
-        await ctx.reply(m.text, { parse_mode: 'Markdown', reply_markup: m.reply_markup }).catch(() => {});
-    }
+    await ctx.reply(
+        `🛥️ *10x Yacht Club* — Premium Trading Circle\n\n`
+        + `${YACHT_CLUB_DESC}\n\n`
+        + `👉 [Join the Yacht Club](${YACHT_CLUB_LINK})\n\n`
+        + `See you inside, ${name}. 💜`,
+        { parse_mode: 'Markdown' }
+    ).catch(() => {});
 });
 
 // ─── Signals wizard (pair → timeframe → analysis — directive §3) ───────────
