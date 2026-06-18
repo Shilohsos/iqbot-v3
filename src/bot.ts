@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import { Telegraf, Context } from 'telegraf';
-import { ClientSdk, SsidAuthMethod, BalanceType } from './index.js';
+import { ClientSdk, SsidAuthMethod, BalanceType, setWsProxyResolver } from './index.js';
 import { WS_URL, PLATFORM_ID, IQ_HOST, IQ_AUTH_URL } from './protocol.js';
 import { executeTrade, executeTradeWithSdk, createSdk, type TradeRequest, type TradeResult } from './trade.js';
 import { recoverMissedTradeResults } from './tradeRecovery.js';
@@ -1692,7 +1692,13 @@ bot.action(/^mode:(demo|live)$/, async ctx => {
         return;
     }
 
-    // Live — user already passed hasAccessLive at ui:trade level
+    // Live — requires ai_trading access (funded $30+ or token). Unfunded users get
+    // the lock here; Demo Mode above stays open to them (Issue 4).
+    if (!await hasAccessLive(ctx.from!.id, 'ai_trading')) {
+        wizardSessions.delete(chatId);
+        await sendAiTradingLock(ctx);
+        return;
+    }
     // Just verify they have a valid SSID before proceeding
     const user = getUser(ctx.from!.id);
     const hasValidSsid = user?.ssid && user.ssid_valid !== 0;
@@ -2150,13 +2156,10 @@ bot.action('ui:trade', async ctx => {
     await ctx.answerCbQuery();
     if (!await requireApproval(ctx)) return;
 
-    // AI Trading requires ai_trading access (funded $30+ or token). Admin bypasses.
-    // hasAccessLive refreshes the live balance if the cached access looks locked,
-    // so a user who funded after connecting isn't blocked by a stale DB value.
-    if (!await hasAccessLive(ctx.from!.id, 'ai_trading')) {
-        await sendAiTradingLock(ctx);
-        return;
-    }
+    // Connected users always reach the mode menu. Demo Mode is open to everyone
+    // (daily cap applies); Live is gated per-access inside the mode:live handler.
+    // This routes unfunded-but-connected users to Demo instead of a dead lock
+    // screen (Issue 4) — and the fix lives in src so merges can't revert it.
     const user = getUser(ctx.from!.id);
     const hasValidSsid = user?.ssid && user.ssid_valid !== 0;
     if (!hasValidSsid) {
@@ -2690,7 +2693,11 @@ async function sendAutoMenu(ctx: Context): Promise<void> {
         // No active session — show mode options
         const user = getUser(ctx.from!.id);
         const funded = user?.funded_balance_usd ?? 0;
-        const isFundedLive = funded >= PRODUCT_LIMITS.auto_trading.unlockBalance;
+        // Unlocked if funded above the threshold OR holding auto_trading access via
+        // token — otherwise token users wrongly saw "🔒 Requires $100+" (Issue 5).
+        const isFundedLive = funded >= PRODUCT_LIMITS.auto_trading.unlockBalance
+            || hasAccess(user?.access_level, 'auto_trading')
+            || ctx.from!.id === getAdminId();
         const demoMinutes = getProductUsage(ctx.from!.id, 'auto_trading').minutes;
         const demoCap = PRODUCT_LIMITS.auto_trading.dailyCap;
         const demoRemaining = Math.max(0, demoCap - demoMinutes);
@@ -6817,6 +6824,14 @@ recoverMissedTradeResults(bot).catch(err => {
     console.error('[RECOVERY] Failed to recover missed trades:', err);
 });
 // Auto Trading engine: inject the Telegram sender and resume any running sessions.
+// Route the SDK's WebSocket through the residential proxy pool when enabled —
+// for hosts (e.g. the Contabo VPS) partially blocked from IQ Option's CDN where
+// direct WS times out (Issue 6). Opt-in via env so rollout is operator-controlled.
+if (process.env.IQ_WS_USE_PROXY === '1' || process.env.IQ_WS_USE_PROXY === 'true') {
+    setWsProxyResolver(() => getProxyUrl() ?? undefined);
+    logger.info('bot', 'SDK WebSocket proxy enabled — routing WS through the proxy pool');
+}
+
 initAutoEngine({
     sendMessage: (chatId, text, extra) => bot.telegram.sendMessage(chatId, text, extra as never),
     editMessageText: (chatId, msgId, _inline, text, extra) =>

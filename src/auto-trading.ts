@@ -36,6 +36,9 @@ interface Notifier {
 
 let notifier: Notifier | undefined;
 const RECONNECT_BACKOFF_MS = [2000, 4000, 8000, 16000];
+// Pause a session after this many consecutive failed/timed-out trades so a
+// persistent OTC WebSocket issue can't retry-spam the user forever (Issue 1).
+const MAX_CONSECUTIVE_ERRORS = 3;
 
 // Privileged user IDs that get admin-grade analysis (200 candles, 6 indicators)
 // in the auto engine even in demo mode. Module-level so it isn't rebuilt per loop.
@@ -293,13 +296,24 @@ class AutoRunner {
 
     async start(ssid: string): Promise<void> {
         this.ssid = ssid;
+        logger.info('auto', `start() for ${this.chatId} (mode=${this.mode})`);
         try {
             await this.connect(ssid);
-        } catch {
+        } catch (err) {
+            logger.error('auto', `connect failed for ${this.chatId}: ${err instanceof Error ? err.message : err}`);
             setAutoSessionStatus(this.chatId, 'paused', 'connect_failed');
             await this.notify('🚀 Auto Trading could not connect to your account. Reconnect and resume.', true);
             engineUnregister(this.chatId);
             return;
+        }
+
+        // Validate martingale state: any mg_active on (re)start is orphaned — the
+        // in-flight trade died with the previous process — so clear it and start
+        // the sequence fresh instead of "resuming" a trade that no longer exists.
+        const s = getAutoSession(this.chatId);
+        if (s?.mg_active) {
+            logger.warn('auto', `clearing orphaned martingale state for ${this.chatId} (was amount ${s.mg_next_amount})`);
+            setAutoSessionMgState(this.chatId, false);
         }
 
         // Start demo timer if in demo mode
@@ -308,7 +322,15 @@ class AutoRunner {
         }
 
         await this.renderStatus();
-        void this.loop(ssid);
+        logger.info('auto', `launching loop for ${this.chatId}`);
+        // loop() guards itself, but catch here too so a launch-time throw is never
+        // swallowed silently (the cause of "running but no trades" — Issue 2).
+        this.loop(ssid).catch(err => {
+            logger.error('auto', `loop launch rejected for ${this.chatId}: ${err instanceof Error ? (err.stack ?? err.message) : err}`);
+            const cur = getAutoSession(this.chatId);
+            if (cur?.status === 'running') setAutoSessionStatus(this.chatId, 'paused', 'loop_launch_failed');
+            engineUnregister(this.chatId);
+        });
     }
 
     stop(): void {
@@ -320,6 +342,8 @@ class AutoRunner {
 
     private async loop(ssid: string): Promise<void> {
         this.ssid = ssid;
+        let consecutiveErrors = 0;
+        logger.info('auto', `loop started for ${this.chatId} (mode=${this.mode})`);
         try {
             while (!this.stopping) {
                 const s = getAutoSession(this.chatId);
@@ -451,16 +475,22 @@ class AutoRunner {
                     setAutoSessionMgState(this.chatId, false);
                     const msg = err instanceof Error ? err.message : String(err);
                     logger.warn('auto', `trade run failed for ${this.chatId}: ${msg}`);
-                    // Auth expiry OR dropped WebSocket → reconnect (fresh SSID if the
-                    // old one is dead) and retry the asset via the loop. Pause only if
-                    // reconnect fails outright (directive Fix 4).
-                    const isAuth = /auth|ssid|unauthor|401/i.test(msg);
-                    if (isAuth || await this.maybeNotifyWsError(msg)) {
-                        if (!(await this.reconnect(this.ssid))) {
-                            setAutoSessionStatus(this.chatId, 'paused', 'reconnect_failed');
-                            await this.notify('🚀 Auto Trading paused — lost connection to your account. Resume when ready.', true);
-                            break;
-                        }
+                    // Reconnect silently on auth/WebSocket errors — no per-error
+                    // "retrying" spam; the pause message below is the only notice.
+                    const isConnErr = /auth|ssid|unauthor|401|websocket|is closing|not open|timeout/i.test(msg);
+                    if (isConnErr && !(await this.reconnect(this.ssid))) {
+                        setAutoSessionStatus(this.chatId, 'paused', 'reconnect_failed');
+                        await this.notify('🚀 Auto Trading paused — lost connection to your account. Resume when ready.', true);
+                        break;
+                    }
+                    // Rotate off the failing asset and bound consecutive failures so a
+                    // persistent OTC timeout can't loop (and spam) forever (Issue 1).
+                    recordAutoSessionEvaluation(this.chatId, nextIdx);
+                    consecutiveErrors++;
+                    if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+                        setAutoSessionStatus(this.chatId, 'paused', 'repeated_errors');
+                        await this.notify('🚀 Auto Trading paused — repeated errors (likely a temporary connection issue). Tap Resume to try again.', true);
+                        break;
                     }
                     await new Promise(r => setTimeout(r, 3000));
                     continue;
@@ -469,11 +499,23 @@ class AutoRunner {
                 // Sequence complete — clear martingale state.
                 setAutoSessionMgState(this.chatId, false);
                 console.log(`[auto-trade] uid=${this.chatId} outcome=${outcome.status} totalPnl=${outcome.totalPnl} rounds=${outcome.rounds} mode=${this.mode}`);
-                recordAutoSessionTrade(this.chatId, nextIdx, outcome.totalPnl);
-                const s2 = getAutoSession(this.chatId);
-                console.log(`[auto-trade] uid=${this.chatId} AFTER record: sessionPnl=${s2?.pnl} trades=${s2?.trades_done}`);
                 const isError = outcome.status === 'ERROR' || outcome.status === 'TIMEOUT';
-                if (!isError) {
+                if (isError) {
+                    // A settled error/timeout: rotate to the next asset (don't count it
+                    // as a trade) and bound consecutive failures (Issue 1).
+                    recordAutoSessionEvaluation(this.chatId, nextIdx);
+                    consecutiveErrors++;
+                    logger.warn('auto', `trade ${outcome.status} for ${this.chatId} — consecutive=${consecutiveErrors}`);
+                    if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+                        setAutoSessionStatus(this.chatId, 'paused', 'repeated_timeouts');
+                        await this.notify('🚀 Auto Trading paused — trades kept timing out (likely a temporary connection issue). Tap Resume to try again.', true);
+                        break;
+                    }
+                } else {
+                    consecutiveErrors = 0;
+                    recordAutoSessionTrade(this.chatId, nextIdx, outcome.totalPnl);
+                    const s2 = getAutoSession(this.chatId);
+                    console.log(`[auto-trade] uid=${this.chatId} AFTER record: sessionPnl=${s2?.pnl} trades=${s2?.trades_done}`);
                     const emoji = outcome.status === 'WIN' ? '🟢' : outcome.status === 'TIE' ? '⚪' : '🔴';
                     const displayPnl = outcome.status === 'WIN' ? lastTradePnl : outcome.totalPnl;
                     const sign = displayPnl >= 0 ? '+' : '';
@@ -482,11 +524,16 @@ class AutoRunner {
 
                 await new Promise(r => setTimeout(r, msToNextCandle(s.timeframe)));
             }
+            logger.info('auto', `loop ended normally for ${this.chatId} (stopping=${this.stopping})`);
+        } catch (err) {
+            // An unexpected throw would otherwise leave the session 'running' with a
+            // dead runner (Issue 2). Log it loudly; the finally normalizes status.
+            logger.error('auto', `loop crashed for ${this.chatId}: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`);
         } finally {
             try { await this.sdk?.shutdown(); } catch { /* ignore */ }
             this.sdk = undefined;
             const s = getAutoSession(this.chatId);
-            if (s?.status === 'running') setAutoSessionStatus(this.chatId, 'stopped');
+            if (s?.status === 'running') setAutoSessionStatus(this.chatId, 'paused', 'loop_exited');
             await this.renderStatus();
             if (this.mode === 'demo') {
                 stopDemoTimer(this.chatId);
@@ -571,7 +618,11 @@ export const autoEngine = {
             const mode = getAutoSessionMode(s.telegram_id);
             const runner = new AutoRunner(s, mode);
             runners.set(s.telegram_id, runner);
-            void runner.start(ssid);
+            logger.info('auto', `restoring session for ${s.telegram_id} (mode=${mode})`);
+            runner.start(ssid).catch(err => {
+                logger.error('auto', `restore start failed for ${s.telegram_id}: ${err instanceof Error ? err.message : err}`);
+                engineUnregister(s.telegram_id);
+            });
         }
         if (sessions.length) logger.info('auto', `restored ${sessions.length} auto-trading session(s)`);
     },

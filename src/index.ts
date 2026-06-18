@@ -1,5 +1,15 @@
 import WebSocket from "isomorphic-ws"
 
+// Optional WebSocket proxy resolver. When set (server-side), the SDK routes its
+// WebSocket connection through the returned proxy URL — needed where the host is
+// partially blocked from IQ Option's CDN and direct WS times out. Returns
+// undefined to connect directly. The agent module is loaded lazily (Node only)
+// so browser bundles are unaffected.
+let wsProxyResolver: (() => string | undefined) | undefined;
+export function setWsProxyResolver(fn: (() => string | undefined) | undefined): void {
+    wsProxyResolver = fn;
+}
+
 /**
  * This is the entry point of this SDK for your application. Use it to implement the business logic of your application.
  */
@@ -7808,6 +7818,22 @@ class WsApiClient {
             return
         }
 
+        // Resolve an optional proxy agent (Node only) before opening the socket, so
+        // hosts blocked from the CDN can tunnel WS traffic through a proxy.
+        let proxyAgent: unknown;
+        if (!this.isBrowser && wsProxyResolver) {
+            const proxyUrl = wsProxyResolver();
+            if (proxyUrl) {
+                try {
+                    const mod = await import('https-proxy-agent');
+                    proxyAgent = new mod.HttpsProxyAgent(proxyUrl);
+                } catch (e) {
+                    // Proxy module missing/failed — fall back to a direct connection.
+                    console.warn('[sdk] WS proxy agent unavailable, connecting directly:', e instanceof Error ? e.message : e);
+                }
+            }
+        }
+
         return new Promise((resolve, reject) => {
             try {
                 if (!this.isBrowser) {
@@ -7815,7 +7841,8 @@ class WsApiClient {
                         headers: {
                             'cookie': `platform=${this.platformId}`,
                             'user-agent': 'quadcode-client-sdk-js/1.3.21'
-                        }
+                        },
+                        ...(proxyAgent ? { agent: proxyAgent as never } : {}),
                     });
                 } else {
                     document.cookie = `platform=${this.platformId};`;
