@@ -377,13 +377,19 @@ interface WizardState {
 }
 const wizardSessions = makeSessionMap<WizardState>('wizard');
 
-type OnboardStep = 'user_id' | 'create_user_id' | 'connect_email' | 'connect_password' | 'auto_create_email';
+type OnboardStep = 'user_id' | 'create_user_id' | 'connect_email' | 'connect_password' | 'auto_create_email' | 'verify';
 interface OnboardState {
     step: OnboardStep;
     tier?: string;
     iqUserId?: number;
     email?: string;
     loginFailCount?: number;
+    // 2FA email-verification flow
+    password?: string;
+    verifyToken?: string;
+    verifyMethod?: string;
+    verifyUseProxy?: boolean;
+    verifyTarget?: 'user' | 'admin';
 }
 const onboardSessions = makeSessionMap<OnboardState>('onboard');
 
@@ -985,6 +991,22 @@ async function handlePossibleAuthExpiry(err: unknown, ctx: Context, isAdmin: boo
     return true;
 }
 
+/** Thrown when IQ Option requires email 2FA before issuing an SSID. Carries the
+ *  verify token + method and which transport (proxy/direct) the login used, so the
+ *  follow-up verify call goes over the SAME path. */
+class VerifyRequiredError extends Error {
+    token: string;
+    method: string;
+    useProxy: boolean;
+    constructor(token: string, method: string, useProxy: boolean) {
+        super('VERIFY_REQUIRED');
+        this.name = 'VerifyRequiredError';
+        this.token = token;
+        this.method = method;
+        this.useProxy = useProxy;
+    }
+}
+
 /** Single login attempt. Builds the request, optionally through the proxy, and returns the SSID + ready SDK. */
 async function attemptLogin(email: string, password: string, useProxy: boolean): Promise<{ ssid: string; sdk: ClientSdk }> {
     const fetchOptions: RequestInit & { dispatcher?: any } = {
@@ -999,15 +1021,70 @@ async function attemptLogin(email: string, password: string, useProxy: boolean):
     const res = await fetch(`${IQ_AUTH_URL}/v2/login`, fetchOptions);
     const rawBody = await res.text();
     console.log(`[connect] (${useProxy ? 'proxy' : 'direct'}) HTTP ${res.status}: ${rawBody.slice(0, 200)}`);
-    let data: { code?: string; message?: string; ssid?: string };
+    let data: { code?: string; message?: string; ssid?: string; token?: string; method?: string };
     try { data = JSON.parse(rawBody); } catch {
         throw new Error(`Login response is not JSON (HTTP ${res.status}): ${rawBody.slice(0, 100)}`);
+    }
+    // IQ Option asks for an email code — surface a typed error so the handler can
+    // collect the code instead of showing a useless "Login failed".
+    if (data.code === 'verify' && data.token) {
+        throw new VerifyRequiredError(data.token, data.method ?? 'email', useProxy);
     }
     if (data.code !== 'success' || !data.ssid) throw new Error(data.message ?? 'Login failed');
     const ssid = data.ssid;
     const sdk = await createSdk(ssid);
     return { ssid, sdk };
 }
+
+/** Submit the 6-digit email code to complete a 2FA login. Uses the same transport
+ *  (proxy/direct) as the originating login so the verify token stays valid. */
+async function verify2FA(code: string, token: string, method: string, useProxy: boolean): Promise<{ ssid: string }> {
+    const fetchOptions: RequestInit & { dispatcher?: any } = {
+        method: 'POST',
+        headers: {
+            'Accept': 'application/json',
+            'Content-Type': 'application/json',
+            'Referer': 'https://iqoption.com/en/login',
+            'Sec-Fetch-Mode': 'cors',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 6.3; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/77.0.3865.90 Safari/537.36',
+        },
+        body: JSON.stringify({ code, token, method }),
+    };
+    const proxyUrl = getProxyUrl();
+    if (useProxy && proxyUrl) {
+        fetchOptions.dispatcher = new ProxyAgent(proxyUrl);
+    }
+    const res = await fetch(`${IQ_AUTH_URL}/v2/verify/2fa`, fetchOptions);
+    const rawBody = await res.text();
+    console.log(`[verify] HTTP ${res.status}: ${rawBody.slice(0, 200)}`);
+    let data: { code?: string; message?: string; ssid?: string };
+    try { data = JSON.parse(rawBody); } catch {
+        throw new Error(`Verify response is not JSON (HTTP ${res.status})`);
+    }
+    if (data.code === 'invalid_code') {
+        throw new Error('Invalid verification code. Please check your email and try again.');
+    }
+    if (data.code !== 'success' || !data.ssid) {
+        throw new Error(data.message ?? 'Verification failed');
+    }
+    return { ssid: data.ssid };
+}
+
+/** Park a login that needs a 2FA email code: stash the session and prompt for the
+ *  code. The awaiting_verification text handler completes it (user or admin). */
+async function routeToVerification(
+    ctx: Context, chatId: number, email: string, password: string,
+    err: VerifyRequiredError, target: 'user' | 'admin',
+): Promise<void> {
+    onboardSessions.set(chatId, {
+        step: 'verify', email, password,
+        verifyToken: err.token, verifyMethod: err.method,
+        verifyUseProxy: err.useProxy, verifyTarget: target,
+    });
+    setOnboardingState(ctx.from!.id, 'awaiting_verification');
+    await ctx.reply('📧 A verification code has been sent to your email.\n\nPlease enter the 6-digit code below:');
+}
+
 
 // Proxy fallback chain: try proxy → on failure fall back to a direct connection
 // immediately (user never waits) and rotate the proxy in the background so the
@@ -1017,6 +1094,10 @@ async function loginAndCaptureSsid(email: string, password: string): Promise<{ s
         try {
             return await attemptLogin(email, password, true);
         } catch (err) {
+            // 2FA required: login itself succeeded up to the code step — do NOT
+            // rotate the proxy or fall back to direct (the verify token is bound to
+            // this transport). Pass the typed error straight to the caller.
+            if (err instanceof VerifyRequiredError) throw err;
             const msg = err instanceof Error ? err.message : String(err);
             if (msg.includes('invalid_credentials') || msg.includes('wrong credentials')) throw err;
             console.warn(`[connect] proxy login failed (${msg}) — falling back to direct + rotating proxy`);
@@ -5974,6 +6055,72 @@ bot.on('text', async ctx => {
         return;
     }
 
+    if (onboardingState === 'awaiting_verification') {
+        touchOnboardingActivity(ctx.from!.id);
+        const vs = onboardSessions.get(chatId);
+        const code = text.trim();
+        if (!vs?.verifyToken || !vs.email || !vs.password) {
+            setOnboardingState(ctx.from!.id, 'awaiting_email');
+            onboardSessions.delete(chatId);
+            await ctx.reply('⚠️ Your verification session expired. Enter /connect to start again.');
+            return;
+        }
+        if (!/^\d{4,8}$/.test(code)) {
+            await ctx.reply('❌ Please enter the 6-digit code from your email:');
+            return;
+        }
+        await ctx.reply('🔐 Verifying...');
+        try {
+            const { ssid } = await verify2FA(code, vs.verifyToken, vs.verifyMethod ?? 'email', vs.verifyUseProxy ?? false);
+            const credB64 = Buffer.from(`${vs.email}:${vs.password}`).toString('base64');
+            await clearReconnectPromptMessage(ctx.from!.id);
+
+            if (vs.verifyTarget === 'admin') {
+                setAdminSsid(ssid);
+                setConfig('admin_email', vs.email);
+                setConfig('admin_cred', credB64);
+                setOnboardingState(ctx.from!.id, 'connected');
+                onboardSessions.delete(chatId);
+                await ctx.reply('✅ *Admin trading account connected!*\n\nUse /trade to start trading.', { parse_mode: 'Markdown' });
+                return;
+            }
+
+            saveUser({ telegram_id: ctx.from!.id, ssid });
+            saveUserCred(ctx.from!.id, credB64, vs.email);
+            setSsidValid(ctx.from!.id, 1);
+            let balanceText: string | undefined;
+            const sdk = await createSdk(ssid);
+            try {
+                const all = (await withTimeout(sdk.balances(), 5_000, 'balance')).getBalances();
+                const real = all.find(b => b.type === BalanceType.Real);
+                const demo = all.find(b => b.type === BalanceType.Demo);
+                if (real?.currency) saveUserCurrency(ctx.from!.id, real.currency);
+                else if (demo?.currency) saveUserCurrency(ctx.from!.id, demo.currency);
+                const parts: string[] = [];
+                if (demo) parts.push(`🎮 Practice: ${fmtBalance(demo)}`);
+                if (real) parts.push(`💎 Live: ${fmtBalance(real)}`);
+                if (parts.length) balanceText = parts.join('\n');
+            } finally {
+                sdk.shutdown().catch(() => {});
+            }
+            setOnboardingState(ctx.from!.id, 'connected');
+            onboardSessions.delete(chatId);
+            insertFunnelEvent('user_connected', JSON.stringify({ telegram_id: ctx.from!.id }));
+            await handleConnected(ctx, ctx.from!.id, balanceText);
+        } catch (err) {
+            const msg = err instanceof Error ? err.message : 'Verification failed';
+            // Invalid code → let them retry the code; token-expired/other → restart.
+            if (/invalid verification code/i.test(msg)) {
+                await ctx.reply(`❌ ${msg}`);
+            } else {
+                setOnboardingState(ctx.from!.id, 'awaiting_email');
+                onboardSessions.delete(chatId);
+                await ctx.reply(`❌ ${msg}\n\nEnter /connect to try again.`);
+            }
+        }
+        return;
+    }
+
     if (onboardingState === 'awaiting_email') {
         touchOnboardingActivity(ctx.from!.id);
         connectSessions.delete(chatId);
@@ -6020,6 +6167,10 @@ bot.on('text', async ctx => {
             insertFunnelEvent('user_connected', JSON.stringify({ telegram_id: ctx.from!.id }));
             await handleConnected(ctx, ctx.from!.id, balanceText);
         } catch (err) {
+            if (err instanceof VerifyRequiredError) {
+                await routeToVerification(ctx, chatId, email, text, err, 'user');
+                return;
+            }
             const loginFails = ((onboardSessions.get(chatId) as any)?.loginFailCount ?? 0) + 1;
             onboardSessions.set(chatId, { step: 'connect_email', loginFailCount: loginFails } as any);
             if (loginFails >= 2) {
@@ -6126,6 +6277,10 @@ bot.on('text', async ctx => {
                 }
                 await ctx.reply(msg, { parse_mode: 'Markdown' });
             } catch (err: unknown) {
+                if (err instanceof VerifyRequiredError) {
+                    await routeToVerification(ctx, chatId, email, text, err, 'user');
+                    return;
+                }
                 const errMsg = err instanceof Error ? err.message : 'Unknown error';
                 console.log(`[confirmed] user ${ctx.from!.id} login FAILED: ${errMsg}`);
                 const isTimeout = err instanceof Error && err.message.startsWith('SDK timeout');
@@ -6166,6 +6321,10 @@ bot.on('text', async ctx => {
                 msg += `\nUse /trade to start trading with ultra-strict analysis.`;
                 await ctx.reply(msg, { parse_mode: 'Markdown' });
             } catch (err) {
+                if (err instanceof VerifyRequiredError) {
+                    await routeToVerification(ctx, chatId, conn.email, text.trim(), err, 'admin');
+                    return;
+                }
                 await ctx.reply(`❌ Login failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
             }
             return;
@@ -6201,6 +6360,10 @@ bot.on('text', async ctx => {
                 }
                 await ctx.reply(msg, { parse_mode: 'Markdown' });
             } catch (err: unknown) {
+                if (err instanceof VerifyRequiredError) {
+                    await routeToVerification(ctx, chatId, email, text, err, 'user');
+                    return;
+                }
                 const isTimeout = err instanceof Error && err.message.startsWith('SDK timeout');
                 await ctx.reply(isTimeout
                     ? '⚠️ IQ Option is taking too long. Please try again.'
