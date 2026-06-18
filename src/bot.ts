@@ -384,10 +384,11 @@ interface OnboardState {
     iqUserId?: number;
     email?: string;
     loginFailCount?: number;
-    // 2FA email-verification flow
+    // 2FA verification flow (email / SMS / push)
     password?: string;
     verifyToken?: string;
     verifyMethod?: string;
+    verifyMethods?: string[];
     verifyUseProxy?: boolean;
     verifyTarget?: 'user' | 'admin';
 }
@@ -997,13 +998,26 @@ async function handlePossibleAuthExpiry(err: unknown, ctx: Context, isAdmin: boo
 class VerifyRequiredError extends Error {
     token: string;
     method: string;
+    availableMethods: string[];
     useProxy: boolean;
-    constructor(token: string, method: string, useProxy: boolean) {
+    constructor(token: string, method: string, useProxy: boolean, availableMethods: string[] = []) {
         super('VERIFY_REQUIRED');
         this.name = 'VerifyRequiredError';
         this.token = token;
         this.method = method;
+        this.availableMethods = availableMethods;
         this.useProxy = useProxy;
+    }
+}
+
+/** Human description of where IQ Option sent the 2FA code, so the prompt matches
+ *  reality (email vs SMS vs push) instead of always saying "email". */
+function verifyMethodLabel(method: string): string {
+    switch ((method || '').toLowerCase()) {
+        case 'sms':   return '📱 A verification code has been sent to your phone (SMS).';
+        case 'push':  return '🔔 Approve the login from the IQ Option push notification, then enter the code shown (if any).';
+        case 'email': return '📧 A verification code has been sent to your email.';
+        default:      return `📧 A verification code has been sent via ${method || 'email'}.`;
     }
 }
 
@@ -1021,14 +1035,15 @@ async function attemptLogin(email: string, password: string, useProxy: boolean):
     const res = await fetch(`${IQ_AUTH_URL}/v2/login`, fetchOptions);
     const rawBody = await res.text();
     console.log(`[connect] (${useProxy ? 'proxy' : 'direct'}) HTTP ${res.status}: ${rawBody.slice(0, 200)}`);
-    let data: { code?: string; message?: string; ssid?: string; token?: string; method?: string };
+    let data: { code?: string; message?: string; ssid?: string; token?: string; method?: string; available_methods?: string[] };
     try { data = JSON.parse(rawBody); } catch {
         throw new Error(`Login response is not JSON (HTTP ${res.status}): ${rawBody.slice(0, 100)}`);
     }
-    // IQ Option asks for an email code — surface a typed error so the handler can
-    // collect the code instead of showing a useless "Login failed".
+    // IQ Option asks for a 2FA code — surface a typed error carrying the actual
+    // delivery method and the available methods so the prompt matches where the
+    // code was really sent (email/SMS/push), not a hardcoded "email".
     if (data.code === 'verify' && data.token) {
-        throw new VerifyRequiredError(data.token, data.method ?? 'email', useProxy);
+        throw new VerifyRequiredError(data.token, data.method ?? 'email', useProxy, data.available_methods ?? []);
     }
     if (data.code !== 'success' || !data.ssid) throw new Error(data.message ?? 'Login failed');
     const ssid = data.ssid;
@@ -1070,19 +1085,24 @@ async function verify2FA(code: string, token: string, method: string, useProxy: 
     return { ssid: data.ssid };
 }
 
-/** Park a login that needs a 2FA email code: stash the session and prompt for the
- *  code. The awaiting_verification text handler completes it (user or admin). */
+/** Park a login that needs a 2FA code: stash the session and prompt for the code,
+ *  telling the user the ACTUAL delivery method (email/SMS/push). A "Resend code"
+ *  button re-runs the login to trigger a fresh code. The awaiting_verification
+ *  text handler completes it (user or admin). */
 async function routeToVerification(
     ctx: Context, chatId: number, email: string, password: string,
     err: VerifyRequiredError, target: 'user' | 'admin',
 ): Promise<void> {
     onboardSessions.set(chatId, {
         step: 'verify', email, password,
-        verifyToken: err.token, verifyMethod: err.method,
+        verifyToken: err.token, verifyMethod: err.method, verifyMethods: err.availableMethods,
         verifyUseProxy: err.useProxy, verifyTarget: target,
     });
     setOnboardingState(ctx.from!.id, 'awaiting_verification');
-    await ctx.reply('📧 A verification code has been sent to your email.\n\nPlease enter the 6-digit code below:');
+    await ctx.reply(
+        `${verifyMethodLabel(err.method)}\n\nPlease enter the 6-digit code below:`,
+        { reply_markup: { inline_keyboard: [[{ text: '🔄 Resend code', callback_data: 'verify:resend' }]] } },
+    );
 }
 
 
@@ -1662,7 +1682,7 @@ bot.action('onboard:need_account',  async ctx => { await ctx.answerCbQuery().cat
 // ─── Trade wizard — mode ──────────────────────────────────────────────────────
 
 bot.action(/^mode:(demo|live)$/, async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     if (ctx.from!.id === getAdminId()) touchAdminActivity();
     const chatId = ctx.chat!.id;
     const state = wizardSessions.get(chatId);
@@ -1723,8 +1743,8 @@ bot.action(/^mode:(demo|live)$/, async ctx => {
 bot.action(/^cur:(.+)$/, async ctx => {
     const chatId = ctx.chat!.id;
     const state = wizardSessions.get(chatId);
-    if (!state || state.step !== 'currency') { await ctx.answerCbQuery('Session expired — start over.'); return; }
-    await ctx.answerCbQuery();
+    if (!state || state.step !== 'currency') { await ctx.answerCbQuery('Session expired — start over.').catch(() => {}); return; }
+    await ctx.answerCbQuery().catch(() => {});
     if (ctx.from!.id === getAdminId()) touchAdminActivity();
     state.currency = ctx.match[1];
     state.step = 'amount';
@@ -1738,7 +1758,7 @@ bot.action(/^cur:(.+)$/, async ctx => {
 // ─── Trade wizard — amount ────────────────────────────────────────────────────
 
 bot.action('wizard:cancel', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     const state = wizardSessions.get(ctx.chat!.id);
     if (state?.lastImageMsgId) {
         try { await ctx.telegram.deleteMessage(ctx.chat!.id, state.lastImageMsgId); } catch {}
@@ -1750,8 +1770,8 @@ bot.action('wizard:cancel', async ctx => {
 bot.action(/^amt:(.+)$/, async ctx => {
     const chatId = ctx.chat!.id;
     const state = wizardSessions.get(chatId);
-    if (!state || state.step !== 'amount') { await ctx.answerCbQuery('Session expired — start over.'); return; }
-    await ctx.answerCbQuery();
+    if (!state || state.step !== 'amount') { await ctx.answerCbQuery('Session expired — start over.').catch(() => {}); return; }
+    await ctx.answerCbQuery().catch(() => {});
     if (ctx.from!.id === getAdminId()) touchAdminActivity();
 
     const val = ctx.match[1];
@@ -1784,8 +1804,8 @@ bot.action(/^amt:(.+)$/, async ctx => {
 bot.action(/^tf:(\d+)$/, async ctx => {
     const chatId = ctx.chat!.id;
     const state = wizardSessions.get(chatId);
-    if (!state || state.step !== 'timeframe') { await ctx.answerCbQuery('Session expired — start over.'); return; }
-    await ctx.answerCbQuery(); // stop spinner immediately before slow image upload
+    if (!state || state.step !== 'timeframe') { await ctx.answerCbQuery('Session expired — start over.').catch(() => {}); return; }
+    await ctx.answerCbQuery().catch(() => {}); // stop spinner immediately before slow image upload
     if (ctx.from!.id === getAdminId()) touchAdminActivity();
     state.timeframe = parseInt(ctx.match[1], 10);
     state.step = 'pair';
@@ -1810,8 +1830,8 @@ bot.action(/^tf:(\d+)$/, async ctx => {
 bot.action(/^page:(\d+)$/, async ctx => {
     const chatId = ctx.chat!.id;
     const state = wizardSessions.get(chatId);
-    if (!state || state.step !== 'pair') { await ctx.answerCbQuery('Session expired — start over.'); return; }
-    await ctx.answerCbQuery();
+    if (!state || state.step !== 'pair') { await ctx.answerCbQuery('Session expired — start over.').catch(() => {}); return; }
+    await ctx.answerCbQuery().catch(() => {});
     try { await ctx.editMessageReplyMarkup(pairKeyboard(parseInt(ctx.match[1], 10))); } catch {}
 });
 
@@ -1830,8 +1850,8 @@ async function sendLockedFeaturePrompt(ctx: Context): Promise<void> {
     );
 }
 
-bot.action(/^upgrade:tf:(\d+)$/, async ctx => { await ctx.answerCbQuery(); await sendLockedFeaturePrompt(ctx); });
-bot.action(/^upgrade:pair:(.+)$/, async ctx => { await ctx.answerCbQuery(); await sendLockedFeaturePrompt(ctx); });
+bot.action(/^upgrade:tf:(\d+)$/, async ctx => { await ctx.answerCbQuery().catch(() => {}); await sendLockedFeaturePrompt(ctx); });
+bot.action(/^upgrade:pair:(.+)$/, async ctx => { await ctx.answerCbQuery().catch(() => {}); await sendLockedFeaturePrompt(ctx); });
 
 // ─── Trade wizard — pair selected → analyze → execute ────────────────────────
 
@@ -1847,8 +1867,8 @@ function galeKeyboard() {
 bot.action(/^pair:(.+)$/, async ctx => {
     const chatId = ctx.chat!.id;
     const state = wizardSessions.get(chatId);
-    if (!state || state.step !== 'pair') { await ctx.answerCbQuery('Session expired — start over.'); return; }
-    await ctx.answerCbQuery();
+    if (!state || state.step !== 'pair') { await ctx.answerCbQuery('Session expired — start over.').catch(() => {}); return; }
+    await ctx.answerCbQuery().catch(() => {});
     if (ctx.from!.id === getAdminId()) touchAdminActivity();
 
     state.pair = ctx.match[1];
@@ -1875,8 +1895,8 @@ bot.action(/^pair:(.+)$/, async ctx => {
 bot.action(/^gale:(\d+)$/, async ctx => {
     const chatId = ctx.chat!.id;
     const state = wizardSessions.get(chatId);
-    if (!state || state.step !== 'gale') { await ctx.answerCbQuery('Session expired — start over.'); return; }
-    await ctx.answerCbQuery();
+    if (!state || state.step !== 'gale') { await ctx.answerCbQuery('Session expired — start over.').catch(() => {}); return; }
+    await ctx.answerCbQuery().catch(() => {});
     if (ctx.from!.id === getAdminId()) touchAdminActivity();
 
     state.gale = parseInt(ctx.match[1], 10);
@@ -1896,7 +1916,7 @@ bot.action(/^gale:(\d+)$/, async ctx => {
         const { used } = getProductUsage(ctx.from!.id, 'ai_trading');
         const cap = PRODUCT_LIMITS.ai_trading.dailyCap;
         if (used >= cap) {
-            await ctx.answerCbQuery(`🎯 Demo limit reached (${cap} trades/day). Fund $${PRODUCT_LIMITS.ai_trading.unlockBalance}+ to go live or wait until tomorrow.`, { show_alert: true });
+            await ctx.answerCbQuery(`🎯 Demo limit reached (${cap} trades/day). Fund $${PRODUCT_LIMITS.ai_trading.unlockBalance}+ to go live or wait until tomorrow.`, { show_alert: true }).catch(() => {});
             await ctx.reply(
                 `🎯 You've used all ${cap} demo trades for today.\n\n` +
                 `Fund $${PRODUCT_LIMITS.ai_trading.unlockBalance}+ to unlock unlimited live trading 👇`,
@@ -2114,7 +2134,7 @@ bot.action(/^gale:(\d+)$/, async ctx => {
 // ─── Demo upsell ──────────────────────────────────────────────────────────────
 
 bot.action('upsell:live', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     const chatId = ctx.chat!.id;
     const state: WizardState = { step: 'currency', mode: 'live' };
     wizardSessions.set(chatId, state);
@@ -2122,7 +2142,7 @@ bot.action('upsell:live', async ctx => {
 });
 
 bot.action('upsell:demo', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     const chatId = ctx.chat!.id;
     const state: WizardState = { step: 'currency', mode: 'demo' };
     wizardSessions.set(chatId, state);
@@ -2131,17 +2151,48 @@ bot.action('upsell:demo', async ctx => {
 
 // ─── User menu actions ────────────────────────────────────────────────────────
 
-bot.action('ui:start', async ctx => { await ctx.answerCbQuery(); await sendStartMenu(ctx); });
+bot.action('ui:start', async ctx => { await ctx.answerCbQuery().catch(() => {}); await sendStartMenu(ctx); });
+
+// Resend a 2FA code by re-running the login — IQ Option issues a fresh code (via
+// whichever method it chooses) and a new token, which we swap into the session.
+bot.action('verify:resend', async ctx => {
+    await ctx.answerCbQuery('Resending…').catch(() => {});
+    const chatId = ctx.chat!.id;
+    const vs = onboardSessions.get(chatId);
+    if (!vs?.email || !vs.password) {
+        await ctx.reply('⚠️ Your verification session expired. Tap /connect to start again.');
+        return;
+    }
+    try {
+        await attemptLogin(vs.email, vs.password, vs.verifyUseProxy ?? false);
+        // Login succeeded without a code this time — unusual, but guide them onward.
+        await ctx.reply('✅ No code needed anymore. Tap /start to continue.');
+    } catch (err) {
+        if (err instanceof VerifyRequiredError) {
+            onboardSessions.set(chatId, {
+                ...vs,
+                verifyToken: err.token, verifyMethod: err.method,
+                verifyMethods: err.availableMethods, verifyUseProxy: err.useProxy,
+            });
+            await ctx.reply(
+                `${verifyMethodLabel(err.method)}\n\nEnter the new 6-digit code below:`,
+                { reply_markup: { inline_keyboard: [[{ text: '🔄 Resend code', callback_data: 'verify:resend' }]] } },
+            );
+        } else {
+            await ctx.reply(`❌ Couldn't resend the code: ${err instanceof Error ? err.message : 'error'}\n\nTap /connect to try again.`);
+        }
+    }
+});
 
 bot.action('ui:connect', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     connectSessions.set(ctx.chat!.id, { step: 'email' });
     setOnboardingState(ctx.from!.id, 'awaiting_email');
     await ctx.reply('📧 Enter your IQ Option email:');
 });
 
 bot.action('ui:trade_menu', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     await ctx.reply('*Choose your trading mode:* ⚡', {
         parse_mode: 'Markdown',
         reply_markup: { inline_keyboard: [
@@ -2153,7 +2204,7 @@ bot.action('ui:trade_menu', async ctx => {
 });
 
 bot.action('ui:trade', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     if (!await requireApproval(ctx)) return;
 
     // Connected users always reach the mode menu. Demo Mode is open to everyone
@@ -2209,8 +2260,8 @@ async function sendAutoTradingLock(ctx: Context): Promise<void> {
     );
 }
 
-bot.action('lock:ai_trading', async ctx => { await ctx.answerCbQuery(); await sendAiTradingLock(ctx); });
-bot.action('lock:auto_trading', async ctx => { await ctx.answerCbQuery(); await sendAutoTradingLock(ctx); });
+bot.action('lock:ai_trading', async ctx => { await ctx.answerCbQuery().catch(() => {}); await sendAiTradingLock(ctx); });
+bot.action('lock:auto_trading', async ctx => { await ctx.answerCbQuery().catch(() => {}); await sendAutoTradingLock(ctx); });
 
 // ─── 10x Yacht Club (gated by a live $50 funded balance) ───────────────────────
 
@@ -2227,7 +2278,7 @@ function yachtInfo(closing: string, buttons: any[][]): { text: string; reply_mar
 }
 
 bot.action('ui:yacht', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     const uid = ctx.from!.id;
     const name = ctx.from?.first_name ?? 'Trader';
 
@@ -2307,7 +2358,7 @@ async function editSignalCard(
 }
 
 bot.action('ui:signals', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     if (!await requireApproval(ctx)) return;
 
     const uid = ctx.from!.id;
@@ -2351,8 +2402,8 @@ bot.action('ui:signals', async ctx => {
 bot.action(/^spair:(.+)$/, async ctx => {
     const chatId = ctx.chat!.id;
     const state = signalWizSessions.get(chatId);
-    if (!state) { await ctx.answerCbQuery('Start from the menu first.'); return; }
-    await ctx.answerCbQuery();
+    if (!state) { await ctx.answerCbQuery('Start from the menu first.').catch(() => {}); return; }
+    await ctx.answerCbQuery().catch(() => {});
     state.pair = ctx.match[1];
     try {
         await ctx.editMessageText(
@@ -2364,18 +2415,18 @@ bot.action(/^spair:(.+)$/, async ctx => {
 
 bot.action(/^spage:(\d+)$/, async ctx => {
     const state = signalWizSessions.get(ctx.chat!.id);
-    if (!state) { await ctx.answerCbQuery('Start from the menu first.'); return; }
-    await ctx.answerCbQuery();
+    if (!state) { await ctx.answerCbQuery('Start from the menu first.').catch(() => {}); return; }
+    await ctx.answerCbQuery().catch(() => {});
     try { await ctx.editMessageReplyMarkup(pairKeyboard(parseInt(ctx.match[1], 10))); } catch {}
 });
 
 bot.action(/^stf:(\d+)$/, async ctx => {
     const chatId = ctx.chat!.id;
     const uid = ctx.from!.id;
-    if (signalBusy.has(uid)) { await ctx.answerCbQuery('⏳ Still processing your last signal…'); return; }
+    if (signalBusy.has(uid)) { await ctx.answerCbQuery('⏳ Still processing your last signal…').catch(() => {}); return; }
     const state = signalWizSessions.get(chatId);
-    if (!state || !state.pair) { await ctx.answerCbQuery('Start from the menu first.'); return; }
-    await ctx.answerCbQuery();
+    if (!state || !state.pair) { await ctx.answerCbQuery('Start from the menu first.').catch(() => {}); return; }
+    await ctx.answerCbQuery().catch(() => {});
 
     const user = getUser(uid);
     const pair = state.pair;
@@ -2585,7 +2636,7 @@ bot.action(/^stf:(\d+)$/, async ctx => {
 });
 
 bot.action('signals:cancel', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     signalWizSessions.delete(ctx.chat!.id);
     try { await ctx.editMessageText('❌ Signal cancelled.'); } catch {}
 });
@@ -2745,14 +2796,14 @@ function canAutoDemo(ctx: Context): boolean {
 }
 
 bot.action('ui:auto', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     if (!await requireApproval(ctx)) return;
     if (!await hasAccessLive(ctx.from!.id, 'auto_trading')) { await sendAutoTradingLock(ctx); return; }
     await sendAutoMenu(ctx);
 });
 
 bot.action('auto:start:demo', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     if (!canAutoDemo(ctx)) {
         await ctx.reply(
             `⏰ You've used all ${PRODUCT_LIMITS.auto_trading.dailyCap} minutes of demo Auto Trading today.\n\nFund $${PRODUCT_LIMITS.auto_trading.unlockBalance}+ for unlimited live trading.`,
@@ -2776,7 +2827,7 @@ bot.action('auto:start:demo', async ctx => {
 });
 
 bot.action('auto:start:live', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     // Live-balance gate (refreshes from the SDK if the cached access looks locked),
     // so a user who funded after connecting isn't blocked by a stale DB value.
     if (!await hasAccessLive(ctx.from!.id, 'auto_trading')) {
@@ -2797,13 +2848,13 @@ bot.action('auto:start:live', async ctx => {
 });
 
 bot.action('acancel', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     autoWizSessions.delete(ctx.chat!.id);
     try { await ctx.editMessageText('❌ Auto Trading setup cancelled.'); } catch {}
 });
 
 bot.action(/^acur:(.+)$/, async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     const st = autoWizSessions.get(ctx.chat!.id);
     if (!st || st.step !== 'currency') { await ctx.answerCbQuery('Session expired — start over.').catch(() => {}); return; }
     st.currency = ctx.match[1];
@@ -2813,7 +2864,7 @@ bot.action(/^acur:(.+)$/, async ctx => {
 });
 
 bot.action(/^aamt:(\d+)$/, async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     const st = autoWizSessions.get(ctx.chat!.id);
     if (!st || st.step !== 'amount') { await ctx.answerCbQuery('Session expired — start over.').catch(() => {}); return; }
     st.amount = parseInt(ctx.match[1], 10);
@@ -2821,7 +2872,7 @@ bot.action(/^aamt:(\d+)$/, async ctx => {
 });
 
 bot.action('aamt:custom', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     const st = autoWizSessions.get(ctx.chat!.id);
     if (!st || st.step !== 'amount') { await ctx.answerCbQuery('Session expired — start over.').catch(() => {}); return; }
     st.step = 'custom_amount';
@@ -2847,7 +2898,7 @@ async function advanceToAssetsMessage(ctx: Context, st: AutoWizState) {
 }
 
 bot.action(/^aasset:(.+)$/, async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     const st = autoWizSessions.get(ctx.chat!.id);
     if (!st || st.step !== 'assets') { await ctx.answerCbQuery('Session expired — start over.').catch(() => {}); return; }
     const pair = ctx.match[1];
@@ -2862,14 +2913,14 @@ bot.action('aassetdone', async ctx => {
     const st = autoWizSessions.get(ctx.chat!.id);
     if (!st || st.step !== 'assets') { await ctx.answerCbQuery('Session expired — start over.').catch(() => {}); return; }
     if (st.assets.length !== 3) { await ctx.answerCbQuery('Pick exactly 3 assets.').catch(() => {}); return; }
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     st.step = 'timeframe';
     autoWizSessions.set(ctx.chat!.id, st);
     await ctx.editMessageText('⏱ Select timeframe:', { reply_markup: autoTimeframeKeyboard() });
 });
 
 bot.action(/^atf:(\d+)$/, async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     const st = autoWizSessions.get(ctx.chat!.id);
     if (!st || st.step !== 'timeframe') { await ctx.answerCbQuery('Session expired — start over.').catch(() => {}); return; }
     st.timeframe = parseInt(ctx.match[1], 10);
@@ -2879,7 +2930,7 @@ bot.action(/^atf:(\d+)$/, async ctx => {
 });
 
 bot.action(/^agale:(\d+)$/, async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     const st = autoWizSessions.get(ctx.chat!.id);
     if (!st || st.step !== 'gale') { await ctx.answerCbQuery('Session expired — start over.').catch(() => {}); return; }
     st.gale = parseInt(ctx.match[1], 10);
@@ -2905,7 +2956,7 @@ function buildAutoConfirmText(st: AutoWizState): string {
 }
 
 bot.action('aconfirm', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     const uid = ctx.from!.id;
     const st = autoWizSessions.get(ctx.chat!.id);
     if (!st || st.assets.length !== 3 || !st.currency || !st.amount || !st.timeframe) {
@@ -2925,7 +2976,7 @@ bot.action('aconfirm', async ctx => {
 // ─── Auto God Mode (directive §6) ─────────────────────────────────────────────
 
 bot.action('auto:god', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     if (!await hasAccessLive(ctx.from!.id, 'auto_trading')) { await sendAutoTradingLock(ctx); return; }
     const uid = ctx.from!.id;
     const ssid = getSsidForUser(uid);
@@ -2986,12 +3037,12 @@ bot.action('auto:god', async ctx => {
 // ─── Auto Trading controls ────────────────────────────────────────────────────
 
 bot.action('auto:pause', async ctx => {
-    await ctx.answerCbQuery('Pausing after current trade…');
+    await ctx.answerCbQuery('Pausing after current trade…').catch(() => {});
     autoEngine.pause(ctx.from!.id);
     await sendAutoMenu(ctx);
 });
 bot.action('auto:resume', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     // Demo mode: no access gate; live mode: require access (live balance refresh —
     // a session paused long enough could have dropped below threshold).
     const session = getAutoSession(ctx.from!.id);
@@ -3000,12 +3051,12 @@ bot.action('auto:resume', async ctx => {
     await sendAutoMenu(ctx);
 });
 bot.action('auto:stop', async ctx => {
-    await ctx.answerCbQuery('Stopping after current trade…');
+    await ctx.answerCbQuery('Stopping after current trade…').catch(() => {});
     autoEngine.stop(ctx.from!.id);
     await sendAutoMenu(ctx);
 });
 bot.action('auto:perf', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     const s = getAutoSession(ctx.from!.id);
     if (!s) { await ctx.reply('No Auto Trading session yet.', { reply_markup: backKeyboard() }); return; }
     const sign = s.pnl >= 0 ? '+' : '';
@@ -3021,7 +3072,7 @@ bot.action('auto:perf', async ctx => {
 });
 
 bot.action('ui:history', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     const uid = ctx.from!.id;
     const trades = getRecentTrades(10, uid);
     if (trades.length === 0) { await ctx.reply('No trades yet.', { reply_markup: backKeyboard() }); return; }
@@ -3041,7 +3092,7 @@ bot.action('ui:history', async ctx => {
 });
 
 bot.action('ui:stats', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     const uid = ctx.from!.id;
     const stats = getTradeStats(uid);
     const ss = getUserSessionStats(uid);
@@ -3057,7 +3108,7 @@ bot.action('ui:stats', async ctx => {
 });
 
 bot.action('ui:upgrade', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     connectSessions.delete(ctx.chat!.id);
     const fundUrl = process.env.FUNDING_URL ?? 'https://iqoption.com/pwa/payments/deposit';
     await ctx.reply(
@@ -3080,7 +3131,7 @@ bot.action('ui:upgrade', async ctx => {
 });
 
 bot.action('ui:upgrade_token', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     upgradeSessions.add(ctx.chat!.id);
     await ctx.reply(
         `🔑 *Upgrade with Token*\n\n` +
@@ -3100,7 +3151,7 @@ bot.action('ui:upgrade_token', async ctx => {
 
 
 bot.action('ui:leaderboard', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     const fab  = getAllFabricatedTraders();
     const real = getRealTraderLeaderboard();
 
@@ -3125,7 +3176,7 @@ bot.action('ui:leaderboard', async ctx => {
 });
 
 bot.action('ui:help', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     await ctx.reply(
         `❓ *Help & FAQ*\n\n` +
         `*📹 How to trade with 10x AI*\n` +
@@ -3147,7 +3198,7 @@ bot.action('ui:help', async ctx => {
 });
 
 bot.action('ui:support', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     await ctx.reply(
         `🔋 *Support*\n\nContact admin for help:\n${ADMIN_CONTACT_LINK}`,
         { parse_mode: 'Markdown', reply_markup: backKeyboard() }
@@ -3155,7 +3206,7 @@ bot.action('ui:support', async ctx => {
 });
 
 bot.action('ui:giveaways', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     const telegramId = ctx.from!.id;
     // All users can participate in giveaways now (directive §8.1).
     const canAct = true;
@@ -3256,7 +3307,7 @@ bot.command('trade', async ctx => {
 });
 
 bot.action('admin:trade_connect', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     if (ctx.from!.id !== getAdminId()) return;
     connectSessions.set(ctx.chat!.id, { step: 'admin_email' });
     await ctx.reply('👑 *Admin Trading Account*\n\nEnter your IQ Option email:', { parse_mode: 'Markdown' });
@@ -3459,7 +3510,7 @@ bot.command('admin', async ctx => {
 // ─── Admin back ───────────────────────────────────────────────────────────────
 
 bot.action('admin:back', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     adminSessions.delete(ctx.chat!.id);
     const stats = getApprovalStats();
     await ctx.reply(
@@ -3472,7 +3523,7 @@ bot.action('admin:back', async ctx => {
 // ─── Module 1: Today ─────────────────────────────────────────────────────────
 
 bot.action('admin:today', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     const traders = getTopTradersToday(20);
     if (traders.length === 0) {
         await ctx.reply('📊 *Today\'s Top Traders*\n\nNo trades today yet.', { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
@@ -3489,7 +3540,7 @@ bot.action('admin:today', async ctx => {
 // ─── Module 2: Activations ────────────────────────────────────────────────────
 
 bot.action('admin:activations', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     const pending = getPendingManualUsers();
     const recent = getRecentApprovals(24);
     let msg = '🔌 *Activations*\n\n';
@@ -3516,7 +3567,7 @@ bot.action('admin:activations', async ctx => {
 });
 
 bot.action(/^activation:approve:(\d+)$/, async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     const uid = parseInt(ctx.match[1], 10);
     approveUser(uid);
     try { await ctx.editMessageText(`✅ User ${maskUserId(uid)} approved.`); } catch {}
@@ -3534,7 +3585,7 @@ bot.action(/^activation:approve:(\d+)$/, async ctx => {
 });
 
 bot.action(/^activation:reject:(\d+)$/, async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     const uid = parseInt(ctx.match[1], 10);
     rejectUser(uid);
     try { await ctx.editMessageText(`❌ User ${maskUserId(uid)} rejected.`); } catch {}
@@ -3543,7 +3594,7 @@ bot.action(/^activation:reject:(\d+)$/, async ctx => {
 // ─── Module 3: Find Users ─────────────────────────────────────────────────────
 
 bot.action('admin:find_users', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     adminSessions.set(ctx.chat!.id, { step: 'find_users' });
     await ctx.reply('🔍 Enter a Telegram User ID (number) or username to search:');
 });
@@ -3551,7 +3602,7 @@ bot.action('admin:find_users', async ctx => {
 // ─── Module 4: Tokens ─────────────────────────────────────────────────────────
 
 bot.action('admin:tokens', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     const tokens = getTokens();
     let msg = '🔑 *Token Manager*\n\n';
     if (tokens.length === 0) {
@@ -3569,12 +3620,12 @@ bot.action('admin:tokens', async ctx => {
 });
 
 bot.action('admin:generate_token', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     await ctx.reply('🔑 Select product for new token:', { reply_markup: tokenTierKeyboard() });
 });
 
 bot.action(/^token_tier:(AI_TRADING|AUTO_TRADING)$/, async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     const grant = ctx.match[1];
     const token = generateToken(grant);
     const label = getProductConfig(tokenToAccess(grant)).label;
@@ -3587,7 +3638,7 @@ bot.action(/^token_tier:(AI_TRADING|AUTO_TRADING)$/, async ctx => {
 // ─── Module 5: System ─────────────────────────────────────────────────────────
 
 bot.action('admin:system', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     const uptimeSec = Math.floor(process.uptime());
     const h = Math.floor(uptimeSec / 3600);
     const m = Math.floor((uptimeSec % 3600) / 60);
@@ -3609,7 +3660,7 @@ bot.action('admin:system', async ctx => {
 // ─── Test Mode ────────────────────────────────────────────────────────────────
 
 bot.action(/^admin:testmode:(on|off)$/, async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     const action = ctx.match[1];
     if (action === 'on') {
         setTestUser(6622587977);
@@ -3629,12 +3680,12 @@ bot.action(/^admin:testmode:(on|off)$/, async ctx => {
 // ─── Module 6: Broadcast ─────────────────────────────────────────────────────
 
 bot.action('admin:broadcast', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     await ctx.reply('📢 *Broadcast* — Select target group:', { parse_mode: 'Markdown', reply_markup: broadcastTargetKeyboard() });
 });
 
 bot.action(/^broadcast:(all|funded|nonfunded|nonactivated|testuser)$/, async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     const target = ctx.match[1] as 'all' | 'funded' | 'nonfunded' | 'nonactivated' | 'testuser';
     adminSessions.set(ctx.chat!.id, { step: 'broadcast_message', broadcastTarget: target });
     const labelMap: Record<string, string> = {
@@ -3649,18 +3700,18 @@ bot.action(/^broadcast:(all|funded|nonfunded|nonactivated|testuser)$/, async ctx
 
 // Button type selection
 bot.action('broadcast_btn:url', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     adminSessions.set(ctx.chat!.id, { step: 'broadcast_link_url' });
     await ctx.reply('🔗 Enter the link URL (e.g. https://example.com):');
 });
 
 bot.action('broadcast_btn:action', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     await ctx.reply('⚡ Select action for the button:', { reply_markup: broadcastActionKeyboard() });
 });
 
 bot.action('broadcast_btn:none', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     await ctx.reply('⏱ Auto-delete after?', { reply_markup: broadcastTimerKeyboard() });
 });
 
@@ -3678,7 +3729,7 @@ const CONTACT_URL = 'https://t.me/shiloh_is_10xing';
 const FUND_URL = process.env.FUNDING_URL ?? 'https://iqoption.com/pwa/payments/deposit';
 
 bot.action(/^broadcast_action:(trade|stats|history|leaderboard|menu|start|upgrade|contact|fund|help)$/, async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     const key = ctx.match[1];
     const pending = pendingBroadcasts.get(ctx.chat!.id);
     if (!pending) { await ctx.reply('❌ Session expired.', { reply_markup: adminBackKeyboard() }); return; }
@@ -3702,14 +3753,14 @@ bot.action(/^broadcast_action:(trade|stats|history|leaderboard|menu|start|upgrad
 
 // Custom timer
 bot.action('broadcast:custom_timer', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     if (!pendingBroadcasts.has(ctx.chat!.id)) { await ctx.reply('❌ Session expired.', { reply_markup: adminBackKeyboard() }); return; }
     adminSessions.set(ctx.chat!.id, { step: 'broadcast_custom_timer' });
     await ctx.reply('⏱ Enter custom duration (e.g. 30m, 2h, 45s):');
 });
 
 bot.action(/^bcast_timer:(\d+)$/, async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     adminSessions.delete(ctx.chat!.id);
     const chatId = ctx.chat!.id;
     const deleteAfterMs = parseInt(ctx.match[1], 10);
@@ -3720,7 +3771,7 @@ bot.action(/^bcast_timer:(\d+)$/, async ctx => {
 });
 
 bot.action('broadcast:send_now', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     const chatId = ctx.chat!.id;
     const pending = pendingBroadcasts.get(chatId);
     if (!pending) { await ctx.reply('❌ Session expired.', { reply_markup: adminBackKeyboard() }); return; }
@@ -3728,13 +3779,13 @@ bot.action('broadcast:send_now', async ctx => {
 });
 
 bot.action('broadcast:schedule', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     if (!pendingBroadcasts.has(ctx.chat!.id)) { await ctx.reply('❌ Session expired.', { reply_markup: adminBackKeyboard() }); return; }
     await ctx.reply('📅 When to send?', { reply_markup: broadcastDelayKeyboard() });
 });
 
 bot.action(/^bcast_delay:(\d+)$/, async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     const chatId = ctx.chat!.id;
     const delayMs = parseInt(ctx.match[1], 10);
     const pending = pendingBroadcasts.get(chatId);
@@ -3759,14 +3810,14 @@ bot.action(/^bcast_delay:(\d+)$/, async ctx => {
 });
 
 bot.action('broadcast:custom_schedule', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     if (!pendingBroadcasts.has(ctx.chat!.id)) { await ctx.reply('❌ Session expired.', { reply_markup: adminBackKeyboard() }); return; }
     adminSessions.set(ctx.chat!.id, { step: 'broadcast_schedule_custom' });
     await ctx.reply('⏱ Enter custom delay (e.g. 45m, 3h, 90m):');
 });
 
 bot.action('admin:scheduled', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     const active = scheduledBroadcasts.filter(s => !s.sent);
     if (active.length === 0) {
         await ctx.reply('📅 *Scheduled Broadcasts*\n\nNo pending broadcasts.', { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
@@ -3786,7 +3837,7 @@ bot.action('admin:scheduled', async ctx => {
 });
 
 bot.action(/^bcast_cancel:(\d+)$/, async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     const id = parseInt(ctx.match[1], 10);
     const idx = scheduledBroadcasts.findIndex(s => s.id === id && !s.sent);
     if (idx === -1) { await ctx.reply('❌ Broadcast not found or already sent.', { reply_markup: adminBackKeyboard() }); return; }
@@ -3800,7 +3851,7 @@ bot.action(/^bcast_cancel:(\d+)$/, async ctx => {
 // ─── Module 7: Top Traders ────────────────────────────────────────────────────
 
 bot.action('admin:top_traders', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     const detailed = getLeaderboardDetailed();
     let msg = '🏆 *Today\'s Leaderboard*\n\n';
     if (detailed.length === 0) {
@@ -3820,13 +3871,13 @@ bot.action('admin:top_traders', async ctx => {
 });
 
 bot.action('admin:manual_add', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     adminSessions.set(ctx.chat!.id, { step: 'manual_add_id' });
     await ctx.reply('Enter the Telegram User ID to add to the leaderboard:');
 });
 
 bot.action(/^trader_edit:(\d+)$/, async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     const telegramId = parseInt(ctx.match[1], 10);
     adminSessions.set(ctx.chat!.id, { step: 'edit_trader_profit', editTraderTelegramId: telegramId });
     await ctx.reply(`Enter new profit amount for user \`${maskUserId(telegramId)}\`:`, { parse_mode: 'Markdown' });
@@ -3835,7 +3886,7 @@ bot.action(/^trader_edit:(\d+)$/, async ctx => {
 // ─── Module 8: Funnel ─────────────────────────────────────────────────────────
 
 bot.action('admin:funnel', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     const url = getConfig('funnel_url') ?? 'Not set';
     const p = getFunnelPipeline();
 
@@ -3875,7 +3926,7 @@ bot.action('admin:funnel', async ctx => {
 });
 
 bot.action('admin:set_funnel_url', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     adminSessions.set(ctx.chat!.id, { step: 'funnel_url' });
     await ctx.reply('🌐 Enter the landing page URL:');
 });
@@ -3883,7 +3934,7 @@ bot.action('admin:set_funnel_url', async ctx => {
 // ─── Module 9: Audits ─────────────────────────────────────────────────────────
 
 bot.action('admin:audits', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     const r = getAuditReport();
     const pnlSign = r.totalPnl >= 0 ? '+' : '';
     const winPct = r.totalTrades > 0 ? ((r.wins / r.totalTrades) * 100).toFixed(1) : '0.0';
@@ -3910,7 +3961,7 @@ bot.action('admin:audits', async ctx => {
 // ─── Module 10: Admin member management ───────────────────────────────────────
 
 bot.action('admin:admin', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     const as_ = getApprovalStats();
     const paused = getAllUsers().filter(u => u.approval_status === 'paused').length;
     await ctx.reply(
@@ -3921,7 +3972,7 @@ bot.action('admin:admin', async ctx => {
 });
 
 bot.action('member:view', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     const users = getAllUsers();
     if (users.length === 0) { await ctx.reply('No members yet.', { reply_markup: adminBackKeyboard() }); return; }
     let msg = `👥 *All Members* (${users.length})\n\n`;
@@ -3935,31 +3986,31 @@ bot.action('member:view', async ctx => {
 });
 
 bot.action('member:pause', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     adminSessions.set(ctx.chat!.id, { step: 'member_pause' });
     await ctx.reply('⏸️ Enter Telegram User ID to pause:');
 });
 
 bot.action('member:resume', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     adminSessions.set(ctx.chat!.id, { step: 'member_resume' });
     await ctx.reply('▶️ Enter Telegram User ID to resume:');
 });
 
 bot.action('member:remove', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     adminSessions.set(ctx.chat!.id, { step: 'member_remove' });
     await ctx.reply('🗑️ Enter Telegram User ID to remove:');
 });
 
 bot.action('member:message', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     adminSessions.set(ctx.chat!.id, { step: 'member_message_id' });
     await ctx.reply('✉️ Enter Telegram User ID to message:');
 });
 
 bot.action('member:add', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     adminSessions.set(ctx.chat!.id, { step: 'member_add' });
     await ctx.reply('➕ Enter Telegram User ID to manually add/approve:');
 });
@@ -3967,13 +4018,13 @@ bot.action('member:add', async ctx => {
 // ─── Module 11: Giveaway ─────────────────────────────────────────────────────
 
 bot.action('admin:giveaway', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     adminSessions.set(ctx.chat!.id, { step: 'giveaway_winners' });
     await ctx.reply('🎁 *Giveaway Setup*\n\nHow many winners? (e.g. 3):', { parse_mode: 'Markdown' });
 });
 
 bot.action(/^giveaway:(all|24h)$/, async ctx => {
-    await ctx.answerCbQuery('⏳ Generating…');
+    await ctx.answerCbQuery('⏳ Generating…').catch(() => {});
     const target = ctx.match[1] as 'all' | '24h';
     const chatId = ctx.chat!.id;
     const as = adminSessions.get(chatId);
@@ -4057,7 +4108,7 @@ bot.action(/^giveaway:(all|24h)$/, async ctx => {
 // ─── Module 11b: Giveaway V2 ─────────────────────────────────────────────────
 
 bot.action('admin:giveaways', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     const stats = getGiveawayStats();
     await ctx.reply(
         `🎁 *Giveaway Manager*\n\nActive: ${stats.active} | Scheduled: ${stats.scheduled} | Completed: ${stats.completed}`,
@@ -4066,7 +4117,7 @@ bot.action('admin:giveaways', async ctx => {
 });
 
 bot.action('giveaway_v2:create', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     await ctx.reply('🎁 *New Giveaway — Step 1*\n\nSelect the giveaway type:', {
         parse_mode: 'Markdown',
         reply_markup: giveawayTypeKeyboard(),
@@ -4074,7 +4125,7 @@ bot.action('giveaway_v2:create', async ctx => {
 });
 
 bot.action(/^giveaway_type:(giveaway|promo_code|marathon)$/, async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     const chatId = ctx.chat!.id;
     const type = ctx.match[1] as 'giveaway' | 'promo_code' | 'marathon';
     if (type === 'giveaway') {
@@ -4090,7 +4141,7 @@ bot.action(/^giveaway_type:(giveaway|promo_code|marathon)$/, async ctx => {
 });
 
 bot.action('giveaway_v2:active', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     const giveaways = getGiveawayEvents('active');
     if (giveaways.length === 0) {
         await ctx.reply('📋 No active giveaways.', { reply_markup: adminBackKeyboard() });
@@ -4103,7 +4154,7 @@ bot.action('giveaway_v2:active', async ctx => {
 });
 
 bot.action('giveaway_v2:scheduled', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     const giveaways = getGiveawayEvents('pending');
     if (giveaways.length === 0) {
         await ctx.reply('📅 No scheduled giveaways.', { reply_markup: adminBackKeyboard() });
@@ -4114,7 +4165,7 @@ bot.action('giveaway_v2:scheduled', async ctx => {
 });
 
 bot.action('giveaway_v2:pick_winners', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     const giveaways = getGiveawayEvents('active');
     if (giveaways.length === 0) {
         await ctx.reply('📋 No active giveaways to pick winners from.', { reply_markup: adminBackKeyboard() });
@@ -4127,7 +4178,7 @@ bot.action('giveaway_v2:pick_winners', async ctx => {
 });
 
 bot.action(/^giveaway_winners:(\d+)$/, async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     const giveawayId = parseInt(ctx.match[1], 10);
     const event = getGiveawayEvent(giveawayId);
     if (!event) { await ctx.reply('❌ Giveaway not found.', { reply_markup: adminBackKeyboard() }); return; }
@@ -4158,11 +4209,11 @@ bot.action(/^giveaway_winners:(\d+)$/, async ctx => {
 });
 
 bot.action(/^giveaway_winners_confirm:(\d+)$/, async ctx => {
-    await ctx.answerCbQuery('🏆 Selecting winners…');
+    await ctx.answerCbQuery('🏆 Selecting winners…').catch(() => {});
     const giveawayId = parseInt(ctx.match[1], 10);
     const event = getGiveawayEvent(giveawayId);
     if (event && event.status === 'completed') {
-        await ctx.answerCbQuery('This giveaway already has winners.');
+        await ctx.answerCbQuery('This giveaway already has winners.').catch(() => {});
         await ctx.reply('❌ This giveaway already has winners selected.', { reply_markup: adminBackKeyboard() });
         return;
     }
@@ -4179,21 +4230,21 @@ bot.action(/^giveaway_winners_confirm:(\d+)$/, async ctx => {
 });
 
 bot.action(/^giveaway_end:(\d+)$/, async ctx => {
-    await ctx.answerCbQuery('⏹ Ending giveaway…');
+    await ctx.answerCbQuery('⏹ Ending giveaway…').catch(() => {});
     const giveawayId = parseInt(ctx.match[1], 10);
     setGiveawayStatus(giveawayId, 'completed');
     await ctx.reply(`✅ Giveaway #${giveawayId} ended.`, { reply_markup: adminBackKeyboard() });
 });
 
 bot.action(/^giveaway_delete:(\d+)$/, async ctx => {
-    await ctx.answerCbQuery('🗑️ Deleting…');
+    await ctx.answerCbQuery('🗑️ Deleting…').catch(() => {});
     const giveawayId = parseInt(ctx.match[1], 10);
     deleteGiveaway(giveawayId);
     await ctx.reply(`✅ Giveaway #${giveawayId} deleted.`, { reply_markup: adminBackKeyboard() });
 });
 
 bot.action(/^giveaway_participants:(\d+)$/, async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     const giveawayId = parseInt(ctx.match[1], 10);
     const participants = getGiveawayParticipants(giveawayId, false);
     if (participants.length === 0) {
@@ -4215,7 +4266,7 @@ bot.action(/^giveaway_participants:(\d+)$/, async ctx => {
 });
 
 bot.action(/^giveaway_view:(\d+)$/, async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     const giveawayId = parseInt(ctx.match[1], 10);
     const event = getGiveawayEvent(giveawayId);
     if (!event) { await ctx.reply('❌ Giveaway not found.', { reply_markup: adminBackKeyboard() }); return; }
@@ -4238,7 +4289,7 @@ bot.action(/^giveaway_view:(\d+)$/, async ctx => {
 });
 
 bot.action(/^giveaway_criteria:(none|new_user|min_balance|top_traders)$/, async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     const chatId = ctx.chat!.id;
     const as = adminSessions.get(chatId);
     if (!as || !as.giveawayV2Title) {
@@ -4257,7 +4308,7 @@ bot.action(/^giveaway_criteria:(none|new_user|min_balance|top_traders)$/, async 
 });
 
 bot.action(/^giveaway_schedule:(now|\d+)$/, async ctx => {
-    await ctx.answerCbQuery('⏳ Creating giveaway…');
+    await ctx.answerCbQuery('⏳ Creating giveaway…').catch(() => {});
     const chatId = ctx.chat!.id;
     const as = adminSessions.get(chatId);
     if (!as || !as.giveawayV2Type || !as.giveawayV2Title || !as.giveawayV2MaxWinners) {
@@ -4300,7 +4351,7 @@ bot.action(/^giveaway_schedule:(now|\d+)$/, async ctx => {
 
 // User participate handler
 bot.action(/^giveaway:participate:(\d+)$/, async ctx => {
-    await ctx.answerCbQuery('⏳ Processing…');
+    await ctx.answerCbQuery('⏳ Processing…').catch(() => {});
     const telegramId = ctx.from!.id;
     const giveawayId = parseInt(ctx.match[1], 10);
     const result = await giveawayParticipate(giveawayId, telegramId);
@@ -4315,7 +4366,7 @@ bot.action(/^giveaway:participate:(\d+)$/, async ctx => {
 });
 
 bot.action(/^giveaway_activate:(\d+)$/, async ctx => {
-    await ctx.answerCbQuery('⏳ Activating…');
+    await ctx.answerCbQuery('⏳ Activating…').catch(() => {});
     const giveawayId = parseInt(ctx.match[1], 10);
     const event = getGiveawayEvent(giveawayId);
     if (!event) {
@@ -4334,7 +4385,7 @@ bot.action(/^giveaway_activate:(\d+)$/, async ctx => {
 
 // Promo code schedule handler
 bot.action(/^promo_schedule:(now|\d+)$/, async ctx => {
-    await ctx.answerCbQuery('⏳ Creating promo code…');
+    await ctx.answerCbQuery('⏳ Creating promo code…').catch(() => {});
     const chatId = ctx.chat!.id;
     const as = adminSessions.get(chatId);
     if (!as || !as.promoV2Title || !as.promoV2Code) {
@@ -4375,7 +4426,7 @@ bot.action(/^promo_schedule:(now|\d+)$/, async ctx => {
 
 // Marathon duration selection handler
 bot.action(/^marathon_duration:(\d+)$/, async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     const chatId = ctx.chat!.id;
     const as = adminSessions.get(chatId);
     if (!as || !as.marathonV2Title) {
@@ -4394,7 +4445,7 @@ bot.action(/^marathon_duration:(\d+)$/, async ctx => {
 
 // Marathon schedule handler
 bot.action(/^marathon_schedule:(now|\d+)$/, async ctx => {
-    await ctx.answerCbQuery('⏳ Creating marathon…');
+    await ctx.answerCbQuery('⏳ Creating marathon…').catch(() => {});
     const chatId = ctx.chat!.id;
     const as = adminSessions.get(chatId);
     if (!as || !as.marathonV2Title || !as.marathonV2Winners || !as.marathonV2DurationSec) {
@@ -4439,7 +4490,7 @@ bot.action(/^marathon_schedule:(now|\d+)$/, async ctx => {
 
 // Promo claim handler
 bot.action(/^promo:claim:(\d+)$/, async ctx => {
-    await ctx.answerCbQuery('⏳ Claiming…');
+    await ctx.answerCbQuery('⏳ Claiming…').catch(() => {});
     const telegramId = ctx.from!.id;
     const giveawayId = parseInt(ctx.match[1], 10);
     const result = await claimPromoCode(giveawayId, telegramId);
@@ -4451,7 +4502,7 @@ bot.action(/^promo:claim:(\d+)$/, async ctx => {
 
 // Marathon leaderboard handler
 bot.action(/^marathon:leaderboard:(\d+)$/, async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     const telegramId = ctx.from!.id;
     const giveawayId = parseInt(ctx.match[1], 10);
     const event = getGiveawayEvent(giveawayId);
@@ -4500,7 +4551,7 @@ bot.action(/^marathon:leaderboard:(\d+)$/, async ctx => {
 // ─── Module 12: Compose Post (LLM-Powered) ───────────────────────────────────
 
 bot.action('admin:compose', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     await ctx.reply('✍️ *Compose Motivational Post*\n\nChoose the post topic:', {
         parse_mode: 'Markdown',
         reply_markup: composeTopicKeyboard(),
@@ -4508,7 +4559,7 @@ bot.action('admin:compose', async ctx => {
 });
 
 bot.action(/^compose_topic:(reviews|motivation|trade_win|life_win)$/, async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     const topic = ctx.match[1] as LlmRequest['topic'];
     adminSessions.set(ctx.chat!.id, { step: 'compose_description', composeTopic: topic });
     const hints: Record<string, string> = {
@@ -4524,7 +4575,7 @@ bot.action(/^compose_topic:(reviews|motivation|trade_win|life_win)$/, async ctx 
 });
 
 bot.action('compose:regenerate', async ctx => {
-    await ctx.answerCbQuery('🔄 Regenerating…');
+    await ctx.answerCbQuery('🔄 Regenerating…').catch(() => {});
     const chatId = ctx.chat!.id;
     const as = adminSessions.get(chatId);
     if (!as?.composeTopic || !as.composeDescription) {
@@ -4546,7 +4597,7 @@ bot.action('compose:regenerate', async ctx => {
 });
 
 bot.action('compose:edit', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     const chatId = ctx.chat!.id;
     const as = adminSessions.get(chatId);
     if (!as?.composeTopic) {
@@ -4558,13 +4609,13 @@ bot.action('compose:edit', async ctx => {
 });
 
 bot.action('compose:manual', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     adminSessions.set(ctx.chat!.id, { step: 'compose_manual' });
     await ctx.reply('✏️ Paste or type the text you want to send:');
 });
 
 bot.action('compose:approve', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     const chatId = ctx.chat!.id;
     const as = adminSessions.get(chatId);
     if (!as?.composeContent) {
@@ -4576,7 +4627,7 @@ bot.action('compose:approve', async ctx => {
 });
 
 bot.action(/^compose_btn:(start|trade|fund|contact|yacht|none)$/, async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     const chatId = ctx.chat!.id;
     const as = adminSessions.get(chatId);
     if (!as?.composeContent) { await ctx.reply('❌ Session expired.', { reply_markup: adminBackKeyboard() }); return; }
@@ -4585,7 +4636,7 @@ bot.action(/^compose_btn:(start|trade|fund|contact|yacht|none)$/, async ctx => {
 });
 
 bot.action(/^compose_delivery:(bot|channel|both)$/, async ctx => {
-    await ctx.answerCbQuery('📤 Sending…');
+    await ctx.answerCbQuery('📤 Sending…').catch(() => {});
     const chatId = ctx.chat!.id;
     const as = adminSessions.get(chatId);
     if (!as?.composeContent) {
@@ -4677,7 +4728,7 @@ bot.action(/^compose_delivery:(bot|channel|both)$/, async ctx => {
 // ─── Module 13: Compose Tone Settings ────────────────────────────────────────
 
 bot.action('admin:compose_tone', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     await ctx.reply('🎭 *Tone Settings*\n\nTrain the AI to match your voice.', {
         parse_mode: 'Markdown',
         reply_markup: composeToneKeyboard(),
@@ -4685,31 +4736,31 @@ bot.action('admin:compose_tone', async ctx => {
 });
 
 bot.action('compose_tone:guide', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     adminSessions.set(ctx.chat!.id, { step: 'compose_tone_guide' });
     await ctx.reply('📝 Enter your style guide (e.g. "Streetwise, aggressive, use slang, short punchy sentences"):');
 });
 
 bot.action('compose_tone:sample1', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     adminSessions.set(ctx.chat!.id, { step: 'compose_tone_sample1' });
     await ctx.reply('📄 Paste *Sample Post 1* — an example in the exact voice you want:', { parse_mode: 'Markdown' });
 });
 
 bot.action('compose_tone:sample2', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     adminSessions.set(ctx.chat!.id, { step: 'compose_tone_sample2' });
     await ctx.reply('📄 Paste *Sample Post 2* — another example in your voice:', { parse_mode: 'Markdown' });
 });
 
 bot.action('compose_tone:sample3', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     adminSessions.set(ctx.chat!.id, { step: 'compose_tone_sample3' });
     await ctx.reply('📄 Paste *Sample Post 3* — one more example:', { parse_mode: 'Markdown' });
 });
 
 bot.action('compose_tone:view', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     const tone = getComposeTone();
     const truncate = (s: string, n = 200) => s.length > n ? s.slice(0, n) + '…' : s;
     let msg = '🎭 *Current Tone Profile*\n\n';
@@ -4723,7 +4774,7 @@ bot.action('compose_tone:view', async ctx => {
 // ─── Admin Diary ──────────────────────────────────────────────────────────────
 
 bot.action('admin:diary', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     if (ctx.from?.id !== getAdminId()) return;
     await ctx.reply(
         '📔 *Admin Diary*\n\nWhat would you like to generate?',
@@ -4744,7 +4795,7 @@ bot.action('admin:diary', async ctx => {
 });
 
 bot.action('diary:giveaway', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     if (ctx.from?.id !== getAdminId()) return;
     const loading = await ctx.reply('⏳ Generating giveaway idea...');
     try {
@@ -4757,7 +4808,7 @@ bot.action('diary:giveaway', async ctx => {
 });
 
 bot.action('diary:review', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     if (ctx.from?.id !== getAdminId()) return;
     const loading = await ctx.reply('⏳ Generating client review...');
     try {
@@ -4770,7 +4821,7 @@ bot.action('diary:review', async ctx => {
 });
 
 bot.action('diary:post', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     if (ctx.from?.id !== getAdminId()) return;
     const loading = await ctx.reply('⏳ Generating post...');
     try {
@@ -4783,7 +4834,7 @@ bot.action('diary:post', async ctx => {
 });
 
 bot.action('diary:live_topics', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     if (ctx.from?.id !== getAdminId()) return;
     const loading = await ctx.reply('⏳ Generating live topics...');
     try {
@@ -4796,7 +4847,7 @@ bot.action('diary:live_topics', async ctx => {
 });
 
 bot.action('diary:market_pulse', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     if (ctx.from?.id !== getAdminId()) return;
     const loading = await ctx.reply('⏳ Analyzing market pulse...');
     try {
@@ -4812,7 +4863,7 @@ bot.action('diary:market_pulse', async ctx => {
 // ─── Reviews Generator ─────────────────────────────────────────────────────────
 
 bot.action('admin:reviews', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     if (ctx.from?.id !== getAdminId()) return;
     await ctx.reply(
         '📝 Review Generator\n\nPick a preset or write your own scenario.\n\n✏️ Custom: describe your event, audience, and vibe — the AI adapts.',
@@ -4821,37 +4872,37 @@ bot.action('admin:reviews', async ctx => {
 });
 
 bot.action('reviews:preset_marathon', async ctx => {
-    await ctx.answerCbQuery('Generating...');
+    await ctx.answerCbQuery('Generating...').catch(() => {});
     if (ctx.from?.id !== getAdminId()) return;
     await generateAndShow(ctx, SCENARIO_PRESETS.marathon);
 });
 
 bot.action('reviews:preset_daily', async ctx => {
-    await ctx.answerCbQuery('Generating...');
+    await ctx.answerCbQuery('Generating...').catch(() => {});
     if (ctx.from?.id !== getAdminId()) return;
     await generateAndShow(ctx, SCENARIO_PRESETS.daily);
 });
 
 bot.action('reviews:preset_giveaway', async ctx => {
-    await ctx.answerCbQuery('Generating...');
+    await ctx.answerCbQuery('Generating...').catch(() => {});
     if (ctx.from?.id !== getAdminId()) return;
     await generateAndShow(ctx, SCENARIO_PRESETS.giveaway);
 });
 
 bot.action('reviews:preset_signals', async ctx => {
-    await ctx.answerCbQuery('Generating...');
+    await ctx.answerCbQuery('Generating...').catch(() => {});
     if (ctx.from?.id !== getAdminId()) return;
     await generateAndShow(ctx, SCENARIO_PRESETS.signals);
 });
 
 bot.action('reviews:preset_autotrade', async ctx => {
-    await ctx.answerCbQuery('Generating...');
+    await ctx.answerCbQuery('Generating...').catch(() => {});
     if (ctx.from?.id !== getAdminId()) return;
     await generateAndShow(ctx, SCENARIO_PRESETS.autotrade);
 });
 
 bot.action('reviews:preset_aitrade', async ctx => {
-    await ctx.answerCbQuery('Generating...');
+    await ctx.answerCbQuery('Generating...').catch(() => {});
     if (ctx.from?.id !== getAdminId()) return;
     await generateAndShow(ctx, SCENARIO_PRESETS.aitrade);
 });
@@ -4859,7 +4910,7 @@ bot.action('reviews:preset_aitrade', async ctx => {
 // ── Custom scenario flow ──
 
 bot.action('reviews:custom', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     if (ctx.from?.id !== getAdminId()) return;
     customScenarioPending.add(ctx.from!.id);
     await ctx.reply(
@@ -4901,7 +4952,7 @@ function lengthSelectKeyboard() {
 }
 
 bot.action(/^reviews:length:(.+)$/, async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     if (ctx.from?.id !== getAdminId()) return;
     
     const length = ctx.match[1] as string;
@@ -4919,7 +4970,7 @@ bot.action(/^reviews:length:(.+)$/, async ctx => {
 // ── End custom flow ──
 
 bot.action('reviews:regenerate', async ctx => {
-    await ctx.answerCbQuery('Regenerating...');
+    await ctx.answerCbQuery('Regenerating...').catch(() => {});
     if (ctx.from?.id !== getAdminId()) return;
     const last = lastReviewScenario.get(ctx.from!.id);
     await generateAndShow(ctx, last || SCENARIO_PRESETS.marathon);
@@ -4945,7 +4996,7 @@ const lastReviewScenario = new Map<number, string>();
 // ─── Go Live broadcast ────────────────────────────────────────────────────────
 
 bot.action('admin:golive', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     if (ctx.from?.id !== getAdminId()) return;
 
     const LIVE_MSG_APPROVED =
@@ -4996,7 +5047,7 @@ bot.action('admin:golive', async ctx => {
 // ─── Module 14: SSID Health ───────────────────────────────────────────────────
 
 bot.action('admin:ssid_health', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     const all = getUsersWithSsid();
     const valid = all.filter(u => u.ssid_valid === 1).length;
     const expired = all.filter(u => u.ssid_valid === 0).length;
@@ -5019,7 +5070,7 @@ bot.action('admin:ssid_health', async ctx => {
 });
 
 bot.action('admin:ssid_expired', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     const due = getUsersDueForReconnectPrompt(0);
     if (due.length === 0) {
         await ctx.reply('✅ No users with expired SSIDs right now.', { reply_markup: adminBackKeyboard() });
@@ -5046,7 +5097,7 @@ bot.action('admin:ssid_expired', async ctx => {
 // ─── Module 15: Onboarding Funnel ────────────────────────────────────────────
 
 bot.action('admin:onboarding_funnel', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     const stats = getOnboardingFunnelStats();
     const dist = getAccessDistribution();
     let msg = '👣 *Onboarding Funnel*\n\n';
@@ -5063,7 +5114,7 @@ bot.action('admin:onboarding_funnel', async ctx => {
 // ─── Module 16: LLM Template Browser ─────────────────────────────────────────
 
 bot.action('admin:llm_templates', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     const cats = getTemplateCategories();
     if (cats.length === 0) {
         await ctx.reply('No LLM templates seeded yet.', { reply_markup: adminBackKeyboard() });
@@ -5073,7 +5124,7 @@ bot.action('admin:llm_templates', async ctx => {
 });
 
 bot.action(/^llm:cat:(.+)$/, async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     const category = ctx.match[1];
     const templates = getTemplatesByCategory(category, 'brain');
     if (templates.length === 0) {
@@ -5091,7 +5142,7 @@ bot.action(/^llm:cat:(.+)$/, async ctx => {
 // ─── Module 17: Broadcast History ────────────────────────────────────────────
 
 bot.action('admin:broadcast_history', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     const history = getRecentBroadcasts(10);
     if (history.length === 0) {
         await ctx.reply('📈 No broadcast history yet.', { reply_markup: adminBackKeyboard() });
@@ -5109,7 +5160,7 @@ bot.action('admin:broadcast_history', async ctx => {
 // ─── Module 18: Media Library ─────────────────────────────────────────────────
 
 bot.action('admin:media_library', async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     const keys = getAllSequenceMediaKeys();
     if (keys.length === 0) {
         await ctx.reply('📁 No sequence media uploaded yet.\n\nUpload a photo/video and it will be listed here.', { reply_markup: adminBackKeyboard() });
@@ -5119,7 +5170,7 @@ bot.action('admin:media_library', async ctx => {
 });
 
 bot.action(/^media:select:(.+)$/, async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     const templateKey = ctx.match[1];
     adminSessions.set(ctx.chat!.id, { step: 'media_upload', mediaLibraryKey: templateKey });
     await ctx.reply(`📎 Send a *photo* or *video* to assign to \`${templateKey}\`:\n\n(Or type /cancel to abort)`, { parse_mode: 'Markdown' });
@@ -5128,7 +5179,7 @@ bot.action(/^media:select:(.+)$/, async ctx => {
 // ─── Member filter / user detail / user actions ───────────────────────────────
 
 bot.action(/^member:filter:(all|signals|ai_trading|auto_trading)$/, async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     const filter = ctx.match[1];
     const all = getAllUsers();
     const filtered = filter === 'all' ? all : all.filter(u => getProduct(u.access_level) === filter);
@@ -5148,7 +5199,7 @@ bot.action(/^member:filter:(all|signals|ai_trading|auto_trading)$/, async ctx =>
 });
 
 bot.action(/^user_detail:(\d+)$/, async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     const uid = parseInt(ctx.match[1], 10);
     const u = getUser(uid);
     if (!u) { await ctx.reply('User not found.', { reply_markup: adminBackKeyboard() }); return; }
@@ -5166,7 +5217,7 @@ bot.action(/^user_detail:(\d+)$/, async ctx => {
 });
 
 bot.action(/^user_action:(approve|pause|reset_ssid|trades|message):(\d+)$/, async ctx => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
     const action = ctx.match[1];
     const uid = parseInt(ctx.match[2], 10);
     if (action === 'approve') {
@@ -6073,7 +6124,9 @@ bot.on('text', async ctx => {
             return;
         }
         if (!/^\d{4,8}$/.test(code)) {
-            await ctx.reply('❌ Please enter the 6-digit code from your email:');
+            await ctx.reply('❌ Please enter the 6-digit code:', {
+                reply_markup: { inline_keyboard: [[{ text: '🔄 Resend code', callback_data: 'verify:resend' }]] },
+            });
             return;
         }
         await ctx.reply('🔐 Verifying...');
@@ -6116,9 +6169,11 @@ bot.on('text', async ctx => {
             await handleConnected(ctx, ctx.from!.id, balanceText);
         } catch (err) {
             const msg = err instanceof Error ? err.message : 'Verification failed';
-            // Invalid code → let them retry the code; token-expired/other → restart.
+            // Invalid code → let them retry or resend; token-expired/other → restart.
             if (/invalid verification code/i.test(msg)) {
-                await ctx.reply(`❌ ${msg}`);
+                await ctx.reply(`❌ ${msg}`, {
+                    reply_markup: { inline_keyboard: [[{ text: '🔄 Resend code', callback_data: 'verify:resend' }]] },
+                });
             } else {
                 setOnboardingState(ctx.from!.id, 'awaiting_email');
                 onboardSessions.delete(chatId);
