@@ -63,7 +63,11 @@ function getDemoMinutesUsed(telegramId: number): number {
 
 function flushDemoMinutes(telegramId: number, t: { startedAt: number; accumulatedMs: number; baselineMin: number }): void {
     const liveMs = t.accumulatedMs + (t.startedAt > 0 ? Date.now() - t.startedAt : 0);
-    try { setProductMinutes(telegramId, 'auto_trading', t.baselineMin + Math.ceil(liveMs / 60_000)); } catch {}
+    try {
+        setProductMinutes(telegramId, 'auto_trading', t.baselineMin + Math.ceil(liveMs / 60_000));
+    } catch (e) {
+        logger.warn('auto', `flushDemoMinutes failed for ${telegramId}: ${e instanceof Error ? e.message : e}`);
+    }
 }
 
 function startDemoTimer(telegramId: number): void {
@@ -143,8 +147,14 @@ class AutoRunner {
 
     private get chatId(): number { return this.session.telegram_id; }
 
+    /** True once stop()/pause() has signalled the loop to exit. Lets the engine
+     *  tell a dying runner apart from a live one (audit H3). */
+    get isStopping(): boolean { return this.stopping; }
+
     private async connect(ssid: string): Promise<void> {
-        this.sdk = await createSdk(ssid);
+        // Bound the WS handshake — a hung connect would otherwise block start()
+        // forever and the loop-launch .catch could never fire (audit H2).
+        this.sdk = await withTimeout(createSdk(ssid), 60_000, 'connect');
     }
 
     /** Reconnect with exponential backoff. First retries the same SSID (transient
@@ -157,7 +167,7 @@ class AutoRunner {
             await new Promise(r => setTimeout(r, delay));
             try {
                 try { await this.sdk?.shutdown(); } catch { /* already gone */ }
-                this.sdk = await createSdk(ssid);
+                this.sdk = await withTimeout(createSdk(ssid), 60_000, 'reconnect');
                 return true;
             } catch {
                 logger.warn('auto', `reconnect attempt failed for ${this.chatId}`);
@@ -170,7 +180,7 @@ class AutoRunner {
             if (freshSsid) {
                 this.ssid = freshSsid;
                 try { await this.sdk?.shutdown(); } catch { /* already gone */ }
-                this.sdk = await createSdk(freshSsid);
+                this.sdk = await withTimeout(createSdk(freshSsid), 60_000, 'reconnect');
                 logger.info('auto', `re-logged in for ${this.chatId} with a fresh SSID`);
                 return true;
             }
@@ -385,10 +395,13 @@ class AutoRunner {
                     hasOpen = positions.getOpenedPositions().length > 0;
                 } catch (err) {
                     const msg = err instanceof Error ? err.message : String(err);
-                    if (/^TIMEOUT:/i.test(msg)) {
-                        if (await this.maybeNotifyWsError(msg)) await this.reconnect(this.ssid);
+                    // Timeouts, auth expiry and WebSocket drops all mean the SDK is
+                    // unhealthy — reconnect now instead of silently treating it as
+                    // "no open position" and wasting an iteration (audit H1).
+                    if (/^TIMEOUT:|auth|ssid|unauthor|401|websocket|is closing|not open/i.test(msg)) {
+                        await this.reconnect(this.ssid);
                     }
-                    /* other errors: treat as none open; analysis will surface real errors */
+                    /* benign/unknown errors: treat as none open; analysis surfaces real issues */
                 }
                 if (hasOpen) {
                     await new Promise(r => setTimeout(r, 3000));
@@ -532,13 +545,20 @@ class AutoRunner {
         } finally {
             try { await this.sdk?.shutdown(); } catch { /* ignore */ }
             this.sdk = undefined;
-            const s = getAutoSession(this.chatId);
-            if (s?.status === 'running') setAutoSessionStatus(this.chatId, 'paused', 'loop_exited');
-            await this.renderStatus();
-            if (this.mode === 'demo') {
-                stopDemoTimer(this.chatId);
+            // If a replacement runner has already taken over (pause→resume race),
+            // this dying runner must NOT touch shared state — no status flip, no
+            // unregister of the new runner, no demo-timer stop (audit H3).
+            if (runners.get(this.chatId) === this) {
+                const s = getAutoSession(this.chatId);
+                if (s?.status === 'running') setAutoSessionStatus(this.chatId, 'paused', 'loop_exited');
+                await this.renderStatus();
+                if (this.mode === 'demo') {
+                    stopDemoTimer(this.chatId);
+                }
+                engineUnregister(this.chatId);
+            } else {
+                logger.info('auto', `superseded runner for ${this.chatId} exited quietly`);
             }
-            engineUnregister(this.chatId);
         }
     }
 }
@@ -565,7 +585,11 @@ export const autoEngine = {
 
     /** Start (or restart) the engine for a user whose session row is already 'running'. */
     start(telegramId: number, mode?: 'demo' | 'live'): boolean {
-        if (runners.has(telegramId)) return true;
+        // Reuse a LIVE runner; but if the existing one is already winding down
+        // (pause/stop in flight), fall through and replace it so resume() can't
+        // be swallowed and orphan the session (audit H3).
+        const existing = runners.get(telegramId);
+        if (existing && !existing.isStopping) return true;
         const session = getAutoSession(telegramId);
         if (!session || session.status !== 'running') return false;
         const ssid = ssidFor(telegramId);

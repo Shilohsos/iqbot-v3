@@ -192,20 +192,53 @@ db.exec(`
     trades_done         INTEGER NOT NULL DEFAULT 0,
     evaluations         INTEGER NOT NULL DEFAULT 0,
     pnl                 REAL    NOT NULL DEFAULT 0,
+    mode                TEXT    NOT NULL DEFAULT 'live',  -- demo | live
+    mg_active           INTEGER NOT NULL DEFAULT 0,       -- 1 = martingale sequence in progress
+    mg_next_amount      REAL    NOT NULL DEFAULT 0,       -- stake for the next gale round
+    status_msg_id       INTEGER,                          -- live status card message id
     last_error          TEXT,
     started_at          TEXT    NOT NULL DEFAULT (datetime('now')),
     last_trade_at       TEXT
   )
 `);
 
-// auto_trading_sessions lazy migration — add evaluations counter for existing DBs
+// auto_trading_sessions lazy migration — bring older DBs up to the current schema.
+// Every column added after the original DDL MUST have an ALTER here, or a fresh
+// deploy that later upgrades breaks with "no such column" (audit C1).
 try {
     const atsCols = (db.prepare("PRAGMA table_info(auto_trading_sessions)").all() as { name: string }[]).map(r => r.name);
     if (!atsCols.includes('evaluations'))
         db.exec('ALTER TABLE auto_trading_sessions ADD COLUMN evaluations INTEGER NOT NULL DEFAULT 0');
     if (!atsCols.includes('mode'))
         db.exec("ALTER TABLE auto_trading_sessions ADD COLUMN mode TEXT NOT NULL DEFAULT 'live'");
-} catch {}
+    if (!atsCols.includes('mg_active'))
+        db.exec('ALTER TABLE auto_trading_sessions ADD COLUMN mg_active INTEGER NOT NULL DEFAULT 0');
+    if (!atsCols.includes('mg_next_amount'))
+        db.exec('ALTER TABLE auto_trading_sessions ADD COLUMN mg_next_amount REAL NOT NULL DEFAULT 0');
+    if (!atsCols.includes('status_msg_id'))
+        db.exec('ALTER TABLE auto_trading_sessions ADD COLUMN status_msg_id INTEGER');
+} catch (e) {
+    console.error('[db] auto_trading_sessions migration failed:', e instanceof Error ? e.message : e);
+}
+
+// Clear orphaned martingale state on any non-running session at startup. A
+// stopped/paused session with mg_active=1 would otherwise fire a large recovery
+// trade if resumed (audit C3 — e.g. a 40,000 NGN pending stake).
+try {
+    db.exec("UPDATE auto_trading_sessions SET mg_active = 0, mg_next_amount = 0 WHERE status != 'running' AND mg_active = 1");
+} catch (e) {
+    console.error('[db] orphaned-martingale cleanup failed:', e instanceof Error ? e.message : e);
+}
+
+// Prune long-dead 'stopped' auto-trading sessions (terminal; a new run upserts a
+// fresh row). Paused sessions are kept — the user may resume them (audit M2).
+try {
+    db.exec("DELETE FROM auto_trading_sessions WHERE status = 'stopped' AND COALESCE(last_trade_at, started_at) < datetime('now', '-7 days')");
+} catch (e) {
+    console.error('[db] stale auto-session cleanup failed:', e instanceof Error ? e.message : e);
+}
+
+
 
 // Signal tracking — result checking at expiry, martingale progression
 db.exec(`
@@ -236,6 +269,18 @@ try {
     if (!stCols.includes('card_msg_id'))
         db.exec('ALTER TABLE signal_tracking ADD COLUMN card_msg_id INTEGER');
 } catch {}
+
+// Indexes for the hot query paths (audit M1). Created after the tables exist —
+// each in its own exec so one failure doesn't skip the rest.
+for (const idx of [
+    'CREATE INDEX IF NOT EXISTS idx_ats_status ON auto_trading_sessions(status)',
+    'CREATE INDEX IF NOT EXISTS idx_sigtrack_status_expiry ON signal_tracking(status, expiry_time)',
+    'CREATE INDEX IF NOT EXISTS idx_sigtrack_telegram ON signal_tracking(telegram_id)',
+    'CREATE INDEX IF NOT EXISTS idx_users_ssid_valid ON users(ssid_valid)',
+    'CREATE INDEX IF NOT EXISTS idx_users_access_level ON users(access_level)',
+]) {
+    try { db.exec(idx); } catch (e) { console.error('[db] index failed:', idx, e instanceof Error ? e.message : e); }
+}
 
 // ─── Templates, media library, onboarding tracking ───────────────────────────
 
@@ -1131,11 +1176,17 @@ export function recordAutoSessionEvaluation(telegramId: number, nextAssetIndex: 
 
 /** Persist martingale gale state so a restart can resume mid-sequence. */
 export function setAutoSessionMgState(telegramId: number, active: boolean, nextAmount?: number): void {
-    db.prepare(`
-        UPDATE auto_trading_sessions
-        SET mg_active = ?, mg_next_amount = ?
-        WHERE telegram_id = ?
-    `).run(active ? 1 : 0, nextAmount ?? 0, telegramId);
+    // Never throw: this is called from inside the auto-trading error handler, and a
+    // DB error here must not bypass reconnect/notify/circuit-breaker logic (audit C4).
+    try {
+        db.prepare(`
+            UPDATE auto_trading_sessions
+            SET mg_active = ?, mg_next_amount = ?
+            WHERE telegram_id = ?
+        `).run(active ? 1 : 0, nextAmount ?? 0, telegramId);
+    } catch (e) {
+        console.error(`[db] setAutoSessionMgState failed for ${telegramId}:`, e instanceof Error ? e.message : e);
+    }
 }
 
 // ── Signal tracking ──────────────────────────────────────────────────────────
