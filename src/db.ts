@@ -327,6 +327,15 @@ db.exec(`
 `);
 
 db.exec(`
+  CREATE TABLE IF NOT EXISTS pending_prompt (
+    telegram_id   INTEGER PRIMARY KEY,
+    last_msg_id   INTEGER,
+    next_run_at   TEXT,
+    variant       INTEGER NOT NULL DEFAULT 0
+  )
+`);
+
+db.exec(`
   CREATE TABLE IF NOT EXISTS onboarding_tracking (
     telegram_id       INTEGER PRIMARY KEY,
     entry_sent_at     TEXT,
@@ -713,6 +722,7 @@ export interface TradeRecord {
     martingale_run?: string;
     external_id?: number;
     created_at?: string;
+    rounds?: number;   // martingale depth (1 = no recovery, 2+ = had recoveries)
 }
 
 export interface TradeStats {
@@ -756,6 +766,7 @@ export function getRecentTrades(limit = 10, telegramId?: number): TradeRecord[] 
                 MAX(created_at) AS created_at,
                 SUM(pnl)        AS pnl,
                 telegram_id,
+                COUNT(*)        AS rounds,
                 (SELECT pair      FROM trades t2 WHERE t2.martingale_run = t1.martingale_run ORDER BY t2.created_at DESC LIMIT 1) AS pair,
                 (SELECT direction FROM trades t2 WHERE t2.martingale_run = t1.martingale_run ORDER BY t2.created_at DESC LIMIT 1) AS direction,
                 (SELECT amount    FROM trades t2 WHERE t2.martingale_run = t1.martingale_run ORDER BY t2.created_at DESC LIMIT 1) AS amount,
@@ -764,10 +775,10 @@ export function getRecentTrades(limit = 10, telegramId?: number): TradeRecord[] 
             WHERE martingale_run IS NOT NULL
             GROUP BY martingale_run
             UNION ALL
-            SELECT CAST(id AS TEXT) AS martingale_run, created_at, pnl, telegram_id, pair, direction, amount, status
+            SELECT CAST(id AS TEXT) AS martingale_run, created_at, pnl, telegram_id, 1 AS rounds, pair, direction, amount, status
             FROM trades WHERE martingale_run IS NULL
         )
-        SELECT NULL AS id, telegram_id, pair, direction, amount, status, pnl, NULL AS trade_id, NULL AS error, martingale_run, created_at
+        SELECT NULL AS id, telegram_id, pair, direction, amount, status, pnl, NULL AS trade_id, NULL AS error, martingale_run, created_at, rounds
         FROM circles
         ${whereClause}
         ORDER BY created_at DESC
@@ -3032,4 +3043,35 @@ export function getMarketPulseStats(): Record<string, number | string> {
         funded_users:   fundedUsers,
         recent_trades:  recentTrades,
     };
+}
+
+// ─── Pending prompt cycle ────────────────────────────────────────────────────
+
+/** Users stuck at awaiting_user_id — started onboarding, never sent their ID. */
+export function getAwaitingUserIdUsers(): Array<{ telegram_id: number }> {
+    return db.prepare(`
+        SELECT telegram_id FROM users
+        WHERE approval_status = 'pending'
+          AND onboarding_state = 'awaiting_user_id'
+        ORDER BY created_at ASC
+    `).all() as Array<{ telegram_id: number }>;
+}
+
+export function getPendingPrompt(telegramId: number): { last_msg_id: number | null; next_run_at: string | null; variant: number } | undefined {
+    return db.prepare('SELECT last_msg_id, next_run_at, variant FROM pending_prompt WHERE telegram_id = ?').get(telegramId) as any;
+}
+
+export function upsertPendingPrompt(telegramId: number, last_msg_id: number | null, next_run_at: string, variant: number): void {
+    db.prepare(`
+        INSERT INTO pending_prompt (telegram_id, last_msg_id, next_run_at, variant)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(telegram_id) DO UPDATE SET
+            last_msg_id = excluded.last_msg_id,
+            next_run_at = excluded.next_run_at,
+            variant      = excluded.variant
+    `).run(telegramId, last_msg_id, next_run_at, variant);
+}
+
+export function getPendingPromptDueUsers(): Array<{ telegram_id: number }> {
+    return db.prepare(`SELECT telegram_id FROM pending_prompt WHERE next_run_at IS NOT NULL AND next_run_at <= datetime('now')`).all() as any;
 }

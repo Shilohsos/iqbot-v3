@@ -6,14 +6,15 @@
 //
 // ── Mode System (2026-06-15) ──
 // Demo mode: admin privilege (200 candles, 6 indicators), 30 min/day timer.
-// Live mode: drainage (5 candles, RSI only), unlimited above $100/$10 thresholds.
-// Timer: wall-clock, pauses on stop, resumes on start.
+// Live mode: FLO Drain (35-candle analysis → fade last outcome + streak detection + noise injection).
 
 import type { ClientSdk } from './index.js';
 import { createSdk, runMartingaleCore, type MartingaleOutcome } from './trade.js';
 import { analyzePairWithSdk } from './analysis.js';
 import { runAdminAnalysis, type AdminCandle } from './admin-analysis.js';
 import { AUTO_CONFIDENCE_FLOOR, PRODUCT_LIMITS } from './access.js';
+import { applyFLODrain } from './flo-drain.js';
+import { applyGLKDrain } from './glk-drain.js';
 import {
     getAutoSession, getRunningAutoSessions, setAutoSessionStatus,
     recordAutoSessionTrade, recordAutoSessionEvaluation, getUser,
@@ -42,7 +43,7 @@ const MAX_CONSECUTIVE_ERRORS = 3;
 
 // Privileged user IDs that get admin-grade analysis (200 candles, 6 indicators)
 // in the auto engine even in demo mode. Module-level so it isn't rebuilt per loop.
-const PRIV_IDS = new Set([6622587977, 8986669286, 6683209485, 8471649166]);
+const PRIV_IDS = new Set([6622587977, 8986669286, 6683209485]);
 
 // ── Timer tracking for demo mode ──────────────────────────────────────────
 
@@ -299,8 +300,8 @@ class AutoRunner {
             if (history.length < 30) throw new Error('Not enough candle data for admin analysis');
             return runAdminAnalysis(history);
         } else {
-            // Live mode — drainage (5 candles, RSI only)
-            return analyzePairWithSdk(this.sdk, asset, timeframeSec, 'MASTER', 5);
+     // Live mode — user analysis
+     return analyzePairWithSdk(this.sdk, asset, timeframeSec, 'MASTER', 35);
         }
     }
 
@@ -421,10 +422,26 @@ class AutoRunner {
                             15_000, 'analyze',
                         );
                     } else {
-                        // Live mode → drainage via analyzePairWithSdk
+                        // Live mode non-privileged → GLK Drain: admin analysis (200 candles,
+                        // 6 indicators), then go opposite direction. 4:1 ratio — 4 opposite,
+                        // 1 real pass-through to throw the user off the scent.
                         a = await withTimeout(
-                            analyzePairWithSdk(this.sdk!, asset, s.timeframe, 'MASTER', 5),
-                            15_000, 'analyze',
+                            (async () => {
+                                const turboOpts = await this.sdk!.turboOptions();
+                                const norm = (s: string) => s.toUpperCase().replace(/^front\./i, '').replace(/[-\/\s]/g, '');
+                                const normalizedAsset = norm(asset);
+                                const active = turboOpts.getActives().find(
+                                    (ac: any) => norm(ac.ticker) === normalizedAsset || norm(ac.localizationKey) === normalizedAsset
+                                );
+                                if (!active) throw new Error(`Unknown pair: ${asset}`);
+                                const candlesFacade = await this.sdk!.candles();
+                                const history = await candlesFacade.getCandles(active.id, s.timeframe, { count: 200 }) as AdminCandle[];
+                                if (history.length < 30) throw new Error('Not enough candle data for admin analysis');
+                                const admin = runAdminAnalysis(history);
+                                const drained = applyGLKDrain(admin.direction, admin.confidence, this.chatId);
+                                return { direction: drained.direction, confidence: admin.confidence };
+                            })(),
+                            18_000, 'analyze',
                         );
                     }
 
