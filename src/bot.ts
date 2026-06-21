@@ -1442,7 +1442,7 @@ async function runMartingale(
                     return;
                 }
             } else if (/WebSocket.*clos|ws.*clos|socket.*clos/i.test(err instanceof Error ? err.message : String(err)) && !authRetried) {
-                // WebSocket died mid-trade — rebuild SDK and treat as loss.
+                // WebSocket died mid-trade — rebuild SDK and treat as a loss.
                 // Don't abandon the chain just because the connection dropped.
                 authRetried = true;
                 const errMsg = err instanceof Error ? err.message : String(err);
@@ -1458,11 +1458,9 @@ async function runMartingale(
                         activeSsid = freshSsid;
                     } catch { /* rebuild failed */ }
                 }
-                // Treat as loss, continue recovery
-                logLines[logLines.length - 1] = `⚡ Trade 1|🔴 ${fmtMoney(currentAmount, currency)} → ${errMsg}`;
-                await syncLog();
-                totalPnl -= currentAmount;
-                addUserSessionStats(ctx.from!.id, 1, -currentAmount);
+                // Synthetic loss result — the fall-through (roundPnl, session stats,
+                // log line, and the ERROR block below) does all the accounting ONCE.
+                // Don't deduct totalPnl / record stats here or it double-counts.
                 result = { status: 'ERROR', error: errMsg, pnl: 0, tradeId: 0, pair: '', direction: '', amount: 0 };
                 // Fall through to LOSS path below
             } else {
@@ -1507,8 +1505,8 @@ async function runMartingale(
             // Round 1 = direct win (L11a); round 2+ = comeback (L11b)
             await sendRoundImage(round === 1 ? 'L11a.png' : 'L11b.png');
             const winReply = await ctx.reply(
-                `🏆 +${fmtMoney(result.pnl, currency)} added to your balance.\\n\\n` +
-                (round > 1 ? `Recovery complete.\\n\\n` : '') +
+                `🏆 +${fmtMoney(result.pnl, currency)} added to your balance.\n\n` +
+                (round > 1 ? `Recovery complete.\n\n` : '') +
                 `💸 You just made +${fmtMoney(result.pnl, currency)}`,
                 { reply_markup: { inline_keyboard: [[{ text: '🔄 New Opportunity', callback_data: 'ui:trade' }]] } }
             );
@@ -1555,7 +1553,8 @@ async function runMartingale(
             // martingale engine running rather than leaving the user stranded.
             logLines[logLines.length - 1] = `⚡ Trade 1|🔴 ${fmtMoney(currentAmount, currency)} → ${result.error ?? result.status}`;
             await syncLog();
-            totalPnl -= currentAmount;
+            // totalPnl was already reduced by roundPnl (= -currentAmount) above; only
+            // record the session stat here (the WIN/LOSS/TIE block skips ERROR).
             addUserSessionStats(ctx.from!.id, 1, -currentAmount);
 
             // If the SDK WebSocket died (common after timeouts), rebuild it before
