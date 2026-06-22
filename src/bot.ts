@@ -5367,6 +5367,7 @@ bot.action(/^user_action:(approve|pause|reset_ssid|trades|message):(\d+)$/, asyn
 bot.command('connect', async ctx => {
     upgradeSessions.delete(ctx.chat.id);
     onboardSessions.delete(ctx.chat.id);
+    setOnboardingState(ctx.from!.id, null as any); // prevent onboarding state machine from hijacking /connect flow
     if (ctx.from!.id === getAdminId()) {
         connectSessions.set(ctx.chat.id, { step: 'admin_email' });
         await ctx.reply('👑 *Admin Trading Account*\n\nEnter your IQ Option email:', { parse_mode: 'Markdown' });
