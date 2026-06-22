@@ -1518,7 +1518,7 @@ async function runMartingale(
             logLines[lastIdx] = `⚡ Trade 1|⚪ ${fmtMoney(currentAmount, currency)} → ${fmtMoney(0, currency)}`;
         } else if (result.status === 'ERROR') {
             const errMsg = result.error ?? '';
-            if (/4100|4113|insufficient.*(funds|balance)|balance.*(insufficient|low|empty)|amount.*higher.*allowed/i.test(errMsg)) {
+            if (/4100|4112|4113|insufficient.*(funds|balance)|balance.*(insufficient|low|empty)|amount.*(higher|smaller).*allowed|minimum|smaller.*minimum/i.test(errMsg)) {
                 logLines[lastIdx] = `⚡ Trade 1|🚫 ${fmtMoney(currentAmount, currency)} → insufficient balance`;
                 await syncLog();
                 await ctx.reply(
