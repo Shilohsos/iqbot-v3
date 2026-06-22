@@ -15,6 +15,7 @@ import {
     godModeStakePct, godModeTimeframe, godModeGaleRounds, martingaleWorstCase, godModePickWorstAssets,
 } from './access.js';
 import { autoEngine, initAutoEngine } from './auto-trading.js';
+import { resumeH20Sessions } from './h20.js';
 import {
     setUserFundedBalance, getSignalUsage, incrementSignalUsage, getTotalSignalCount, incrementTotalSignalCount, getTotalSignalsToday,
     upsertAutoSession, getAutoSession,
@@ -7083,6 +7084,7 @@ setGiveawayReconnect(async (telegramId) => {
 autoEngine.restoreAll().catch(err => {
     console.error('[AUTO] Failed to restore auto-trading sessions:', err);
 });
+resumeH20Sessions();
 startAutoBroadcast(bot);
 seedFundingCycle();
 startFundingLoop(bot);
