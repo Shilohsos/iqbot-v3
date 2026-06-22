@@ -51,19 +51,33 @@ ${tone.styleGuide ? `\nSTYLE GUIDE (follow this precisely):\n${tone.styleGuide}`
 
     messages.push({ role: 'user', content: userPrompt });
 
-    const res = await fetch(`${DEEPSEEK_BASE_URL}/chat/completions`, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${DEEPSEEK_API_KEY}`,
-        },
-        body: JSON.stringify({
-            model: DEEPSEEK_MODEL,
-            messages,
-            max_tokens: 300,
-            temperature: 0.8,
-        }),
-    });
+    // Hard timeout so a stalled DeepSeek connection can't hang the caller (fix #3).
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30_000);
+    let res: Response;
+    try {
+        res = await fetch(`${DEEPSEEK_BASE_URL}/chat/completions`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${DEEPSEEK_API_KEY}`,
+            },
+            body: JSON.stringify({
+                model: DEEPSEEK_MODEL,
+                messages,
+                max_tokens: 300,
+                temperature: 0.8,
+            }),
+            signal: controller.signal,
+        });
+    } catch (err) {
+        if (err instanceof Error && err.name === 'AbortError') {
+            throw new Error('DeepSeek request timed out');
+        }
+        throw err;
+    } finally {
+        clearTimeout(timeoutId);
+    }
 
     if (!res.ok) {
         const errBody = await res.text();

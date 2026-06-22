@@ -265,6 +265,43 @@ function flushAdminNotifications(): void {
 
 const bot = new Telegraf(BOT_TOKEN, { handlerTimeout: Infinity });
 
+// ── Central send guard: topic-aware 400 handling + per-chat backoff (fixes #4/#5)
+// All send* calls funnel through telegram.callApi. A chat that returns repeated
+// 400s (e.g. a forum/topic channel needing message_thread_id, or a bad chat) is
+// suppressed for 5 minutes after >5 errors in 60s — stopping the retry/log spam
+// that was contributing to the event-loop backlog. We can't know the right
+// thread id, so per the directive we skip the chat rather than retry.
+const sendErrWindow = new Map<string, number[]>();
+const sendSuppressedUntil = new Map<string, number>();
+{
+    const origCallApi = bot.telegram.callApi.bind(bot.telegram) as (...args: any[]) => Promise<any>;
+    (bot.telegram as any).callApi = async (method: string, payload: any, ...rest: any[]) => {
+        const chatId = (method?.startsWith('send') && payload?.chat_id != null) ? String(payload.chat_id) : null;
+        if (chatId) {
+            const until = sendSuppressedUntil.get(chatId) ?? 0;
+            if (Date.now() < until) {
+                throw new Error(`[send-guard] chat ${chatId} suppressed after repeated 400s`);
+            }
+        }
+        try {
+            return await origCallApi(method, payload, ...rest);
+        } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            if (chatId && /\b400\b|bad request|topic must be specified|thread not found|chat not found/i.test(msg)) {
+                const now = Date.now();
+                const arr = (sendErrWindow.get(chatId) ?? []).filter(t => now - t < 60_000);
+                arr.push(now);
+                sendErrWindow.set(chatId, arr);
+                if (arr.length > 5 && (sendSuppressedUntil.get(chatId) ?? 0) < now) {
+                    sendSuppressedUntil.set(chatId, now + 5 * 60_000);
+                    console.error(`[send-guard] suppressing chat ${chatId} for 5min after ${arr.length} 400s in 60s: ${msg}`);
+                }
+            }
+            throw err;
+        }
+    };
+}
+
 // ─── Channel integration ──────────────────────────────────────────────────────
 setupChannelHandlers(bot);
 
@@ -7047,6 +7084,26 @@ if (countFabricatedTraders() === 0) {
 }
 
 const backgroundIntervals: ReturnType<typeof setInterval>[] = [];
+
+// ── Heartbeat + hang watchdog (fix #1) ──────────────────────────────────────
+// The heartbeat logs every 60s (external log-based health checks can grep it)
+// and stamps lastHeartbeat. The watchdog runs on a SEPARATE shorter interval and
+// force-exits (PM2 restarts) if the heartbeat hasn't advanced in 2 minutes — i.e.
+// the event loop stalled long enough to miss two beats. Note: a 100%-CPU-pegged
+// loop can't self-restart (no timer fires); this catches the common case where
+// everything is stuck awaiting a hung promise but the loop itself still ticks.
+let lastHeartbeat = Date.now();
+backgroundIntervals.push(setInterval(() => {
+    lastHeartbeat = Date.now();
+    logger.info('heartbeat', 'alive');
+}, 60_000));
+backgroundIntervals.push(setInterval(() => {
+    const stalledMs = Date.now() - lastHeartbeat;
+    if (stalledMs > 120_000) {
+        console.error(`[watchdog] event loop stalled ${Math.round(stalledMs / 1000)}s — exiting for PM2 restart`);
+        process.exit(1);
+    }
+}, 30_000));
 
 backgroundIntervals.push(setInterval(() => {
     const due = getFabricatedTradersDueForUpdate();

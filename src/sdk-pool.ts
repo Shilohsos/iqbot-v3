@@ -97,11 +97,21 @@ class UserSdkPool {
     async shutdown(userId: number): Promise<void> {
         const entry = this.entries.get(userId);
         if (entry) {
+            // Delete from the map FIRST: a hung disconnect must not keep the entry
+            // around for cleanup() to re-process, and callers awaiting shutdown()
+            // (e.g. get() on a stale entry) must never block on it (fix #2).
+            this.entries.delete(userId);
             if (entry.connState && entry.onStateChanged) {
                 try { entry.connState.unsubscribeOnStateChanged(entry.onStateChanged); } catch {}
             }
-            try { await entry.sdk.shutdown(); } catch {}
-            this.entries.delete(userId);
+            // Bound the disconnect to 5s — a stuck WebSocket teardown can't freeze
+            // the event loop or block a mass eviction.
+            try {
+                await Promise.race([
+                    entry.sdk.shutdown().catch(() => {}),
+                    new Promise<void>(resolve => setTimeout(resolve, 5_000)),
+                ]);
+            } catch { /* ignore */ }
         }
         this.pending.delete(userId);
     }
