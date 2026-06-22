@@ -117,15 +117,18 @@ function computeRSI(closes: number[], period: number): number {
     for (let i = 1; i < closes.length; i++) {
         changes.push(closes[i] - closes[i - 1]);
     }
+    // Cap effective period to available data — prevents NaN with <period candles
+    const effPeriod = Math.min(period, changes.length);
+    if (effPeriod === 0) return 50; // neutral
     let avgGain = 0;
     let avgLoss = 0;
-    for (let i = 0; i < period; i++) {
+    for (let i = 0; i < effPeriod; i++) {
         if (changes[i] > 0) avgGain += changes[i];
-        else avgLoss += -changes[i];
+        else                avgLoss += -changes[i];
     }
-    avgGain /= period;
-    avgLoss /= period;
-    for (let i = period; i < changes.length; i++) {
+    avgGain /= effPeriod;
+    avgLoss /= effPeriod;
+    for (let i = effPeriod; i < changes.length; i++) {
         const gain = changes[i] > 0 ? changes[i] : 0;
         const loss = changes[i] < 0 ? -changes[i] : 0;
         avgGain = (avgGain * (period - 1) + gain) / period;

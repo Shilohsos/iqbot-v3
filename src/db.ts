@@ -876,6 +876,7 @@ export interface UserRecord {
     signals_date?: string | null;
     funded_balance_usd?: number | null;
     total_signals_used?: number | null;
+    ui_disabled?: number | null;
 }
 
 export interface AutoTradingSession {

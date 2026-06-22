@@ -203,6 +203,7 @@ export function broadcastActionKeyboard(): IKMarkup {
             [{ text: '⚡ Upgrade Access',   callback_data: 'broadcast_action:upgrade' }],
             [{ text: '📞 Contact Admin',   callback_data: 'broadcast_action:contact' }],
             [{ text: '💰 Fund Account',    callback_data: 'broadcast_action:fund' }],
+            [{ text: '🛥️ Yacht Club',    callback_data: 'broadcast_action:yacht' }],
             [{ text: '❓ Help & FAQ',     callback_data: 'broadcast_action:help' }],
         ],
     };

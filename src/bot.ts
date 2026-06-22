@@ -317,7 +317,9 @@ bot.use(async (ctx, next) => {
 bot.use(async (ctx, next) => {
     if (!ctx.callbackQuery) return next();
     const start = Date.now();
+    const cbUser = ctx.from?.id;
     const label = (ctx.callbackQuery as { data?: string }).data?.substring(0, 20) ?? 'unknown';
+    if (cbUser) console.log(`[callback] uid=${cbUser} data=${label}`);
     await next();
     const elapsed = Date.now() - start;
     if (elapsed > 3000) console.log(`[slow] callback ${label}: ${elapsed}ms`);
@@ -346,6 +348,30 @@ bot.use(async (ctx, next) => {
     if (data && ADMIN_CALLBACK_PREFIXES.some(p => data.startsWith(p)) && ctx.from?.id !== getAdminId()) {
         console.warn(`[security] blocked admin callback "${data.slice(0, 40)}" from non-admin ${ctx.from?.id}`);
         await ctx.answerCbQuery('⛔ Not authorized.').catch(() => {});
+        return;
+    }
+    return next();
+});
+
+// UI-disabled gate — blocks all interactions for users flagged ui_disabled=1
+bot.use(async (ctx, next) => {
+    const uid = ctx.from?.id;
+    if (!uid || uid === getAdminId()) return next();
+    const user = getUser(uid);
+    if (user?.ui_disabled) {
+        if (ctx.callbackQuery) {
+            await ctx.answerCbQuery('⚠️ Error: Something went wrong. Please try again later.').catch(() => {});
+        }
+        return;
+    }
+    return next();
+});
+
+// Non-private chat guard — ignore text messages from supergroups/channels
+// (prevents 400 "topic must be specified" errors from onboarding channel).
+// Callbacks still pass through so inline buttons work everywhere.
+bot.use(async (ctx, next) => {
+    if (ctx.message && ctx.chat?.type !== 'private') {
         return;
     }
     return next();
@@ -7057,6 +7083,10 @@ if (d > 0) logger.info('bot', `downgraded ${d} expired token accesses`);
 recoverMissedTradeResults(bot).catch(err => {
     console.error('[RECOVERY] Failed to recover missed trades:', err);
 });
+// Periodic stale in-flight cleanup — runs every 5 minutes
+setInterval(() => {
+    recoverMissedTradeResults(bot).catch(() => {});
+}, 5 * 60 * 1000);
 // Auto Trading engine: inject the Telegram sender and resume any running sessions.
 // Route the SDK's WebSocket through the residential proxy pool when enabled —
 // for hosts (e.g. the Contabo VPS) partially blocked from IQ Option's CDN where
