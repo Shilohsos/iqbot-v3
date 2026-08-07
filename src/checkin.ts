@@ -66,7 +66,15 @@ function saveGoal(telegramId: number, goalDate: string, target: number, currency
 }
 
 /** Next batch of approved users who haven't been sent this window+date yet. */
-function getPendingBatch(win: string, date: string, limit: number): number[] {
+function getPendingBatch(win: string, date: string, limit: number, allowedIds?: ReadonlySet<number>): number[] {
+    const params: (string | number)[] = [date, win];
+    let allowedSql = '';
+    if (allowedIds && allowedIds.size > 0) {
+        const ids = [...allowedIds];
+        allowedSql = ` AND u.telegram_id IN (${ids.map(() => '?').join(',')})`;
+        params.push(...ids);
+    }
+    params.push(limit);
     return (db.prepare(`
         SELECT u.telegram_id AS telegram_id
         FROM users u
@@ -74,10 +82,10 @@ function getPendingBatch(win: string, date: string, limit: number): number[] {
           AND NOT EXISTS (
               SELECT 1 FROM checkin_sent cs
               WHERE cs.telegram_id = u.telegram_id AND cs.checkin_date = ? AND cs.window = ?
-          )
+          )${allowedSql}
         ORDER BY u.telegram_id
         LIMIT ?
-    `).all(date, win, limit) as { telegram_id: number }[]).map(r => r.telegram_id);
+    `).all(...params) as { telegram_id: number }[]).map(r => r.telegram_id);
 }
 
 function getTodayStats(telegramId: number): { n: number; w: number; l: number; net: number } {
@@ -306,10 +314,11 @@ async function sendCheckin(bot: Telegraf, telegramId: number, win: WindowName, d
 async function tick(bot: Telegraf): Promise<void> {
     const cur = currentWindowIdentity();
     const maintenanceOn = db.prepare("SELECT value FROM config WHERE key = 'maintenance_gate'").get() as { value: string } | undefined;
-    let batch = getPendingBatch(cur.name, cur.date, BATCH_SIZE);
-    if (maintenanceOn?.value === '1') {
-        batch = batch.filter(uid => MAINTENANCE_ALLOWED_IDS.has(uid));
-    }
+    // Gate-aware: pass the allowlist INTO the SQL so the LIMIT applies AFTER the
+    // filter. (Old code filtered after LIMIT 30 — the allowlisted IDs have large
+    // telegram_ids and never made the first 30, so nothing ever sent.)
+    let batch = getPendingBatch(cur.name, cur.date, BATCH_SIZE,
+        maintenanceOn?.value === '1' ? MAINTENANCE_ALLOWED_IDS : undefined);
     if (batch.length === 0) return;
     let sent = 0;
     for (const uid of batch) {
