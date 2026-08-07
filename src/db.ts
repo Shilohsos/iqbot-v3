@@ -469,6 +469,11 @@ db.exec(`
   )
 `);
 
+// Upgrade-token grandfather reset date (DIRECTIVE-UPGRADE-TOKEN-SYSTEM.md). Seeded
+// once — Master can change the value directly in DB without a build, and this
+// INSERT OR IGNORE will never clobber that override on subsequent boots.
+db.prepare("INSERT OR IGNORE INTO config (key, value) VALUES ('upgrade_token_reset_date', '2026-09-01')").run();
+
 db.exec(`
   CREATE TABLE IF NOT EXISTS broadcast_schedule (
     id           INTEGER PRIMARY KEY CHECK (id = 1),

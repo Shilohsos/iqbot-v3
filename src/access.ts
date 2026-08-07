@@ -135,18 +135,52 @@ export function getAccessLevel(fundedUsd: number): Product {
     return 'signals';
 }
 
+/** Info needed to apply the upgrade-token grandfather gate (DIRECTIVE-UPGRADE-TOKEN-SYSTEM.md). */
+export interface GrandfatherInfo {
+    /** The user's access_level in DB *before* this re-evaluation. */
+    currentAccessLevel?: string | null;
+    /** Value of the `upgrade_token_reset_date` config row, read fresh by the caller. */
+    resetDate?: string | null;
+}
+
+/** True while `today < resetDate` — the grandfather window is still open.
+ *  A missing/invalid reset date fails safe to "not active" (normal gating applies). */
+export function isGrandfatherWindowActive(resetDate: string | null | undefined): boolean {
+    if (!resetDate) return false;
+    const reset = new Date(resetDate);
+    if (isNaN(reset.getTime())) return false;
+    return new Date() < reset;
+}
+
 /**
  * Resolve effective access from a funded balance and an optional token grant.
  * The token can only ever raise access, never lower it — and a balance that
  * crosses a higher threshold also raises access. We take the max of the two.
  * If access_expires_at is set and in the past, the token grant is ignored.
+ *
+ * `grandfather` additionally keeps a pre-reset-date user at their current
+ * ai_trading/auto_trading level even if their balance no longer supports it
+ * (DIRECTIVE-UPGRADE-TOKEN-SYSTEM.md §2.2) — it never grants access a user
+ * didn't already have, and it never lowers access below what balance/token
+ * would otherwise produce.
  */
-export function resolveAccess(fundedUsd: number, tokenGrant?: Product | null, accessExpiresAt?: string | null): Product {
+export function resolveAccess(fundedUsd: number, tokenGrant?: Product | null, accessExpiresAt?: string | null, grandfather?: GrandfatherInfo | null): Product {
     const fromBalance = getAccessLevel(fundedUsd);
-    if (!tokenGrant) return fromBalance;
+    let best = fromBalance;
+
     // If token access has expired, ignore it and fall back to balance-based
-    if (accessExpiresAt && new Date(accessExpiresAt) < new Date()) return fromBalance;
-    return RANK[tokenGrant] > RANK[fromBalance] ? tokenGrant : fromBalance;
+    if (tokenGrant && !(accessExpiresAt && new Date(accessExpiresAt) < new Date())) {
+        if (RANK[tokenGrant] > RANK[best]) best = tokenGrant;
+    }
+
+    if (grandfather && isGrandfatherWindowActive(grandfather.resetDate)) {
+        const current = getProduct(grandfather.currentAccessLevel);
+        if ((current === 'ai_trading' || current === 'auto_trading') && RANK[current] > RANK[best]) {
+            best = current;
+        }
+    }
+
+    return best;
 }
 
 /** 14 days in milliseconds */

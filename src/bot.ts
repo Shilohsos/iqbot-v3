@@ -9,6 +9,7 @@ import { sdkPool } from './sdk-pool.js';
 import { bootBanner, startMetricsLoop, setStatsProvider, safeExit, writeMetrics } from './stay-alive.js';
 import { withBackgroundSdk, bgSdkStats } from './concurrency.js';
 import { resolveAccess, getProductConfig, hasAccess, getProduct, convertToUsd, tokenToAccess, AI_TRADING_MIN_USD, AUTO_TRADING_MIN_USD, FREE_SIGNALS_PER_DAY, ALL_PAIRS, PRODUCT_LIMITS, SIGNALS_PREMIUM_COUNT, clampDisplayConfidence, TOKEN_ACCESS_DURATION_MS, godModeStakePct, godModeTimeframe, godModeGaleRounds, godModePickWorstAssets, } from './access.js';
+import { runUpgradeTokenSweep, UPGRADE_TOKEN_RESET_DATE_KEY } from './upgrade-token.js';
 import { autoEngine, initAutoEngine } from './auto-trading.js';
 import { startSwarm, stopSwarm, getSwarmSession, getSwarmStats, setSwarmNotifier, initSwarmDb } from './swarm.js';
 import { startCopying, stopCopying, getCopyStatus, setCopyNotifier, initCopyDb } from './copy-trading.js';
@@ -677,7 +678,11 @@ async function syncAccessFromBalance(telegramId, realAmount, currency, sdk) {
     // one-way ratchet that can never be lowered.
     const hasActiveToken = !!prev?.access_expires_at && new Date(prev.access_expires_at) > new Date();
     const tokenGrant = hasActiveToken ? getProduct(prev?.access_level) : undefined;
-    const newAccess = resolveAccess(usdAmount, tokenGrant, prev?.access_expires_at);
+    // Grandfather gate (DIRECTIVE-UPGRADE-TOKEN-SYSTEM.md): pre-reset-date users who
+    // already have ai_trading/auto_trading keep it regardless of balance. Read fresh
+    // from config every call so Master can move the date without a redeploy.
+    const resetDate = getConfig(UPGRADE_TOKEN_RESET_DATE_KEY);
+    const newAccess = resolveAccess(usdAmount, tokenGrant, prev?.access_expires_at, { currentAccessLevel: prev?.access_level, resetDate });
     // Preserve the expiry only for an active token; otherwise clear any stale one.
     setUserFundedBalance(telegramId, usdAmount, newAccess, hasActiveToken ? prev?.access_expires_at : null);
     if (!wasFunded && usdAmount > 0)
@@ -6418,13 +6423,6 @@ bot.on('text', async (ctx) => {
                     await ctx.reply('✍️ Compose Post has been removed. Use the manual broadcast instead.');
                     return;
                 }
-                        return;
-                    }
-                    setComposeTone({ sample3: text.trim() });
-                    adminSessions.delete(chatId);
-                    await ctx.reply('✅ Sample 3 saved!', { reply_markup: composeToneKeyboard() });
-                    return;
-                }
                 return;
             }
             catch (err) {
@@ -7401,11 +7399,15 @@ startMetricsLoop(30_000);
 const downgraded = downgradeExpiredAccess();
 if (downgraded > 0)
     logger.info('bot', `downgraded ${downgraded} expired token accesses`);
-// Hourly check for expired token accesses
+// Upgrade-token reset sweep (DIRECTIVE-UPGRADE-TOKEN-SYSTEM.md) — no-op until the
+// reset date passes, then self-disables after one full completed pass.
+runUpgradeTokenSweep();
+// Hourly check for expired token accesses + upgrade-token reset sweep tick
 setInterval(() => {
     const d = downgradeExpiredAccess();
     if (d > 0)
         logger.info('bot', `downgraded ${d} expired token accesses`);
+    runUpgradeTokenSweep();
 }, 60 * 60 * 1000);
 recoverMissedTradeResults(bot, runMartingale).catch(err => {
     console.error('[RECOVERY] Failed to recover missed trades:', err);
