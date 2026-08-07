@@ -255,7 +255,19 @@ function buildRecommendation(liveUsd: number, liveNative: number, currency: stri
         }
     }
 
-    if (liveUsd < AI_TRADING_MIN_USD) {
+    // Grandfather gate (DIRECTIVE-UPGRADE-TOKEN-SYSTEM.md): pre-reset-date users
+    // who already hold ai_trading/auto_trading keep their level regardless of
+    // current balance — same rule as resolveAccess in access.ts. Without this the
+    // smart-flow card would show the practice/fund card to existing users whose
+    // live balance dropped below the new $100/$500 minimums.
+    const user = getUser(telegramId);
+    const resetDate = getConfig('upgrade_token_reset_date');
+    const windowActive = !!resetDate && !isNaN(new Date(resetDate).getTime()) && new Date() < new Date(resetDate);
+    const grandfatheredLevel = windowActive && (user?.access_level === 'ai_trading' || user?.access_level === 'auto_trading')
+        ? user.access_level
+        : null;
+
+    if (liveUsd < AI_TRADING_MIN_USD && !grandfatheredLevel) {
         return { tier: 'practice', stake: null, stakes: [], assets, timeframeSec, timeframesSec, autopilotEligible: false, currency, scanLiveUsd: liveUsd };
     }
     return {
@@ -265,7 +277,7 @@ function buildRecommendation(liveUsd: number, liveNative: number, currency: stri
         assets,
         timeframeSec,
         timeframesSec,
-        autopilotEligible: liveUsd >= AUTO_TRADING_MIN_USD,
+        autopilotEligible: liveUsd >= AUTO_TRADING_MIN_USD || grandfatheredLevel === 'auto_trading',
         currency,
         scanLiveUsd: liveUsd,
     };
