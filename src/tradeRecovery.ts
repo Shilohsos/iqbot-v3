@@ -68,8 +68,9 @@ export async function recoverMissedTradeResults(bot, runMartingaleFn) {
                     const galeRow = db.prepare("SELECT id, log_msg_id, current_round, effective_rounds, current_amount, base_amount, direction, balance_type, currency, timeframe_sec, total_pnl FROM gale_sessions WHERE telegram_id=? AND pair=? AND status IN ('active','resuming') ORDER BY id DESC LIMIT 1").get(row.telegram_id, row.pair);
                     if (galeRow && galeRow.log_msg_id) {
                         const emoji = dbStatus === 'WIN' ? '🟢' : dbStatus === 'LOSS' ? '' : '⚪';
+                        const strike = (s) => [...String(s)].map(c => c + '\u0336').join('');
                         const cardText = dbStatus === 'LOSS'
-                            ? `✦ Trade session\n✦ Trade ${galeRow.current_round}| ~~-${row.amount.toFixed(2)} ${currency}~~`
+                            ? `✦ Trade session\n✦ Trade ${galeRow.current_round}| ${strike(`-${row.amount.toFixed(2)} ${currency}`)}`
                             : `✦ Trade session\n✦ Trade ${galeRow.current_round}|${emoji} ${row.amount.toFixed(2)} ${currency} → ${dbStatus} ${pnlStr}`;
                         await bot.telegram.editMessageText(row.telegram_id, galeRow.log_msg_id, undefined, cardText).catch(() => {});
                     }

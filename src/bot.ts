@@ -1292,6 +1292,9 @@ async function runMartingale(ctx, ssid, pair, direction, amount, timeframeSec = 
         const runId = crypto.randomUUID();
         // Outer cushion only — TradeCore owns settle. Must exceed tf+120s wait + recover (~20s).
         const roundTimeoutMs = (timeframeSec + 120) * 1000 + 300_000;
+        // Subtle-loss display: strike a lost round via combining U+0336 so it renders
+        // in PLAIN text (the trade card has no parse_mode — Markdown ~~ never shows).
+        const strike = (s: string | number) => [...String(s)].map(c => c + '\u0336').join('');
         let currentAmount = amount;
         let totalPnl = 0;
         const logLines = ['✦ Trade session initialized…'];
@@ -1478,7 +1481,7 @@ async function runMartingale(ctx, ssid, pair, direction, amount, timeframeSec = 
                 logLines[lastIdx] = `✦ Trade ${round}|🟢 ${fmtMoney(currentAmount, currency)} → +${fmtMoney(winNet, currency)}`;
             }
             else if (result.status === 'LOSS') {
-                logLines[lastIdx] = `✦ Trade ${round}| ~~-${fmtMoney(currentAmount, currency)}~~`;
+                logLines[lastIdx] = `✦ Trade ${round}| ${strike(`-${fmtMoney(currentAmount, currency)}`)}`;
             }
             else if (result.status === 'TIE') {
                 logLines[lastIdx] = `✦ Trade ${round}|⚪ ${fmtMoney(currentAmount, currency)} → ${fmtMoney(0, currency)}`;
@@ -1765,7 +1768,7 @@ async function runMartingale(ctx, ssid, pair, direction, amount, timeframeSec = 
                     continue;
                 }
                 // Other ERROR that may have placed a trade — treat as loss for recovery
-                logLines[logLines.length - 1] = `✦ Trade ${round}| ~~-${fmtMoney(currentAmount, currency)}~~`;
+                logLines[logLines.length - 1] = `✦ Trade ${round}| ${strike(`-${fmtMoney(currentAmount, currency)}`)}`;
                 await syncLog();
                 totalPnl += -currentAmount; // only now — buy failures never reach here
                 addUserSessionStats(ctx.from.id, 1, -currentAmount);

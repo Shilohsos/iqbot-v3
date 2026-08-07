@@ -189,6 +189,7 @@ class AutoRunner {
         const idx = (s.current_asset_index % this.assets.length) + 1;
         const wins = s.seq_wins ?? 0;
         const losses = s.seq_losses ?? 0;
+        const scanned = (s.trades_done ?? 0) + (s.evaluations ?? 0);
         const asset = this.assets[s.current_asset_index % this.assets.length];
         const statusEmoji = s.status === 'running' ? '🟢 Live' : s.status === 'paused' ? '🟡 Paused' : '⚪ Stopped';
         const modeLabel = this.mode === 'demo' ? '✦ Demo' : '✦ Live';
@@ -196,7 +197,7 @@ class AutoRunner {
             `✦ *Autopilot* · ${statusEmoji} · ${modeLabel}`,
             ``,
             `${asset} (${idx}/${this.assets.length}) · ${tfLabel(s.timeframe)} · ${s.gale_rounds}-round recovery`,
-            `Trades: ${s.trades_done}   Scanned: ${s.evaluations}   Won: ${wins}   Lost: ${losses}`,
+            `Trades: ${s.trades_done}   Scanned: ${scanned}   Won: ${wins}   Lost: ${losses}`,
             last ? `_${last}_` : '',
         ].filter(Boolean).join('\n');
         const extra = {
@@ -598,9 +599,9 @@ class AutoRunner {
                     recordAutoSessionTrade(this.chatId, nextIdx, outcome.totalPnl, outcome.status);
                     const s2 = getAutoSession(this.chatId);
                     console.log(`[auto-trade] uid=${this.chatId} AFTER record: sessionPnl=${s2?.pnl} trades=${s2?.trades_done} wins=${s2?.seq_wins} losses=${s2?.seq_losses}`);
-                    const emoji = outcome.status === 'WIN' ? '🟢' : outcome.status === 'TIE' ? '⚪' : '🔴';
+                    const emoji = outcome.status === 'WIN' ? '🟢' : outcome.status === 'TIE' ? '⚪' : '';
                     const outcomeLabel = outcome.status === 'WIN' ? 'Won' : outcome.status === 'TIE' ? 'Draw' : 'Lost';
-                    await this.renderStatus(`${emoji} ${outcomeLabel}`);
+                    await this.renderStatus(`${emoji} ${outcomeLabel}`.trim());
                 }
                 await new Promise(r => setTimeout(r, msToNextCandle(s.timeframe)));
             }
