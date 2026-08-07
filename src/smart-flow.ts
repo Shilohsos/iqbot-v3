@@ -398,7 +398,9 @@ async function startWithSetup(ctx: any): Promise<void> {
 /** Step 2 of 2 — stake selection (three recommendations + set my own). */
 async function chooseStake(ctx: any, uid: number, rec: SmartRecommendation, tfSec: number): Promise<void> {
     pendingTfChoice.delete(uid);
-    pendingCustomStake.delete(uid);
+    // NOTE: pendingCustomStake must NOT be cleared here — the `smart:tf` handler
+    // saves the selection immediately before calling this, and `smart:stake`
+    // reads it back on the next tap. Deleting it here breaks every stake button.
     const stakeButtons = rec.stakes.map(s => [{ text: `✦ ${fmtWholeMoney(s, rec.currency)}`, callback_data: `smart:stake:${s}` }]);
     stakeButtons.push([{ text: '⟡ Set my own', callback_data: 'smart:stake:custom' }]);
     await ctx.reply(`✦ Choose your stake per trade\n· Timeframe: ${tfLabel(tfSec)}`, { reply_markup: { inline_keyboard: stakeButtons } }).catch(() => { });
