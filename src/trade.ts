@@ -122,6 +122,9 @@ export interface MartingaleOutcome {
     status: 'WIN' | 'LOSS' | 'TIE' | 'ERROR' | 'TIMEOUT' | 'NO_FILL';
     totalPnl: number;
     rounds: number;
+    /** Reason string for NO_FILL (e.g. "market is closed right now") so callers
+     *  can distinguish a closed pair from a real connection error. */
+    error?: string;
 }
 
 /**
@@ -159,6 +162,7 @@ export async function runMartingaleCore(
         status,
         totalPnl: outcome.totalPnl,
         rounds: outcome.rounds,
+        error: outcome.last?.error ?? undefined,
     };
 }
 

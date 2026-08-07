@@ -364,6 +364,7 @@ class AutoRunner {
     async loop(ssid) {
         this.ssid = ssid;
         let consecutiveErrors = 0;
+        let closedStreak = 0; // consecutive closed-market rotations (pause when ALL pairs closed)
         logger.info('auto', `loop started for ${this.chatId} (mode=${this.mode})`);
         try {
             while (!this.stopping) {
@@ -562,19 +563,37 @@ class AutoRunner {
                 console.log(`[auto-trade] uid=${this.chatId} outcome=${outcome.status} totalPnl=${outcome.totalPnl} rounds=${outcome.rounds} mode=${this.mode}`);
                 const isError = outcome.status === 'ERROR' || outcome.status === 'TIMEOUT' || outcome.status === 'NO_FILL';
                 if (isError) {
-                    // A settled error/timeout: rotate to the next asset (don't count it
-                    // as a trade) and bound consecutive failures (Issue 1).
+                    // Rotate to the next asset (don't count it as a trade).
                     recordAutoSessionEvaluation(this.chatId, nextIdx);
-                    consecutiveErrors++;
-                    logger.warn('auto', `trade ${outcome.status} for ${this.chatId} — consecutive=${consecutiveErrors}`);
-                    if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
-                        setAutoSessionStatus(this.chatId, 'paused', 'repeated_timeouts');
-                        await this.notify('✦ Autopilot paused — trades kept timing out (likely a temporary connection issue). Tap Resume to try again.', true);
-                        break;
+                    // A closed market is NOT an error: skip that pair and move on.
+                    // Only real connection/trade errors count against the pause
+                    // budget, so a session with one open pair keeps trading while
+                    // its other pairs are in their closed window.
+                    const closedNow = outcome.status === 'NO_FILL' &&
+                        /market is closed|unknown pair|not available|no .*instrument available|no .*balance found/i.test(outcome.error ?? '');
+                    if (closedNow) {
+                        closedStreak++;
+                        logger.warn('auto', `pair ${asset} closed for ${this.chatId} — rotating (${closedStreak}/${this.assets.length})`);
+                        if (closedStreak >= this.assets.length) {
+                            setAutoSessionStatus(this.chatId, 'paused', 'market_closed');
+                            await this.notify('✦ Autopilot paused — all selected pairs are closed right now (market hours). Resume when they open.', true);
+                            break;
+                        }
+                    }
+                    else {
+                        closedStreak = 0;
+                        consecutiveErrors++;
+                        logger.warn('auto', `trade ${outcome.status} for ${this.chatId} — consecutive=${consecutiveErrors}`);
+                        if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+                            setAutoSessionStatus(this.chatId, 'paused', 'repeated_timeouts');
+                            await this.notify('✦ Autopilot paused — trades kept timing out (likely a temporary connection issue). Tap Resume to try again.', true);
+                            break;
+                        }
                     }
                 }
                 else {
                     consecutiveErrors = 0;
+                    closedStreak = 0;
                     this.clearWsNotifyLock(); // connection recovered — allow one notice next time it drops
                     recordAutoSessionTrade(this.chatId, nextIdx, outcome.totalPnl, outcome.status);
                     const s2 = getAutoSession(this.chatId);
