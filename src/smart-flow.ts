@@ -30,6 +30,10 @@ const CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const BALANCE_DROP_RATIO = 0.5;
 /** Suggested stake as a fraction of the live balance. */
 const STAKE_PCT = 0.05;
+/** Three recommended stakes (low / suggested / high) as balance fractions. */
+const STAKE_PCTS = [0.03, 0.05, 0.07];
+/** Timeframe ladder for the two recommendations (seconds). */
+const TIMEFRAME_LADDER = [30, 60, 120, 300];
 /** History window for the most-traded pair / most-used timeframe. */
 const HISTORY_DAYS = 7;
 const SUGGESTED_ASSET_COUNT = 3;
@@ -54,8 +58,12 @@ export interface SmartRecommendation {
     tier: 'practice' | 'live';
     /** Suggested stake in account currency — null on the practice path. */
     stake: number | null;
+    /** Three selectable stakes (low / suggested / high) in account currency. */
+    stakes: number[];
     assets: string[];
     timeframeSec: number;
+    /** Two selectable timeframes (seconds). */
+    timeframesSec: number[];
     /** True at the Autopilot threshold, where the card offers the product choice. */
     autopilotEligible: boolean;
     currency: string;
@@ -133,6 +141,10 @@ type WizardStarter = (ctx: any, rec: SmartRecommendation) => Promise<void>;
 let scanner: Scanner | null = null;
 let wizardStarter: WizardStarter | null = null;
 
+/** In-flight selection state for the two-step start flow (timeframe → stake). */
+const pendingTfChoice = new Map<number, SmartRecommendation>();
+const pendingCustomStake = new Map<number, { rec: SmartRecommendation; timeframeSec: number; awaitingText?: boolean }>();
+
 /** Wired once at boot: bot.ts supplies the SDK balance + open-actives read. */
 export function setSmartFlowScanner(fn: Scanner): void { scanner = fn; }
 
@@ -170,15 +182,24 @@ function buildRecommendation(liveUsd: number, liveNative: number, currency: stri
         : DEFAULT_ASSETS;
     const assets = filterOpen(candidates, openPairs);
     const timeframeSec = history.timeframeSec ?? DEFAULT_TIMEFRAME_SEC;
+    // Two selectable timeframes: the user's (or default) one plus its neighbour
+    // on the ladder — never a duplicate.
+    const timeframesSec = TIMEFRAME_LADDER.includes(timeframeSec)
+        ? [timeframeSec, TIMEFRAME_LADDER[(TIMEFRAME_LADDER.indexOf(timeframeSec) + 1) % TIMEFRAME_LADDER.length]]
+        : [timeframeSec, DEFAULT_TIMEFRAME_SEC === timeframeSec ? 30 : DEFAULT_TIMEFRAME_SEC];
+    // Three selectable stakes around the 5% suggestion (3% / 5% / 7% of balance).
+    const stakes = STAKE_PCTS.map(pct => Math.max(1, Math.round(liveNative * pct)));
 
     if (liveUsd < AI_TRADING_MIN_USD) {
-        return { tier: 'practice', stake: null, assets, timeframeSec, autopilotEligible: false, currency, scanLiveUsd: liveUsd };
+        return { tier: 'practice', stake: null, stakes: [], assets, timeframeSec, timeframesSec, autopilotEligible: false, currency, scanLiveUsd: liveUsd };
     }
     return {
         tier: 'live',
         stake: Math.max(1, Math.round(liveNative * STAKE_PCT)),
+        stakes,
         assets,
         timeframeSec,
+        timeframesSec,
         autopilotEligible: liveUsd >= AUTO_TRADING_MIN_USD,
         currency,
         scanLiveUsd: liveUsd,
@@ -227,10 +248,11 @@ function buildCard(rec: SmartRecommendation, live: number | null, demo: number |
         lines.push('Practice mode and No-charge Signals stay open to you.');
     } else {
         lines.push('Product: ⟡ Private Trader');
-        lines.push(`Suggested stake: ${fmtWholeMoney(rec.stake ?? 0, rec.currency)} per trade`);
+        const stakeList = rec.stakes.length > 0 ? rec.stakes.map(s => fmtWholeMoney(s, rec.currency)).join(' · ') : fmtWholeMoney(rec.stake ?? 0, rec.currency);
+        lines.push(`Suggested stake: ${stakeList}`);
     }
     lines.push(`Suggested assets: ${rec.assets.join(' · ')}`);
-    lines.push(`Timeframe: ${tfLabel(rec.timeframeSec)}`);
+    lines.push(`Timeframes: ${rec.timeframesSec.map(tf => tfLabel(tf)).join(' · ')}`);
 
     if (rec.autopilotEligible) {
         lines.push('', 'Also available: ✦ Autopilot — hands-free, it runs the session for you.');
@@ -339,7 +361,9 @@ async function openSmartFlow(ctx: any): Promise<void> {
     await ctx.reply(text, { reply_markup: keyboard }).catch(() => { });
 }
 
-/** Start with this setup — seeds the existing wizard, never places a trade. */
+/** Start with this setup — lets the user pick one of two recommended timeframes
+ *  and one of three recommended stakes (or set their own) before handing off to
+ *  the existing wizard. Never places a trade. */
 async function startWithSetup(ctx: any): Promise<void> {
     const uid = ctx.from?.id;
     if (uid == null) return;
@@ -352,24 +376,67 @@ async function startWithSetup(ctx: any): Promise<void> {
 
     const rec = parseRec(readCache(uid)?.recommendations);
     if (!rec || rec.tier !== 'live' || !wizardStarter) {
-        // Recommendation gone (or practice tier) — fall back to the manual wizard
-        // rather than dead-ending.
         await ctx.reply('· That setup is no longer current.', {
             reply_markup: { inline_keyboard: [[{ text: '⟡ Choose manually', callback_data: 'ui:trade' }]] },
         }).catch(() => { });
         return;
     }
-    await wizardStarter(ctx, rec);
+    // Step 1 of 2 — timeframe selection (two recommendations).
+    pendingTfChoice.set(uid, rec);
+    const tfButtons = rec.timeframesSec.map(tf => [{ text: `⟡ ${tfLabel(tf)}`, callback_data: `smart:tf:${tf}` }]);
+    await ctx.reply('✦ Choose your timeframe', { reply_markup: { inline_keyboard: tfButtons } }).catch(() => { });
+}
+
+/** Step 2 of 2 — stake selection (three recommendations + set my own). */
+async function chooseStake(ctx: any, uid: number, rec: SmartRecommendation, tfSec: number): Promise<void> {
+    pendingTfChoice.delete(uid);
+    pendingCustomStake.delete(uid);
+    const stakeButtons = rec.stakes.map(s => [{ text: `✦ ${fmtWholeMoney(s, rec.currency)}`, callback_data: `smart:stake:${s}` }]);
+    stakeButtons.push([{ text: '⟡ Set my own', callback_data: 'smart:stake:custom' }]);
+    await ctx.reply(`✦ Choose your stake per trade\n· Timeframe: ${tfLabel(tfSec)}`, { reply_markup: { inline_keyboard: stakeButtons } }).catch(() => { });
+}
+
+/** Hand off to the wizard with the chosen stake + timeframe. */
+async function applyStake(ctx: any, uid: number, rec: SmartRecommendation, tfSec: number, stake: number): Promise<void> {
+    pendingCustomStake.delete(uid);
+    if (!wizardStarter) return;
+    await wizardStarter(ctx, { ...rec, stake, timeframeSec: tfSec });
 }
 
 /** Single router for every `smart:*` callback — registered once from bot.ts. */
 export async function handleSmartFlowCallback(ctx: any): Promise<void> {
     const data: string = ctx.callbackQuery?.data ?? '';
-    const action = data.split(':')[1];
+    const parts = data.split(':');
+    const action = parts[1];
+    const uid = ctx.from?.id;
     try {
         switch (action) {
             case 'open': return await openSmartFlow(ctx);
             case 'start': return await startWithSetup(ctx);
+            case 'tf': {
+                if (uid == null) return;
+                await ctx.answerCbQuery().catch(() => { });
+                const tfSec = parseInt(parts[2], 10);
+                const rec = pendingTfChoice.get(uid) ?? parseRec(readCache(uid)?.recommendations);
+                if (!rec || !isFinite(tfSec)) { await ctx.answerCbQuery('Session expired — start over.').catch(() => { }); return; }
+                pendingCustomStake.set(uid, { rec, timeframeSec: tfSec });
+                return await chooseStake(ctx, uid, rec, tfSec);
+            }
+            case 'stake': {
+                if (uid == null) return;
+                await ctx.answerCbQuery().catch(() => { });
+                const sel = pendingCustomStake.get(uid);
+                if (!sel) { await ctx.answerCbQuery('Session expired — start over.').catch(() => { }); return; }
+                const raw = parts[2];
+                if (raw === 'custom') {
+                    pendingCustomStake.set(uid, { rec: sel.rec, timeframeSec: sel.timeframeSec, awaitingText: true });
+                    await ctx.reply(`✦ Type your stake (${CURRENCY_SYMBOLS[sel.rec.currency] ?? '$'} numbers only):`).catch(() => { });
+                    return;
+                }
+                const stake = parseFloat(raw);
+                if (!isFinite(stake) || stake <= 0) { await ctx.answerCbQuery('Invalid amount — try again.').catch(() => { }); return; }
+                return await applyStake(ctx, uid, sel.rec, sel.timeframeSec, stake);
+            }
             default:
                 await ctx.answerCbQuery().catch(() => { });
         }
@@ -377,4 +444,21 @@ export async function handleSmartFlowCallback(ctx: any): Promise<void> {
         logger.error('smart-flow', `callback failed for action=${action}`, err);
         await ctx.answerCbQuery('Something went wrong. Try again.').catch(() => { });
     }
+}
+
+/** Text interceptor for the "Set my own" stake — wired in bot.ts's text handler
+ *  right after the check-in interceptor. Returns true when it consumed the text. */
+export async function tryHandleSmartFlowText(ctx: any): Promise<boolean> {
+    const uid = ctx.from?.id;
+    if (uid == null) return false;
+    const sel = pendingCustomStake.get(uid);
+    if (!sel || !sel.awaitingText) return false;
+    const text = (ctx.message?.text ?? '').trim();
+    const amount = parseFloat(text);
+    if (!isFinite(amount) || amount <= 0) {
+        await ctx.reply('Please enter a valid positive number (e.g. 75).').catch(() => { });
+        return true;
+    }
+    await applyStake(ctx, uid, sel.rec, sel.timeframeSec, amount);
+    return true;
 }
