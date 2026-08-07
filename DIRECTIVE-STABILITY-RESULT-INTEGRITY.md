@@ -49,6 +49,11 @@ Scope: AI Trading (bot.ts runMartingale), Auto Trading (trade.ts runMartingaleCo
 3. **Fix:** (a) extend the schema guard in `parseRec` to reject rows missing `assets` (forces rescan → fresh row), and (b) make the card renderer fall back to `['EURUSD-OTC']` when `assets` is missing/empty so a malformed row can never crash the card.
 4. Note: a temporary guard was authored and reverted — the fix must come from this directive, not a one-off patch.
 
+## Part 6 — Source/Dist Divergence Hazard (must be resolved as part of this pass)
+1. **Known divergence:** `dist/tradeRecovery.js` was patched directly (whole-dollar struck loss line + a local currency-symbol `sym` map) but `src/tradeRecovery.ts` was NOT updated. The bot runs from dist so the fix is live today — but any rebuild that recompiles tradeRecovery silently reverts it.
+2. **Fix:** mirror the dist patch into `src/tradeRecovery.ts` (same whole-dollar struck loss rendering, same local symbol map), then verify `node --check` on both files and that a rebuild keeps the behavior identical.
+3. **Rule for this pass:** every change must land in BOTH src/ and dist/ — the repo must never depend on a dist-only patch again.
+
 ## Verification Checklist (run before considering done)
 - [ ] No `catch {}` empty blocks in the trading paths listed above.
 - [ ] Every SDK call in the trading paths has a timeout (grep `withTimeout` in trade-core.ts, gale-engine.ts, trade.ts, signals tracking).
@@ -58,6 +63,7 @@ Scope: AI Trading (bot.ts runMartingale), Auto Trading (trade.ts runMartingaleCo
 - [ ] A simulated WebSocket death mid-chain retries same-stake, never doubles.
 - [ ] A missed settlement is resolved from position history; if the real result was WIN the session total is corrected and no gale was burned.
 - [ ] `smart:open` renders the setup card even when the cached recommendations row is missing `assets`.
+- [ ] `dist/tradeRecovery.js` and `src/tradeRecovery.ts` are identical in behavior (whole-dollar struck loss + symbol map); a rebuild does not revert the patch.
 - [ ] `npx tsc --noEmit` clean for changed modules; `node --check` clean on changed dist files.
 - [ ] PM2 restart with 0 in-flight trades; boot log free of SyntaxError/Cannot-find.
 
