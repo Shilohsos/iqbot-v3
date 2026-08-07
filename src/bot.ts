@@ -992,7 +992,7 @@ async function sendStartMenu(ctx) {
         const stats = getApprovalStats();
         await ctx.reply(`✦️ *Admin Dashboard*\n\n` +
             `✦ Users: ${stats.total} total | ✅ ${stats.approved} approved | ··· ${stats.pending} pending | ❌ ${stats.rejected} rejected\n` +
-            `· Signals used today: ${getTotalSignalsToday()}`, { parse_mode: 'Markdown', reply_markup: adminKeyboard(getConfig("admin_analysis_all") === "true") });
+            `· Signals used today: ${getTotalSignalsToday()}`, { parse_mode: 'Markdown', reply_markup: adminKeyboard(getConfig("admin_analysis_all") === "true", getConfig('maintenance_gate') === '1') });
         return;
     }
     const user = getUser(telegramId);
@@ -3921,7 +3921,7 @@ bot.command('admin', async (ctx) => {
     const sub = args[0];
     if (!sub) {
         const stats = getApprovalStats();
-        await ctx.reply(`✦️ *Admin Panel*\n\n✦ ${stats.total} users | ✅ ${stats.approved} approved | ··· ${stats.pending} pending | ❌ ${stats.rejected} rejected`, { parse_mode: 'Markdown', reply_markup: adminKeyboard(getConfig("admin_analysis_all") === "true") });
+        await ctx.reply(`✦️ *Admin Panel*\n\n✦ ${stats.total} users | ✅ ${stats.approved} approved | ··· ${stats.pending} pending | ❌ ${stats.rejected} rejected`, { parse_mode: 'Markdown', reply_markup: adminKeyboard(getConfig("admin_analysis_all") === "true", getConfig('maintenance_gate') === '1') });
         return;
     }
     if (sub === 'users') {
@@ -3991,7 +3991,7 @@ bot.action('admin:back', async (ctx) => {
     adminSessions.delete(ctx.chat.id);
     const stats = getApprovalStats();
     await ctx.reply(`✦️ *Admin Dashboard*\n\n` +
-        `✦ Users: ${stats.total} | ✅ ${stats.approved} | ··· ${stats.pending} | ❌ ${stats.rejected}`, { parse_mode: 'Markdown', reply_markup: adminKeyboard(getConfig("admin_analysis_all") === "true") });
+        `✦ Users: ${stats.total} | ✅ ${stats.approved} | ··· ${stats.pending} | ❌ ${stats.rejected}`, { parse_mode: 'Markdown', reply_markup: adminKeyboard(getConfig("admin_analysis_all") === "true", getConfig('maintenance_gate') === '1') });
 });
 // ─── Module 1: Today ─────────────────────────────────────────────────────────
 bot.action('admin:today', async (ctx) => {
@@ -5254,14 +5254,26 @@ bot.action(/^admin:analysis_confirm:(true|false)$/, async (ctx) => {
     const statusText = newState
         ? '🟢 Admin Analysis is now ON for everyone. All users get PRO multi-indicator analysis.'
         : '⚪ Admin Analysis is now OFF for non-privileged. Back to normal — privileged only.';
-    await ctx.editMessageText(`✅ *Done*\n\n${statusText}`, { parse_mode: 'Markdown', reply_markup: adminKeyboard(newState) });
+    await ctx.editMessageText(`✅ *Done*\n\n${statusText}`, { parse_mode: 'Markdown', reply_markup: adminKeyboard(newState, getConfig('maintenance_gate') === '1') });
+});
+bot.action('admin:gate_toggle', async (ctx) => {
+    await ctx.answerCbQuery().catch(() => { });
+    if (ctx.from?.id !== getAdminId())
+        return;
+    const current = getConfig('maintenance_gate') === '1';
+    const newState = current ? '0' : '1';
+    setConfig('maintenance_gate', newState);
+    const statusText = newState === '1'
+        ? '🔴 Maintenance gate ON — only allowlisted users can use the bot.'
+        : '🟢 Maintenance gate OFF — all approved users can use the bot.';
+    await ctx.editMessageText(`✅ *Done*\n\n${statusText}`, { parse_mode: 'Markdown', reply_markup: adminKeyboard(getConfig('admin_analysis_all') === 'true', newState === '1') });
 });
 bot.action('admin:dashboard', async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
     if (ctx.from?.id !== getAdminId())
         return;
     const adminAnalysisAll = getConfig('admin_analysis_all') === 'true';
-    await ctx.editMessageText('✦️ *Admin Dashboard*\n\nSelect an option:', { parse_mode: 'Markdown', reply_markup: adminKeyboard(adminAnalysisAll) });
+    await ctx.editMessageText('✦️ *Admin Dashboard*\n\nSelect an option:', { parse_mode: 'Markdown', reply_markup: adminKeyboard(adminAnalysisAll, getConfig('maintenance_gate') === '1') });
 });
 bot.action('admin:copy', async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
@@ -5612,6 +5624,43 @@ bot.action(/^user_action:(approve|pause|reset_ssid|trades|message):(\d+)$/, asyn
     else if (action === 'message') {
         adminSessions.set(ctx.chat.id, { step: 'member_message_text', memberMessageUserId: uid });
         await ctx.reply(`✆️ Enter message to send to user \`${maskUserId(uid)}\`:`, { parse_mode: 'Markdown' });
+    }
+    else if (action === 'balance') {
+        const user = getUser(uid);
+        if (!user) {
+            await ctx.reply(`❌ No user found for \`${uid}\`.`, { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
+            return;
+        }
+        await ctx.reply(`✦ Checking live balance for \`${maskUserId(uid)}\` …`, { parse_mode: 'Markdown' });
+        const ssid = getSsidForUser(uid);
+        if (!ssid) {
+            await ctx.reply(`⚠️ User has no SSID on file.`, { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
+            return;
+        }
+        try {
+            const sdk = await sdkPool.get(uid, ssid);
+            try {
+                const all = (await withTimeout(sdk.balances(), 15_000, 'balance')).getBalances();
+                const real = all.find((b: any) => b.type === BalanceType.Real);
+                const demo = all.find((b: any) => b.type === BalanceType.Demo);
+                const cur = real?.currency ?? user.currency ?? 'USD';
+                const sym = (CURRENCY_SYMBOLS as Record<string, string>)[cur] ?? '$';
+                const lines = [
+                    `◆ *Live Balance — ${maskUserId(uid)}*`,
+                    ``,
+                    `Real: ${sym}${(real?.amount ?? 0).toLocaleString('en-US', { maximumFractionDigits: 2 })}`,
+                    `Practice: ${sym}${(demo?.amount ?? 0).toLocaleString('en-US', { maximumFractionDigits: 2 })}`,
+                    `· DB cached (USD): ${(user.funded_balance_usd ?? 0).toLocaleString('en-US', { maximumFractionDigits: 2 })}`,
+                ];
+                await ctx.reply(lines.join('\n'), { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
+            }
+            finally {
+                sdkPool.release(uid);
+            }
+        }
+        catch (err) {
+            await ctx.reply(`❌ Live balance read failed: ${err instanceof Error ? err.message : String(err)}`, { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
+        }
     }
 });
 // ─── /connect & /disconnect ───────────────────────────────────────────────────
@@ -5997,6 +6046,36 @@ async function handleUserIdBrainRoute(ctx, telegramId, lastInput, failCount) {
 // ─── Text handler (all wizards) ───────────────────────────────────────────────
 // Daily AI Check-in — single router for every checkin:* callback (DIRECTIVE-AI-CHECKIN-DAILY.md).
 bot.action(/^checkin:/, async (ctx) => { await handleCheckinCallback(ctx); });
+// Admin — check-in delivery stats (per window, today + yesterday).
+bot.action('admin:checkins', async (ctx) => {
+    await ctx.answerCbQuery().catch(() => { });
+    if (ctx.from?.id !== getAdminId())
+        return;
+    const today = new Date(Date.now() + 3_600_000).toISOString().slice(0, 10);
+    const rows = db.prepare(`
+        SELECT checkin_date, window, COUNT(*) AS n FROM checkin_sent
+        WHERE checkin_date >= datetime('now', '-2 days')
+        GROUP BY checkin_date, window ORDER BY checkin_date DESC, window
+    `).all() as { checkin_date: string; window: string; n: number }[];
+    let msg = '· *Check-in Stats*\n\n';
+    if (rows.length === 0) {
+        msg += 'No check-ins recorded yet.\n';
+    }
+    else {
+        const byDate: Record<string, { window: string; n: number }[]> = {};
+        for (const r of rows) {
+            (byDate[r.checkin_date] ??= []).push({ window: r.window, n: r.n });
+        }
+        for (const [date, wins] of Object.entries(byDate)) {
+            msg += `✦ ${date}${date === today ? ' (today)' : ''}\n`;
+            for (const w of wins) {
+                msg += `· ${w.window}: ${w.n}\n`;
+            }
+            msg += '\n';
+        }
+    }
+    await ctx.reply(msg, { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
+});
 bot.on('text', async (ctx) => {
     if (ctx.message.text.startsWith('/'))
         return;

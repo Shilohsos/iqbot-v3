@@ -26,8 +26,9 @@ export function getAdminId(): number {
     return isNaN(fromEnv) ? 1615652240 : fromEnv;
 }
 
-export function adminKeyboard(adminAnalysisAll = false): IKMarkup {
+export function adminKeyboard(adminAnalysisAll = false, maintenanceGate = false): IKMarkup {
     const toggleText = adminAnalysisAll ? '🟢 Admin Analysis: Everyone (ON)' : '⚪ Admin Analysis: Privileged Only (OFF)';
+    const gateText = maintenanceGate ? '🔴 Gate: On (whitelist only)' : '🟢 Gate: Off (all users)';
     return {
         inline_keyboard: [
             [
@@ -43,20 +44,16 @@ export function adminKeyboard(adminAnalysisAll = false): IKMarkup {
                 { text: '· Broadcast',   callback_data: 'admin:broadcast' },
             ],
             [
-                { text: '✦ Giveaways',   callback_data: 'admin:giveaways' },
-                { text: '1. Top Traders', callback_data: 'admin:top_traders' },
-            ],
-            [
-                { text: '· Funnel',      callback_data: 'admin:funnel' },
+                { text: '◆ Top Traders', callback_data: 'admin:top_traders' },
                 { text: '◆ Audits',      callback_data: 'admin:audits' },
             ],
             [
                 { text: '✦️ Admin',      callback_data: 'admin:admin' },
+                { text: '· Check-ins',   callback_data: 'admin:checkins' },
             ],
-            [{ text: '· Admin Diary',     callback_data: 'admin:diary' }],
-            [{ text: '✦ Reviews',        callback_data: 'admin:reviews' }],
             [{ text: '◆ Copy Trading',   callback_data: 'admin:copy' }],
             [{ text: toggleText,          callback_data: 'admin:analysis_toggle' }],
+            [{ text: gateText,            callback_data: 'admin:gate_toggle' }],
             [{ text: '🟢 Go Live',         callback_data: 'admin:golive' }],
             [{ text: '⟵ Back', callback_data: 'ui:start' }],
         ],
@@ -96,6 +93,7 @@ export function userDetailKeyboard(telegramId: number): IKMarkup {
                 { text: '◆ Trades',     callback_data: `user_action:trades:${telegramId}` },
             ],
             [
+                { text: '✦ Balance',    callback_data: `user_action:balance:${telegramId}` },
                 { text: '✆️ Message',    callback_data: `user_action:message:${telegramId}` },
             ],
             [{ text: '⟵ Back', callback_data: 'admin:admin' }],
