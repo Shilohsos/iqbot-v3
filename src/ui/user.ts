@@ -4,7 +4,9 @@
  */
 export function startKeyboard(_accessLevel?: string) {
     const supportUrl = process.env.ADMIN_CONTACT_LINK ?? 'https://t.me/shiloh_is_10xing';
-    const aiBtn = { text: '⟡ Private Trader', callback_data: 'ui:trade' };
+    // Private Trader opens Smart Flow first (DIRECTIVE-SMART-FLOW.md) — the card's
+    // "Choose manually" button opens the existing ui:trade wizard unchanged.
+    const aiBtn = { text: '⟡ Private Trader', callback_data: 'smart:open' };
     const autoBtn = { text: '✦ Autopilot', callback_data: 'ui:auto' };
     const rows = [
         [{ text: '· Signals', callback_data: 'ui:signals' }, aiBtn],
