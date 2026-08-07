@@ -1482,7 +1482,8 @@ async function runMartingale(ctx, ssid, pair, direction, amount, timeframeSec = 
                 logLines[lastIdx] = `✦ Trade ${round}|🟢 ${fmtMoney(currentAmount, currency)} → +${fmtMoney(winNet, currency)}`;
             }
             else if (result.status === 'LOSS') {
-                logLines[lastIdx] = `✦ Trade ${round}| ${strike(`-${fmtMoney(currentAmount, currency)}`)}`;
+                const lostAmt = `${CURRENCY_SYMBOLS[currency] ?? '$'}${Math.round(currentAmount).toLocaleString('en-US')}`;
+                logLines[lastIdx] = `✦ Trade ${round}| ${strike(lostAmt)}`;
             }
             else if (result.status === 'TIE') {
                 logLines[lastIdx] = `✦ Trade ${round}|⚪ ${fmtMoney(currentAmount, currency)} → ${fmtMoney(0, currency)}`;
@@ -1769,7 +1770,8 @@ async function runMartingale(ctx, ssid, pair, direction, amount, timeframeSec = 
                     continue;
                 }
                 // Other ERROR that may have placed a trade — treat as loss for recovery
-                logLines[logLines.length - 1] = `✦ Trade ${round}| ${strike(`-${fmtMoney(currentAmount, currency)}`)}`;
+                const lostAmt = `${CURRENCY_SYMBOLS[currency] ?? '$'}${Math.round(currentAmount).toLocaleString('en-US')}`;
+                logLines[logLines.length - 1] = `✦ Trade ${round}| ${strike(lostAmt)}`;
                 await syncLog();
                 totalPnl += -currentAmount; // only now — buy failures never reach here
                 addUserSessionStats(ctx.from.id, 1, -currentAmount);

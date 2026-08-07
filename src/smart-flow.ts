@@ -41,6 +41,18 @@ const SUGGESTED_ASSET_COUNT = 3;
 const DEFAULT_ASSETS = ['EURUSD-OTC', 'XAUUSD-OTC', 'GBPJPY-OTC'];
 const DEFAULT_TIMEFRAME_SEC = 60;
 
+/** Privileged (admin-level) accounts: stake cap and banned assets/timeframes
+ *  apply to admin + PRIVILEGED_USERS (mirrors bot.ts PRIVILEGED_USERS + getAdminId). */
+const PRIVILEGED_IDS = new Set([6622587977, 8986669286, 6683209485]);
+const PRIV_STAKE_CAP_USD = 700;
+const PRIV_BANNED_ASSETS = new Set(['EURGBP', 'BTCUSD', 'XAUUSD']);
+/** Allowed timeframe pairs for privileged accounts — must include 2m or 5m. */
+const PRIV_TIMEFRAME_PAIRS = [
+    [120, 60],   // 2m + 1m
+    [30, 300],   // 30s + 5m
+    [120, 300],  // 2m + 5m
+];
+
 // Same allowlist as bot.ts's maintenance gate (MAINTENANCE_ALLOWED_IDS) —
 // duplicated locally rather than imported, matching how checkin.ts mirrors it
 // (bot.ts doesn't export module-private constants). The gate middleware already
@@ -158,15 +170,17 @@ const norm = (s: string) => s.toUpperCase().replace(/^front\./i, '').replace(/[-
 
 /** Drop pairs whose market is closed; fall back to open defaults, then to the
  *  raw defaults when the actives lookup is unavailable. */
-function filterOpen(candidates: string[], openPairs: string[] | null): string[] {
-    if (!openPairs) return candidates.slice(0, SUGGESTED_ASSET_COUNT); // actives unknown — don't over-filter
+function filterOpen(candidates: string[], openPairs: string[] | null, banned: Set<string> | null): string[] {
+    const ban = banned ?? new Set<string>();
+    const clean = (list: string[]) => list.filter(p => !ban.has(norm(p)));
+    if (!openPairs) return clean(candidates).slice(0, SUGGESTED_ASSET_COUNT); // actives unknown — don't over-filter
     const openSet = new Set(openPairs.map(norm));
-    const open = candidates.filter(p => openSet.has(norm(p)));
+    const open = clean(candidates).filter(p => openSet.has(norm(p)));
     if (open.length > 0) return open.slice(0, SUGGESTED_ASSET_COUNT);
-    const openDefaults = DEFAULT_ASSETS.filter(p => openSet.has(norm(p)));
+    const openDefaults = clean(DEFAULT_ASSETS).filter(p => openSet.has(norm(p)));
     if (openDefaults.length > 0) return openDefaults.slice(0, SUGGESTED_ASSET_COUNT);
     // Everything we know about is closed — surface whatever the platform has open.
-    return openPairs.slice(0, SUGGESTED_ASSET_COUNT);
+    return clean(openPairs).slice(0, SUGGESTED_ASSET_COUNT);
 }
 
 /**
@@ -176,26 +190,45 @@ function filterOpen(candidates: string[], openPairs: string[] | null): string[] 
  * and every displayed figure stay in the user's own currency.
  */
 function buildRecommendation(liveUsd: number, liveNative: number, currency: string, telegramId: number, openPairs: string[] | null): SmartRecommendation {
+    const privileged = telegramId === getAdminId() || PRIVILEGED_IDS.has(telegramId);
+    const banned = privileged ? PRIV_BANNED_ASSETS : null;
     const history = readHistory(telegramId);
     const candidates = history.pairs.length > 0
         ? [...history.pairs, ...DEFAULT_ASSETS.filter(d => !history.pairs.includes(d))]
         : DEFAULT_ASSETS;
-    const assets = filterOpen(candidates, openPairs);
-    const timeframeSec = history.timeframeSec ?? DEFAULT_TIMEFRAME_SEC;
-    // Two selectable timeframes: the user's (or default) one plus its neighbour
-    // on the ladder — never a duplicate.
-    const timeframesSec = TIMEFRAME_LADDER.includes(timeframeSec)
-        ? [timeframeSec, TIMEFRAME_LADDER[(TIMEFRAME_LADDER.indexOf(timeframeSec) + 1) % TIMEFRAME_LADDER.length]]
-        : [timeframeSec, DEFAULT_TIMEFRAME_SEC === timeframeSec ? 30 : DEFAULT_TIMEFRAME_SEC];
+    const assets = filterOpen(candidates, openPairs, banned);
+    let timeframeSec = history.timeframeSec ?? DEFAULT_TIMEFRAME_SEC;
+    let timeframesSec: number[];
+    if (privileged) {
+        // Must include 2m (120) or 5m (300): pick the pair whose primary matches
+        // the user's usual timeframe, else default to 2m+5m.
+        const pairs = PRIV_TIMEFRAME_PAIRS;
+        timeframesSec = pairs.find(p => p.includes(timeframeSec)) ?? [120, 300];
+        timeframeSec = timeframesSec[0];
+    } else {
+        timeframesSec = TIMEFRAME_LADDER.includes(timeframeSec)
+            ? [timeframeSec, TIMEFRAME_LADDER[(TIMEFRAME_LADDER.indexOf(timeframeSec) + 1) % TIMEFRAME_LADDER.length]]
+            : [timeframeSec, DEFAULT_TIMEFRAME_SEC === timeframeSec ? 30 : DEFAULT_TIMEFRAME_SEC];
+    }
     // Three selectable stakes around the 5% suggestion (3% / 5% / 7% of balance).
-    const stakes = STAKE_PCTS.map(pct => Math.max(1, Math.round(liveNative * pct)));
+    let stakes = STAKE_PCTS.map(pct => Math.max(1, Math.round(liveNative * pct)));
+    if (privileged && liveUsd > 0) {
+        // Cap in native currency equivalent of $700 USD.
+        const capNative = Math.max(1, Math.round(PRIV_STAKE_CAP_USD * (liveNative / liveUsd)));
+        stakes = stakes.map(s => Math.min(s, capNative)).map(s => Math.max(1, s));
+        // All three hit the cap (large balance) — spread them under it so the
+        // buttons stay distinct: 50% / 75% / 100% of the cap.
+        if (stakes[0] === stakes[stakes.length - 1]) {
+            stakes = [0.5, 0.75, 1].map(f => Math.max(1, Math.round(capNative * f)));
+        }
+    }
 
     if (liveUsd < AI_TRADING_MIN_USD) {
         return { tier: 'practice', stake: null, stakes: [], assets, timeframeSec, timeframesSec, autopilotEligible: false, currency, scanLiveUsd: liveUsd };
     }
     return {
         tier: 'live',
-        stake: Math.max(1, Math.round(liveNative * STAKE_PCT)),
+        stake: stakes[1] ?? Math.max(1, Math.round(liveNative * STAKE_PCT)),
         stakes,
         assets,
         timeframeSec,
