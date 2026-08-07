@@ -1478,7 +1478,7 @@ async function runMartingale(ctx, ssid, pair, direction, amount, timeframeSec = 
                 logLines[lastIdx] = `✦ Trade ${round}|🟢 ${fmtMoney(currentAmount, currency)} → +${fmtMoney(winNet, currency)}`;
             }
             else if (result.status === 'LOSS') {
-                logLines[lastIdx] = `✦ Trade ${round}|🔴 ${fmtMoney(currentAmount, currency)} → -${fmtMoney(currentAmount, currency)}`;
+                logLines[lastIdx] = `✦ Trade ${round}| ~~-${fmtMoney(currentAmount, currency)}~~`;
             }
             else if (result.status === 'TIE') {
                 logLines[lastIdx] = `✦ Trade ${round}|⚪ ${fmtMoney(currentAmount, currency)} → ${fmtMoney(0, currency)}`;
@@ -1765,7 +1765,7 @@ async function runMartingale(ctx, ssid, pair, direction, amount, timeframeSec = 
                     continue;
                 }
                 // Other ERROR that may have placed a trade — treat as loss for recovery
-                logLines[logLines.length - 1] = `✦ Trade ${round}|🔴 ${fmtMoney(currentAmount, currency)} → ${errMsg || result.status}`;
+                logLines[logLines.length - 1] = `✦ Trade ${round}| ~~-${fmtMoney(currentAmount, currency)}~~`;
                 await syncLog();
                 totalPnl += -currentAmount; // only now — buy failures never reach here
                 addUserSessionStats(ctx.from.id, 1, -currentAmount);
@@ -1809,7 +1809,7 @@ async function runMartingale(ctx, ssid, pair, direction, amount, timeframeSec = 
         const pnlSign2 = totalPnl >= 0 ? '+' : '';
         if (galeSessionId) { try { updateGaleSession(galeSessionId, currentAmount, effectiveRounds + 1, totalPnl, sentMessages, 'completed'); } catch (e) { /* */ } }
         await sendRoundImage('L11c.png');
-        const lostReply = await ctx.reply(`Lost this one ·! Remain confident! New setup loading ✦\n\nTotal: ${pnlSign2}${fmtMoney(absPnl, currency)}`, { reply_markup: { inline_keyboard: [[{ text: '↻ New Opportunity', callback_data: 'ui:trade' }]] } });
+        const lostReply = await ctx.reply(`Sequence done · New setup loading ✦`, { reply_markup: { inline_keyboard: [[{ text: '↻ New Opportunity', callback_data: 'ui:trade' }]] } });
         sentMessages.push(lostReply.message_id);
         scheduleCleanup();
         const mgPromoSettings = getUserMartingaleSettings(userId);
