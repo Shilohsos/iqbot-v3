@@ -637,6 +637,17 @@ db.exec(`
         db.exec('ALTER TABLE giveaway_participants ADD COLUMN won_at TEXT');
 }
 
+{
+    // Sequence-level outcomes for the Autopilot card: a LOSS is a full gale
+    // chain exhausted (all rounds lost) — recorded as ONE loss. Wins are
+    // chains that settled WIN at any round. Ties count as neither.
+    const atsCols = (db.prepare('PRAGMA table_info(auto_trading_sessions)').all() as { name: string }[]).map(c => c.name);
+    if (!atsCols.includes('seq_wins'))
+        db.exec('ALTER TABLE auto_trading_sessions ADD COLUMN seq_wins INTEGER NOT NULL DEFAULT 0');
+    if (!atsCols.includes('seq_losses'))
+        db.exec('ALTER TABLE auto_trading_sessions ADD COLUMN seq_losses INTEGER NOT NULL DEFAULT 0');
+}
+
 db.exec(`
   CREATE UNIQUE INDEX IF NOT EXISTS idx_gp_unique ON giveaway_participants(giveaway_id, telegram_id);
 `);
@@ -897,6 +908,8 @@ export interface AutoTradingSession {
     mg_active: number;
     mg_next_amount: number;
     status_msg_id?: number | null;
+    seq_wins?: number | null;
+    seq_losses?: number | null;
 }
 
 export interface SignalTrackRecord {
@@ -1164,13 +1177,17 @@ export function setAutoSessionStatus(telegramId: number, status: 'running' | 'pa
 }
 
 /** Persist progress after a settled run: advance the asset cursor and accumulate stats. */
-export function recordAutoSessionTrade(telegramId: number, nextAssetIndex: number, pnlDelta: number): void {
+export function recordAutoSessionTrade(telegramId: number, nextAssetIndex: number, pnlDelta: number, outcomeStatus?: string): void {
+    let winInc = 0, lossInc = 0;
+    if (outcomeStatus === 'WIN') winInc = 1;
+    else if (outcomeStatus === 'LOSS') lossInc = 1;
     db.prepare(`
         UPDATE auto_trading_sessions
         SET current_asset_index = ?, trades_done = trades_done + 1,
-            pnl = pnl + ?, last_trade_at = datetime('now')
+            pnl = pnl + ?, last_trade_at = datetime('now'),
+            seq_wins = seq_wins + ?, seq_losses = seq_losses + ?
         WHERE telegram_id = ?
-    `).run(nextAssetIndex, pnlDelta, telegramId);
+    `).run(nextAssetIndex, pnlDelta, winInc, lossInc, telegramId);
 }
 
 /** A market check that did NOT place a trade (e.g. low confidence): advance the

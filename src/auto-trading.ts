@@ -187,8 +187,8 @@ class AutoRunner {
         if (!s)
             return;
         const idx = (s.current_asset_index % this.assets.length) + 1;
-        const sign = s.pnl >= 0 ? '+' : '';
-        const pnlFormatted = `${sign}${s.pnl.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${s.currency}`;
+        const wins = s.seq_wins ?? 0;
+        const losses = s.seq_losses ?? 0;
         const asset = this.assets[s.current_asset_index % this.assets.length];
         const statusEmoji = s.status === 'running' ? '🟢 Live' : s.status === 'paused' ? '🟡 Paused' : '⚪ Stopped';
         const modeLabel = this.mode === 'demo' ? '✦ Demo' : '✦ Live';
@@ -196,7 +196,7 @@ class AutoRunner {
             `✦ *Autopilot* · ${statusEmoji} · ${modeLabel}`,
             ``,
             `${asset} (${idx}/${this.assets.length}) · ${tfLabel(s.timeframe)} · ${s.gale_rounds}-round recovery`,
-            `Trades: ${s.trades_done}   Scanned: ${s.evaluations}   P&L: ${pnlFormatted}`,
+            `Trades: ${s.trades_done}   Scanned: ${s.evaluations}   Won: ${wins}   Lost: ${losses}`,
             last ? `_${last}_` : '',
         ].filter(Boolean).join('\n');
         const extra = {
@@ -576,13 +576,12 @@ class AutoRunner {
                 else {
                     consecutiveErrors = 0;
                     this.clearWsNotifyLock(); // connection recovered — allow one notice next time it drops
-                    recordAutoSessionTrade(this.chatId, nextIdx, outcome.totalPnl);
+                    recordAutoSessionTrade(this.chatId, nextIdx, outcome.totalPnl, outcome.status);
                     const s2 = getAutoSession(this.chatId);
-                    console.log(`[auto-trade] uid=${this.chatId} AFTER record: sessionPnl=${s2?.pnl} trades=${s2?.trades_done}`);
+                    console.log(`[auto-trade] uid=${this.chatId} AFTER record: sessionPnl=${s2?.pnl} trades=${s2?.trades_done} wins=${s2?.seq_wins} losses=${s2?.seq_losses}`);
                     const emoji = outcome.status === 'WIN' ? '🟢' : outcome.status === 'TIE' ? '⚪' : '🔴';
-                    const displayPnl = outcome.status === 'WIN' ? lastTradePnl : outcome.totalPnl;
-                    const sign = displayPnl >= 0 ? '+' : '';
-                    await this.renderStatus(`${emoji} ${outcome.status} ${sign}${displayPnl.toFixed(2)} ${s.currency}`);
+                    const outcomeLabel = outcome.status === 'WIN' ? 'Won' : outcome.status === 'TIE' ? 'Draw' : 'Lost';
+                    await this.renderStatus(`${emoji} ${outcomeLabel}`);
                 }
                 await new Promise(r => setTimeout(r, msToNextCandle(s.timeframe)));
             }
