@@ -70,8 +70,9 @@ Scope: AI Trading (bot.ts runMartingale), Auto Trading (trade.ts runMartingaleCo
 ## Do NOT touch
 - No marketing content, no template text changes, no UI copy changes.
 - No changes to analysis engines, signal generation frequency, or confidence displays.
-- No changes to smart flow, check-in, admin portal, or menus.
+- No changes to check-in, admin portal, or menus.
 - No changes to affiliate/approval logic.
+- Exception: Part 5 (smart flow card crash) and Part 6 (tradeRecovery src mirror) are explicitly in scope — they are stability defects, not feature work.
 
 ## Delivery
 Implement on a feature branch, push, and report back with the diff summary + verification results. Keep changes surgical — this directive is about correctness and stability, not features.
