@@ -7593,37 +7593,44 @@ setSmartFlowScanner(async (uid) => {
     const ssid = getSsidForUser(uid);
     if (!ssid)
         return null;
-    const live = await refreshFundedBalanceFromLive(uid);
-    let demo = null;
-    let openPairs = null;
-    const sdk = await sdkPool.get(uid, ssid);
-    try {
-        const all = (await withTimeout(sdk.balances(), 15_000, 'balance')).getBalances();
-        const d = all.find((b) => b.type === BalanceType.Demo);
-        demo = d ? { amount: d.amount, currency: d.currency } : null;
-        // Market awareness — same actives/canBeBoughtAt pattern as trade-core.ts.
-        try {
-            const blitz = await sdk.blitzOptions();
+    // Total scan budget — the card must always appear, even if the SDK is slow.
+    // resolveSetup falls back to the cached snapshot when the scanner returns null.
+    return await Promise.race([
+        (async () => {
+            const live = await refreshFundedBalanceFromLive(uid);
+            let demo = null;
+            let openPairs = null;
+            const sdk = await sdkPool.get(uid, ssid);
             try {
-                await blitz.refreshActives?.();
+                const all = (await withTimeout(sdk.balances(), 15_000, 'balance')).getBalances();
+                const d = all.find((b) => b.type === BalanceType.Demo);
+                demo = d ? { amount: d.amount, currency: d.currency } : null;
+                // Market awareness — same actives/canBeBoughtAt pattern as trade-core.ts.
+                try {
+                    const blitz = await withTimeout(sdk.blitzOptions(), 15_000, 'blitzOptions');
+                    try {
+                        await withTimeout(blitz.refreshActives?.(), 10_000, 'refreshActives');
+                    }
+                    catch { }
+                    const now = sdk.currentTime();
+                    openPairs = blitz.getActives()
+                        .filter((a) => a.canBeBoughtAt(now))
+                        .map((a) => a.ticker)
+                        .filter(Boolean);
+                }
+                catch (mktErr) {
+                    // Actives unavailable — leave openPairs null so smart-flow skips
+                    // filtering instead of discarding every candidate pair.
+                    logger.warn('smart-flow', `actives lookup failed for ${uid}: ${mktErr instanceof Error ? mktErr.message : mktErr}`);
+                }
             }
-            catch { }
-            const now = sdk.currentTime();
-            openPairs = blitz.getActives()
-                .filter((a) => a.canBeBoughtAt(now))
-                .map((a) => a.ticker)
-                .filter(Boolean);
-        }
-        catch (mktErr) {
-            // Actives unavailable — leave openPairs null so smart-flow skips
-            // filtering instead of discarding every candidate pair.
-            logger.warn('smart-flow', `actives lookup failed for ${uid}: ${mktErr instanceof Error ? mktErr.message : mktErr}`);
-        }
-    }
-    finally {
-        sdkPool.release(uid);
-    }
-    return { live, demo, openPairs };
+            finally {
+                sdkPool.release(uid);
+            }
+            return { live, demo, openPairs };
+        })(),
+        new Promise((resolve) => setTimeout(() => resolve(null), 35_000)),
+    ]);
 });
 // Wizard hand-off: seed the existing wizard session from the recommendation and
 // drop the user at its asset step. No trade is placed — the user still picks a
