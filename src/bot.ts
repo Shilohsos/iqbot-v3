@@ -3034,7 +3034,7 @@ async function sendAutoMenu(ctx) {
             `Stake: ${session.amount.toLocaleString()} ${session.currency}/trade`,
             `Assets: ${assets}`,
             `TF: ${tfLabel(session.timeframe)} · Recovery: ${session.gale_rounds} rounds`,
-            `Trades: ${session.trades_done} · P&L: ${sign}${session.pnl.toFixed(2)} ${session.currency}`,
+            `Trades: ${session.trades_done} · Won: ${session.seq_wins ?? 0} · Lost: ${session.seq_losses ?? 0}`,
         ].join('\n');
         if (running) {
             rows.push([{ text: '❚❚️ Pause', callback_data: 'auto:pause' }, { text: '■️ Stop', callback_data: 'auto:stop' }]);
@@ -3393,7 +3393,8 @@ bot.action('auto:perf', async (ctx) => {
     await ctx.reply(`◆ *Autopilot Performance*\n\n` +
         `Status: ${s.status}\n` +
         `Trades: ${s.trades_done}\n` +
-        `P&L: ${sign}${s.pnl.toFixed(2)} ${s.currency}\n` +
+        `Won: ${s.seq_wins ?? 0}\n` +
+        `Lost: ${s.seq_losses ?? 0}\n` +
         `Assets: ${JSON.parse(s.assets).join(', ')}\n` +
         `Timeframe: ${tfLabel(s.timeframe)} · Recovery: ${s.gale_rounds}`, { parse_mode: 'Markdown', reply_markup: backKeyboard() });
 });
