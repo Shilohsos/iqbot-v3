@@ -11,6 +11,7 @@ import { withBackgroundSdk, bgSdkStats } from './concurrency.js';
 import { resolveAccess, getProductConfig, hasAccess, getProduct, convertToUsd, tokenToAccess, AI_TRADING_MIN_USD, AUTO_TRADING_MIN_USD, FREE_SIGNALS_PER_DAY, ALL_PAIRS, PRODUCT_LIMITS, SIGNALS_PREMIUM_COUNT, clampDisplayConfidence, TOKEN_ACCESS_DURATION_MS, godModeStakePct, godModeTimeframe, godModeGaleRounds, godModePickWorstAssets, CURRENCY_SYMBOLS, fmtBalance, fmtMoney, } from './access.js';
 import { runUpgradeTokenSweep, UPGRADE_TOKEN_RESET_DATE_KEY } from './upgrade-token.js';
 import { initCheckinDb, startCheckinScheduler, setCheckinLiveRefresher, handleCheckinCallback, tryHandleCheckinTargetText } from './checkin.js';
+import { initSmartFlowDb, setSmartFlowScanner, setSmartFlowWizardStarter, handleSmartFlowCallback } from './smart-flow.js';
 import { autoEngine, initAutoEngine } from './auto-trading.js';
 import { startSwarm, stopSwarm, getSwarmSession, getSwarmStats, setSwarmNotifier, initSwarmDb } from './swarm.js';
 import { startCopying, stopCopying, getCopyStatus, setCopyNotifier, initCopyDb } from './copy-trading.js';
@@ -23,7 +24,7 @@ import { logger } from './logger.js';
 import { createGiveawayEvent, activateGiveaway, activatePromoCode, activateMarathon, participate as giveawayParticipate, claimPromoCode, getMarathonLeaderboard, checkMarathonDeadlines, tickPromoFabrication, recordTrade as giveawayRecordTrade, selectWinners as giveawaySelectWinners, getActiveGiveaways, getGiveawayEvents, getGiveawayEvent, getRealAndFabricatedCounts, processUpdateQueue, processNotificationsQueue, setGiveawayReconnect, } from './giveaway.js';
 import { analyzePairWithSdk } from './analysis.js';
 import { runAdminAnalysis } from './admin-analysis.js';
-import { amountKeyboard, timeframeKeyboard, pairKeyboard, signalPairKeyboard, signalTimeframeKeyboard, tfLabel, OTC_PAIRS, tradeModeKeyboard, demoUpsellKeyboard, currencyKeyboard, } from './menu.js';
+import { amountKeyboard, timeframeKeyboard, pairKeyboard, signalPairKeyboard, signalTimeframeKeyboard, tfLabel, pairLabel, OTC_PAIRS, tradeModeKeyboard, demoUpsellKeyboard, currencyKeyboard, } from './menu.js';
 import { startKeyboard, backKeyboard } from './ui/user.js';
 import { getAdminId, adminKeyboard, adminBackKeyboard, broadcastTargetKeyboard, broadcastLinkKeyboard, broadcastActionKeyboard, broadcastTimerKeyboard, broadcastSendOrScheduleKeyboard, broadcastDelayKeyboard, scheduledBroadcastsKeyboard, tokenTierKeyboard, generateTokenKeyboard, topTradersAdminKeyboard, funnelKeyboard, memberManagementKeyboard, activationsKeyboard, giveawayTargetKeyboard, giveawayManagerKeyboard, giveawayTypeKeyboard, giveawayCriteriaKeyboard, giveawayScheduleKeyboard, activeGiveawaysKeyboard, giveawayViewKeyboard, promoScheduleKeyboard, marathonDurationKeyboard, marathonScheduleKeyboard, composeTopicKeyboard, composeResultKeyboard, composeDeliveryKeyboard, composeToneKeyboard, composeButtonKeyboard, userDetailKeyboard, mediaLibraryKeyboard, llmCategoryKeyboard, reviewsKeyboard, reviewResultKeyboard, } from './ui/admin.js';
 import { checkAffiliate } from './affiliate.js';
@@ -2526,7 +2527,9 @@ bot.action('ui:trade_menu', async (ctx) => {
         parse_mode: 'Markdown',
         reply_markup: { inline_keyboard: [
                 [{ text: '✦ 10x Signals', callback_data: 'ui:signals' }],
-                [{ text: '⟡ Private Trader', callback_data: 'ui:trade' }],
+                // Smart Flow first (DIRECTIVE-SMART-FLOW.md); its "Choose manually"
+                // button leads straight back to the untouched ui:trade wizard.
+                [{ text: '⟡ Private Trader', callback_data: 'smart:open' }],
                 [{ text: '✦ Autopilot', callback_data: 'ui:auto' }],
                                 [{ text: '◆ Copy Trading', callback_data: 'ui:copy' }],
             ] }
@@ -3766,7 +3769,9 @@ bot.command('trade', async (ctx) => {
         parse_mode: 'Markdown',
         reply_markup: { inline_keyboard: [
                 [{ text: '✦ 10x Signals', callback_data: 'ui:signals' }],
-                [{ text: '⟡ Private Trader', callback_data: 'ui:trade' }],
+                // Smart Flow first (DIRECTIVE-SMART-FLOW.md); its "Choose manually"
+                // button leads straight back to the untouched ui:trade wizard.
+                [{ text: '⟡ Private Trader', callback_data: 'smart:open' }],
                 [{ text: '✦ Autopilot', callback_data: 'ui:auto' }],
                                 [{ text: '◆ Copy Trading', callback_data: 'ui:copy' }],
             ] }
@@ -6046,6 +6051,8 @@ async function handleUserIdBrainRoute(ctx, telegramId, lastInput, failCount) {
 // ─── Text handler (all wizards) ───────────────────────────────────────────────
 // Daily AI Check-in — single router for every checkin:* callback (DIRECTIVE-AI-CHECKIN-DAILY.md).
 bot.action(/^checkin:/, async (ctx) => { await handleCheckinCallback(ctx); });
+// Smart Flow — single router for every smart:* callback (DIRECTIVE-SMART-FLOW.md).
+bot.action(/^smart:/, async (ctx) => { await handleSmartFlowCallback(ctx); });
 // Admin — check-in delivery stats (per window, today + yesterday).
 bot.action('admin:checkins', async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
@@ -7572,6 +7579,73 @@ setCopyNotifier({
 initCheckinDb();
 setCheckinLiveRefresher(refreshFundedBalanceFromLive);
 startCheckinScheduler(bot);
+// Smart Flow (DIRECTIVE-SMART-FLOW.md) — recommendation-only Private Trader
+// entry. Nothing here runs on a schedule: the scan below fires only when a user
+// opens the flow and the cache is stale.
+initSmartFlowDb();
+// Scanner: one pooled SDK session per open — real + practice balances and the
+// currently-purchasable actives for market-aware asset suggestions. Routed
+// through refreshFundedBalanceFromLive so funded_balance_usd (and access level)
+// stay in sync exactly as every other live read does.
+setSmartFlowScanner(async (uid) => {
+    const ssid = getSsidForUser(uid);
+    if (!ssid)
+        return null;
+    const live = await refreshFundedBalanceFromLive(uid);
+    let demo = null;
+    let openPairs = null;
+    const sdk = await sdkPool.get(uid, ssid);
+    try {
+        const all = (await withTimeout(sdk.balances(), 15_000, 'balance')).getBalances();
+        const d = all.find((b: any) => b.type === BalanceType.Demo);
+        demo = d ? { amount: d.amount, currency: d.currency } : null;
+        // Market awareness — same actives/canBeBoughtAt pattern as trade-core.ts.
+        try {
+            const blitz = await sdk.blitzOptions();
+            try {
+                await blitz.refreshActives?.();
+            }
+            catch { }
+            const now = sdk.currentTime();
+            openPairs = blitz.getActives()
+                .filter((a: any) => a.canBeBoughtAt(now))
+                .map((a: any) => a.ticker)
+                .filter(Boolean);
+        }
+        catch (mktErr) {
+            // Actives unavailable — leave openPairs null so smart-flow skips
+            // filtering instead of discarding every candidate pair.
+            logger.warn('smart-flow', `actives lookup failed for ${uid}: ${mktErr instanceof Error ? mktErr.message : mktErr}`);
+        }
+    }
+    finally {
+        sdkPool.release(uid);
+    }
+    return { live, demo, openPairs };
+});
+// Wizard hand-off: seed the existing wizard session from the recommendation and
+// drop the user at its asset step. No trade is placed — the user still picks a
+// pair and a recovery level through the untouched wizard handlers.
+setSmartFlowWizardStarter(async (ctx, rec) => {
+    const chatId = ctx.chat.id;
+    if (!await hasAccessLive(ctx.from.id, 'ai_trading')) {
+        await sendAiTradingLock(ctx);
+        return;
+    }
+    wizardSessions.set(chatId, {
+        step: 'pair',
+        mode: 'live',
+        currency: rec.currency,
+        amount: rec.stake,
+        timeframe: rec.timeframeSec,
+    });
+    const rows = rec.assets.map(p => [{ text: `⟡ ${pairLabel(p)}`, callback_data: `pair:${p}` }]);
+    rows.push([{ text: '· All assets', callback_data: 'page:0' }]);
+    const stakeText = `${CURRENCY_SYMBOLS[rec.currency] ?? '$'}${Math.round(rec.stake ?? 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}`;
+    await ctx.reply(`✦ Setup applied\n\n` +
+        `Stake: ${stakeText} · Timeframe: ${tfLabel(rec.timeframeSec)}\n\n` +
+        `Pick your asset to continue ─`, { reply_markup: { inline_keyboard: rows } });
+});
 // ✕ KILLED 2026-08-07: all automatic broadcast flows removed per Master.
 // startAutoBroadcast(bot);
 // seedFundingCycle();

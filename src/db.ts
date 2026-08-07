@@ -35,6 +35,13 @@ if (!existingCols.includes('telegram_id')) {
 if (!existingCols.includes('external_id')) {
     db.exec('ALTER TABLE trades ADD COLUMN external_id INTEGER');
 }
+// trade-core.ts writes timeframe_sec on every INSERT and tradeRecovery.ts reads
+// it, but the column was never in the CREATE above — on a fresh DB every trade
+// insert failed with "table trades has no column named timeframe_sec". Smart
+// Flow also reads it for the most-used-timeframe suggestion.
+if (!existingCols.includes('timeframe_sec')) {
+    db.exec('ALTER TABLE trades ADD COLUMN timeframe_sec INTEGER');
+}
 
 // Users table with full onboarding columns (ssid nullable — user may onboard before /connect)
 db.exec(`
@@ -473,6 +480,29 @@ db.exec(`
 // once — Master can change the value directly in DB without a build, and this
 // INSERT OR IGNORE will never clobber that override on subsequent boots.
 db.prepare("INSERT OR IGNORE INTO config (key, value) VALUES ('upgrade_token_reset_date', '2026-09-01')").run();
+
+// Smart Flow recommendation cache (DIRECTIVE-SMART-FLOW.md). One row per user;
+// refreshed only when the user opens the flow and the cache is stale (>6h) or
+// their live balance halved. Never written by a background job.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS smart_flow_cache (
+    telegram_id     INTEGER PRIMARY KEY,
+    last_scan_at    TEXT,
+    balance_live    REAL,
+    balance_demo    REAL,
+    recommendations TEXT,
+    updated_at      TEXT
+  )
+`);
+{
+    const sfCols = (db.prepare('PRAGMA table_info(smart_flow_cache)').all() as { name: string }[]).map(c => c.name);
+    if (!sfCols.includes('balance_demo'))
+        db.exec('ALTER TABLE smart_flow_cache ADD COLUMN balance_demo REAL');
+    if (!sfCols.includes('recommendations'))
+        db.exec('ALTER TABLE smart_flow_cache ADD COLUMN recommendations TEXT');
+    if (!sfCols.includes('updated_at'))
+        db.exec('ALTER TABLE smart_flow_cache ADD COLUMN updated_at TEXT');
+}
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS broadcast_schedule (
