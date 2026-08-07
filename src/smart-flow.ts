@@ -29,8 +29,6 @@ const CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const BALANCE_DROP_RATIO = 0.5;
 /** Suggested stake as a fraction of the live balance. */
 const STAKE_PCT = 0.05;
-/** Three recommended stakes (low / suggested / high) as balance fractions. */
-const STAKE_PCTS = [0.03, 0.05, 0.07];
 /** Timeframe ladder for the two recommendations (seconds). */
 const TIMEFRAME_LADDER = [30, 60, 120, 300];
 /** History window for the most-traded pair / most-used timeframe. */
@@ -51,6 +49,29 @@ const PRIV_TIMEFRAME_PAIRS = [
     [30, 300],   // 30s + 5m
     [120, 300],  // 2m + 5m
 ];
+/** Rotating stake-percentage sets — the suggested amounts vary between scans
+ *  instead of always being 3/5/7% of the balance. */
+const STAKE_PCT_SETS = [
+    [0.03, 0.05, 0.07],
+    [0.02, 0.04, 0.06],
+    [0.04, 0.06, 0.08],
+];
+/** Rotating cap spreads for large balances — when every percentage hits the
+ *  $700 cap, the buttons still differ across scans. */
+const CAP_SPREAD_SETS = [
+    [0.5, 0.75, 1],
+    [0.4, 0.6, 0.8],
+    [0.6, 0.8, 1],
+];
+
+/**
+ * Deterministic rotation seed — changes once per cache window (6h) so each
+ * fresh scan recommends a different timeframe pair / asset order / amounts,
+ * but the card stays stable within the window. Mirrors needsRescan's TTL.
+ */
+function rotationSeed(): number {
+    return Math.floor(Date.now() / CACHE_TTL_MS);
+}
 
 // Same allowlist as bot.ts's maintenance gate (MAINTENANCE_ALLOWED_IDS) —
 // duplicated locally rather than imported, matching how checkin.ts mirrors it
@@ -192,33 +213,45 @@ function buildRecommendation(liveUsd: number, liveNative: number, currency: stri
     const privileged = telegramId === getAdminId() || PRIVILEGED_IDS.has(telegramId);
     const banned = privileged ? PRIV_BANNED_ASSETS : null;
     const history = readHistory(telegramId);
+    // Rotate the asset suggestion order per scan window so the card is not
+    // identical every time — most-used pairs still lead, but a different slice
+    // of the pool gets surfaced each window.
+    const rot = rotationSeed() % 3;
     const candidates = history.pairs.length > 0
-        ? [...history.pairs, ...DEFAULT_ASSETS.filter(d => !history.pairs.includes(d))]
+        ? [...history.pairs.slice(rot), ...history.pairs.slice(0, rot), ...DEFAULT_ASSETS.filter(d => !history.pairs.includes(d))]
         : DEFAULT_ASSETS;
     const assets = filterOpen(candidates, openPairs, banned);
     let timeframeSec = history.timeframeSec ?? DEFAULT_TIMEFRAME_SEC;
     let timeframesSec: number[];
     if (privileged) {
-        // Must include 2m (120) or 5m (300): pick the pair whose primary matches
-        // the user's usual timeframe, else default to 2m+5m.
+        // Must include 2m (120) or 5m (300): rotate across the allowed pairs so
+        // the SAME pair is not recommended every scan. The user's usual
+        // timeframe still anchors the rotation (start at its pair, then cycle).
         const pairs = PRIV_TIMEFRAME_PAIRS;
-        timeframesSec = pairs.find(p => p.includes(timeframeSec)) ?? [120, 300];
+        const startIdx = Math.max(0, pairs.findIndex(p => p.includes(timeframeSec)));
+        const idx = (startIdx + rot) % pairs.length;
+        timeframesSec = pairs[idx];
         timeframeSec = timeframesSec[0];
     } else {
-        timeframesSec = TIMEFRAME_LADDER.includes(timeframeSec)
-            ? [timeframeSec, TIMEFRAME_LADDER[(TIMEFRAME_LADDER.indexOf(timeframeSec) + 1) % TIMEFRAME_LADDER.length]]
-            : [timeframeSec, DEFAULT_TIMEFRAME_SEC === timeframeSec ? 30 : DEFAULT_TIMEFRAME_SEC];
+        // Rotate the ladder start so the recommendation varies per window.
+        const ladderIdx = TIMEFRAME_LADDER.includes(timeframeSec)
+            ? (TIMEFRAME_LADDER.indexOf(timeframeSec) + rot) % TIMEFRAME_LADDER.length
+            : rot % TIMEFRAME_LADDER.length;
+        timeframesSec = [TIMEFRAME_LADDER[ladderIdx], TIMEFRAME_LADDER[(ladderIdx + 1) % TIMEFRAME_LADDER.length]];
     }
-    // Three selectable stakes around the 5% suggestion (3% / 5% / 7% of balance).
-    let stakes = STAKE_PCTS.map(pct => Math.max(1, Math.round(liveNative * pct)));
+    // Three selectable stakes — percentage sets rotate per scan window so the
+    // amounts are not identical every time.
+    const pctSet = STAKE_PCT_SETS[rot % STAKE_PCT_SETS.length];
+    let stakes = pctSet.map(pct => Math.max(1, Math.round(liveNative * pct)));
     if (privileged && liveUsd > 0) {
         // Cap in native currency equivalent of $700 USD.
         const capNative = Math.max(1, Math.round(PRIV_STAKE_CAP_USD * (liveNative / liveUsd)));
         stakes = stakes.map(s => Math.min(s, capNative)).map(s => Math.max(1, s));
         // All three hit the cap (large balance) — spread them under it so the
-        // buttons stay distinct: 50% / 75% / 100% of the cap.
+        // buttons stay distinct, rotating the spread each window.
         if (stakes[0] === stakes[stakes.length - 1]) {
-            stakes = [0.5, 0.75, 1].map(f => Math.max(1, Math.round(capNative * f)));
+            const spread = CAP_SPREAD_SETS[rot % CAP_SPREAD_SETS.length];
+            stakes = spread.map(f => Math.max(1, Math.round(capNative * f)));
         }
     }
 
