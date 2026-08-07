@@ -6583,8 +6583,9 @@ bot.on('text', async (ctx) => {
     const onboardingState = telegramUser?.onboarding_state;
     if (onboardingState === 'awaiting_user_id') {
         touchOnboardingActivity(ctx.from.id);
-        // Strip common prefixes (#) before checking
-        const userIdText = text.trim().replace(/^#/, '');
+        // Strip common prefixes (# or ID:/id:) before checking — IQ Option
+        // displays the ID as "ID: 194936154" and users paste it verbatim.
+        const userIdText = text.trim().replace(/^(#|ID\s*:?\s*)/i, '');
         // If it doesn't look like a User ID, let the brain handle it
         if (!/^\d{5,}$/.test(userIdText)) {
             const brainUser = getUser(ctx.from.id);
