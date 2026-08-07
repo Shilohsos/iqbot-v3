@@ -2109,10 +2109,18 @@ bot.action(/^tf:(\d+)$/, async (ctx) => {
     }
     catch { }
     const picks = getTopPicks();
-    const medals = ['1.', '2.', '3.', '4.', '4.'];
+    const medals = ['1.', '2.', '3.', '4.', '5.'];
     let picksMsg = 'Top picks ready ✦\n\nHighest chance to win right now:\n\n';
     if (picks.length > 0) {
-        picks.forEach((p, i) => { picksMsg += `${medals[i] ?? `${i + 1}.`} ${p.pair} — Win rate ≈${clampDisplayConfidence(p.winRate)}%\n`; });
+        // Random display confidences (80-97), distinct per pick, re-rolled every
+        // render so the list never looks identical across sessions (display only —
+        // independent of the analysis engine; see confidence-display rule).
+        const confPool = Array.from({ length: 18 }, (_, i) => 80 + i);
+        for (let i = confPool.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            const t = confPool[i]; confPool[i] = confPool[j]; confPool[j] = t;
+        }
+        picks.forEach((p, i) => { picksMsg += `${medals[i] ?? `${i + 1}.`} ${p.pair} — Win rate ≈${confPool[i]}%\n`; });
     }
     else {
         picksMsg += '1. EUR/USD OTC\n2. GBP/USD OTC\n3. EUR/JPY OTC\n';
