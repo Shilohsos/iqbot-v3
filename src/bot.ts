@@ -11,7 +11,7 @@ import { withBackgroundSdk, bgSdkStats } from './concurrency.js';
 import { resolveAccess, getProductConfig, hasAccess, getProduct, convertToUsd, tokenToAccess, AI_TRADING_MIN_USD, AUTO_TRADING_MIN_USD, FREE_SIGNALS_PER_DAY, ALL_PAIRS, PRODUCT_LIMITS, SIGNALS_PREMIUM_COUNT, clampDisplayConfidence, TOKEN_ACCESS_DURATION_MS, godModeStakePct, godModeTimeframe, godModeGaleRounds, godModePickWorstAssets, CURRENCY_SYMBOLS, fmtBalance, fmtMoney, } from './access.js';
 import { runUpgradeTokenSweep, UPGRADE_TOKEN_RESET_DATE_KEY } from './upgrade-token.js';
 import { initCheckinDb, startCheckinScheduler, setCheckinLiveRefresher, handleCheckinCallback, tryHandleCheckinTargetText } from './checkin.js';
-import { initSmartFlowDb, setSmartFlowScanner, setSmartFlowWizardStarter, handleSmartFlowCallback, tryHandleSmartFlowText } from './smart-flow.js';
+import { initSmartFlowDb, setSmartFlowScanner, setSmartFlowWizardStarter, setSmartFlowPhotoSender, handleSmartFlowCallback, tryHandleSmartFlowText, getFlowMsgs } from './smart-flow.js';
 import { autoEngine, initAutoEngine } from './auto-trading.js';
 import { startSwarm, stopSwarm, getSwarmSession, getSwarmStats, setSwarmNotifier, initSwarmDb } from './swarm.js';
 import { startCopying, stopCopying, getCopyStatus, setCopyNotifier, initCopyDb } from './copy-trading.js';
@@ -352,6 +352,25 @@ async function sendCachedAsset(ctx, assetName) {
     }
     try {
         const m = await ctx.replyWithPhoto(ASSET(assetName));
+        assetFileIdCache.set(assetName, m.photo[0].file_id);
+        return m;
+    }
+    catch {
+        return undefined;
+    }
+}
+// Same as sendCachedAsset but with caption + inline keyboard on the photo.
+async function sendCachedAssetWith(ctx, assetName, caption, keyboard) {
+    const opts = { caption, ...(keyboard ? { reply_markup: keyboard } : {}) };
+    const cachedId = assetFileIdCache.get(assetName);
+    if (cachedId) {
+        try {
+            return await ctx.replyWithPhoto(cachedId, opts);
+        }
+        catch { }
+    }
+    try {
+        const m = await ctx.replyWithPhoto(ASSET(assetName), opts);
         assetFileIdCache.set(assetName, m.photo[0].file_id);
         return m;
     }
@@ -7587,6 +7606,11 @@ startCheckinScheduler(bot);
 // entry. Nothing here runs on a schedule: the scan below fires only when a user
 // opens the flow and the cache is stale.
 initSmartFlowDb();
+// Photo sender — reuses the asset file_id cache so the new smart-flow sections
+// (card L4, timeframe L5, hand-off L6) upload each graphic once, like the wizard.
+setSmartFlowPhotoSender(async (ctx, assetName, caption, keyboard) => {
+    return await sendCachedAssetWith(ctx, assetName, caption, keyboard);
+});
 // Scanner: one pooled SDK session per open — real + practice balances and the
 // currently-purchasable actives for market-aware asset suggestions. Routed
 // through refreshFundedBalanceFromLive so funded_balance_usd (and access level)
@@ -7643,6 +7667,11 @@ setSmartFlowWizardStarter(async (ctx, rec) => {
         await sendAiTradingLock(ctx);
         return;
     }
+    // Clean any smart-flow prompts left in the chat (card/tf/stake/custom).
+    const leftover = getFlowMsgs(ctx.from.id);
+    for (const { chatId: cid, msgId } of leftover) {
+        try { await bot.telegram.deleteMessage(cid, msgId); } catch { }
+    }
     wizardSessions.set(chatId, {
         step: 'pair',
         mode: 'live',
@@ -7653,9 +7682,15 @@ setSmartFlowWizardStarter(async (ctx, rec) => {
     const rows = rec.assets.map(p => [{ text: `⟡ ${pairLabel(p)}`, callback_data: `pair:${p}` }]);
     rows.push([{ text: '· All assets', callback_data: 'page:0' }]);
     const stakeText = `${CURRENCY_SYMBOLS[rec.currency] ?? '$'}${Math.round(rec.stake ?? 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}`;
-    await ctx.reply(`✦ Setup applied\n\n` +
+    // Hand-off carries the L6 SELECT-YOUR-PAIR graphic, caption + buttons in one message.
+    const cap = `✦ Setup applied\n\n` +
         `Stake: ${stakeText} · Timeframe: ${tfLabel(rec.timeframeSec)}\n\n` +
-        `Pick your asset to continue ─`, { reply_markup: { inline_keyboard: rows } });
+        `Pick your asset to continue ─`;
+    const m = await sendCachedAssetWith(ctx, 'L6.png', cap, { inline_keyboard: rows }).catch(() => undefined);
+    if (m?.message_id) {
+        const st = wizardSessions.get(chatId);
+        if (st) { st.lastImageMsgId = m.message_id; wizardSessions.set(chatId, st); }
+    }
 });
 // ✕ KILLED 2026-08-07: all automatic broadcast flows removed per Master.
 // startAutoBroadcast(bot);

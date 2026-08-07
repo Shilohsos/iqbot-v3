@@ -21,7 +21,6 @@ import { AI_TRADING_MIN_USD, AUTO_TRADING_MIN_USD, CURRENCY_SYMBOLS, fmtBalance 
 import { tfLabel } from './menu.js';
 import { getAdminId } from './ui/admin.js';
 import { logger } from './logger.js';
-
 const DEPOSIT_URL = 'https://iqoption.com/pwa/payments/deposit';
 
 /** Recommendation cache freshness — a scan older than this is refreshed on open. */
@@ -399,6 +398,13 @@ async function openSmartFlow(ctx: any): Promise<void> {
     }
 
     const { text, keyboard } = buildCard(setup.rec, setup.live, setup.demo, setup.stale);
+    await cleanupFlowMsgs(ctx, uid);
+    // Card carries the L4 wizard-entry graphic, caption + buttons in one message.
+    if (photoSender) {
+        const m = await photoSender(ctx, 'L4.png', text, keyboard).catch(() => undefined);
+        trackFlowMsg(uid, m);
+        return;
+    }
     await ctx.reply(text, { reply_markup: keyboard }).catch(() => { });
 }
 
@@ -425,6 +431,13 @@ async function startWithSetup(ctx: any): Promise<void> {
     // Step 1 of 2 — timeframe selection (two recommendations).
     pendingTfChoice.set(uid, rec);
     const tfButtons = rec.timeframesSec.map(tf => [{ text: `⟡ ${tfLabel(tf)}`, callback_data: `smart:tf:${tf}` }]);
+    await cleanupFlowMsgs(ctx, uid);
+    // Timeframe pick carries the L5 TIMEFRAME graphic, caption + buttons in one message.
+    if (photoSender) {
+        const m = await photoSender(ctx, 'L5.png', '✦ Choose your timeframe', { inline_keyboard: tfButtons }).catch(() => undefined);
+        trackFlowMsg(uid, m);
+        return;
+    }
     await ctx.reply('✦ Choose your timeframe', { reply_markup: { inline_keyboard: tfButtons } }).catch(() => { });
 }
 
@@ -436,14 +449,58 @@ async function chooseStake(ctx: any, uid: number, rec: SmartRecommendation, tfSe
     // reads it back on the next tap. Deleting it here breaks every stake button.
     const stakeButtons = rec.stakes.map(s => [{ text: `✦ ${fmtWholeMoney(s, rec.currency)}`, callback_data: `smart:stake:${s}` }]);
     stakeButtons.push([{ text: '⟡ Set my own', callback_data: 'smart:stake:custom' }]);
-    await ctx.reply(`✦ Choose your stake per trade\n· Timeframe: ${tfLabel(tfSec)}`, { reply_markup: { inline_keyboard: stakeButtons } }).catch(() => { });
+    await cleanupFlowMsgs(ctx, uid);
+    // Stake pick stays a text prompt (no dedicated graphic) — previous section is removed.
+    const m = await ctx.reply(`✦ Choose your stake per trade\n· Timeframe: ${tfLabel(tfSec)}`, { reply_markup: { inline_keyboard: stakeButtons } }).catch(() => undefined);
+    trackFlowMsg(uid, m);
 }
 
 /** Hand off to the wizard with the chosen stake + timeframe. */
 async function applyStake(ctx: any, uid: number, rec: SmartRecommendation, tfSec: number, stake: number): Promise<void> {
     pendingCustomStake.delete(uid);
     if (!wizardStarter) return;
+    await cleanupFlowMsgs(ctx, uid);
     await wizardStarter(ctx, { ...rec, stake, timeframeSec: tfSec });
+}
+
+// ─── Section-clean chat flow ────────────────────────────────────────────────
+// Each step deletes the previous step's message(s) before showing the next, so
+// the setup sequence never leaves a stack of stale prompts in the chat. The
+// card, the timeframe pick, the stake pick and the "type your stake" prompt all
+// get cleaned as the user advances; the wizard hand-off message is handled by
+// the wizard itself (it tracks lastImageMsgId).
+const flowMsgs = new Map<number, { chatId: number; msgId: number }[]>();
+
+function trackFlowMsg(uid: number, m: any): void {
+    if (!m?.message_id) return;
+    const chatId = m.chat?.id ?? m.chat_id;
+    if (!chatId) return;
+    const list = flowMsgs.get(uid) ?? [];
+    list.push({ chatId, msgId: m.message_id });
+    flowMsgs.set(uid, list);
+}
+
+async function cleanupFlowMsgs(ctx: any, uid: number): Promise<void> {
+    const list = flowMsgs.get(uid) ?? [];
+    flowMsgs.delete(uid);
+    for (const { chatId, msgId } of list) {
+        try { await ctx.telegram.deleteMessage(chatId, msgId); } catch { }
+    }
+}
+
+/** bot.ts calls this on wizard hand-off so the wizard's own card lifecycle
+ *  (lastImageMsgId) can also clean the smart-flow prompts if any remain. */
+export function getFlowMsgs(uid: number): { chatId: number; msgId: number }[] {
+    const list = flowMsgs.get(uid) ?? [];
+    flowMsgs.delete(uid);
+    return list;
+}
+
+/** Photo sender injected from bot.ts (uses the asset file_id cache). Sends a
+ *  photo with an optional caption + inline keyboard; returns the message. */
+let photoSender: ((ctx: any, assetName: string, caption?: string, keyboard?: any) => Promise<any>) | null = null;
+export function setSmartFlowPhotoSender(fn: (ctx: any, assetName: string, caption?: string, keyboard?: any) => Promise<any>): void {
+    photoSender = fn;
 }
 
 /** Single router for every `smart:*` callback — registered once from bot.ts. */
@@ -473,7 +530,9 @@ export async function handleSmartFlowCallback(ctx: any): Promise<void> {
                 const raw = parts[2];
                 if (raw === 'custom') {
                     pendingCustomStake.set(uid, { rec: sel.rec, timeframeSec: sel.timeframeSec, awaitingText: true });
-                    await ctx.reply(`✦ Type your stake (${CURRENCY_SYMBOLS[sel.rec.currency] ?? '$'} numbers only):`).catch(() => { });
+                    await cleanupFlowMsgs(ctx, uid);
+                    const pm = await ctx.reply(`✦ Type your stake (${CURRENCY_SYMBOLS[sel.rec.currency] ?? '$'} numbers only):`).catch(() => undefined);
+                    trackFlowMsg(uid, pm);
                     return;
                 }
                 const stake = parseFloat(raw);
