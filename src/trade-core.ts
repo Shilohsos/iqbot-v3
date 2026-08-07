@@ -48,6 +48,11 @@ function sdkTimeout<T>(p: Promise<T>, label: string, ms = 15_000): Promise<T> {
     ]);
 }
 
+/** Total wall-clock budget for a post-timeout history recovery pass. Bounds the
+ *  attempt loop so a broken SDK can't hold a chain hostage — past the budget the
+ *  caller settles on NO_FILL (never LOSS). */
+const RECOVER_BUDGET_MS = 40_000;
+
 function isTimeoutError(err: unknown): boolean {
     if (!(err instanceof Error)) return false;
     return err.name === 'TimeoutError' || /timed out|TimeoutError/i.test(err.message);
@@ -94,9 +99,14 @@ export async function recoverFinal(
     startedAtMs: number,
 ): Promise<{ status: FinalStatus; pnl: number; externalId?: number; settleSource: CoreFinal['settleSource'] } | null> {
     try {
-        const positions = await sdkTimeout(sdk.positions(), 'positions-recover', 12_000);
+        const positions = await sdkTimeout(sdk.positions(), 'positions-recover', 10_000);
         const attempts = 6;
+        const deadline = Date.now() + RECOVER_BUDGET_MS;
         for (let i = 0; i < attempts; i++) {
+            if (Date.now() > deadline) {
+                logger.warn('trade-core', `recoverFinal budget exhausted for optionId=${optionId} after ${i} attempts`);
+                break;
+            }
             // 1) still open?
             const opened = positions.getOpenedPositions();
             let ext = externalId;
@@ -117,20 +127,29 @@ export async function recoverFinal(
                 const hist = positions.getPositionsHistory();
                 for (const id of [ext, optionId].filter((x): x is number => x != null && x > 0)) {
                     try {
-                        const hp = await hist.getPositionHistory(id);
+                        const hp = await sdkTimeout(hist.getPositionHistory(id), `history#${id}`, 10_000);
                         if (hp && (hp as any).status === 'closed') {
                             const f = finalFromPosition(hp as any);
                             if (f) return { status: f.status, pnl: f.pnl, externalId: ext ?? (hp as any).externalId, settleSource: 'history' };
                         }
-                    } catch { /* try next id */ }
+                    } catch (e) {
+                        logger.warn('trade-core', `recoverFinal history#${id} miss: ${e instanceof Error ? e.message : e}`);
+                    }
                 }
-            } catch { /* */ }
+            } catch (e) {
+                logger.warn('trade-core', `recoverFinal history lookup failed: ${e instanceof Error ? e.message : e}`);
+            }
 
             // 3) history page scan by amount + time window
             try {
                 const facade = (positions as any).positionsHistoryFacade;
-                if (facade?.fetchPrevPage) await facade.fetchPrevPage().catch(() => {});
-                const list: any[] = typeof facade?.getPositions === 'function' ? await facade.getPositions() : [];
+                if (facade?.fetchPrevPage) {
+                    await sdkTimeout(facade.fetchPrevPage(), 'history-page', 10_000)
+                        .catch((e: unknown) => logger.warn('trade-core', `recoverFinal fetchPrevPage failed: ${e instanceof Error ? e.message : e}`));
+                }
+                const list: any[] = typeof facade?.getPositions === 'function'
+                    ? await sdkTimeout(Promise.resolve(facade.getPositions()), 'history-list', 10_000)
+                    : [];
                 const windowStart = startedAtMs - 5_000;
                 const match = (Array.isArray(list) ? list : [])
                     .filter(p => p && p.status === 'closed')
@@ -147,7 +166,9 @@ export async function recoverFinal(
                     const f = finalFromPosition(match);
                     if (f) return { status: f.status, pnl: f.pnl, externalId: match.externalId, settleSource: 'history' };
                 }
-            } catch { /* */ }
+            } catch (e) {
+                logger.warn('trade-core', `recoverFinal page scan failed: ${e instanceof Error ? e.message : e}`);
+            }
 
             await new Promise(r => setTimeout(r, 1500 + i * 500));
         }
@@ -165,12 +186,22 @@ function waitForClose(
     return new Promise(resolve => {
         let externalId: number | undefined;
         let done = false;
+        // First-error-only logging for the 2s poll paths: a broken SDK would
+        // otherwise emit an identical line every tick for the whole wait window.
+        let pollErrLogged = false;
+        const logPollErr = (where: string, e: unknown) => {
+            if (pollErrLogged) return;
+            pollErrLogged = true;
+            logger.warn('trade-core', `waitForClose ${where} error (further identical errors suppressed): ${e instanceof Error ? e.message : e}`);
+        };
         const finish = (r: { status: FinalStatus | 'TIMEOUT'; pnl: number; externalId?: number; settleSource: CoreFinal['settleSource']; error?: string }) => {
             if (done) return;
             done = true;
             clearTimeout(timer);
             clearInterval(poll);
-            try { positions.unsubscribeOnUpdatePosition(callback); } catch { /* */ }
+            try { positions.unsubscribeOnUpdatePosition(callback); } catch (e) {
+                logger.warn('trade-core', `waitForClose unsubscribe failed: ${e instanceof Error ? e.message : e}`);
+            }
             resolve(r);
         };
 
@@ -217,9 +248,9 @@ function waitForClose(
                     try {
                         const hist = positions.getPositionsHistory();
                         let hp: any = null;
-                        try { hp = await hist.getPositionHistory(externalId!); } catch { /* */ }
+                        try { hp = await sdkTimeout(hist.getPositionHistory(externalId!), 'poll-history-ext', 10_000); } catch (e) { logPollErr('history-by-external', e); }
                         if (!hp || hp.status !== 'closed') {
-                            try { hp = await hist.getPositionHistory(optionId); } catch { /* */ }
+                            try { hp = await sdkTimeout(hist.getPositionHistory(optionId), 'poll-history-opt', 10_000); } catch (e) { logPollErr('history-by-option', e); }
                         }
                         if (hp && hp.status === 'closed') {
                             const pnl = hp.closeProfit ?? 0;
@@ -231,9 +262,9 @@ function waitForClose(
                             else status = pnl > 0 ? 'WIN' : pnl === 0 ? 'TIE' : 'LOSS';
                             finish({ status, pnl: status === 'WIN' ? pnl : 0, externalId, settleSource: 'history' });
                         }
-                    } catch { /* next poll */ }
+                    } catch (e) { logPollErr('history-fallback', e); }
                 }
-            } catch { /* */ }
+            } catch (e) { logPollErr('poll', e); }
         }, 2000);
     });
 }
@@ -261,8 +292,8 @@ export async function settle(sdk: ClientSdk, order: CoreOrder): Promise<CoreFina
     });
 
     try {
-        const positions = await sdkTimeout(sdk.positions(), 'positions');
-        const balances = await sdkTimeout(sdk.balances(), 'balances');
+        const positions = await sdkTimeout(sdk.positions(), 'positions', 10_000);
+        const balances = await sdkTimeout(sdk.balances(), 'balances', 10_000);
         const wantLive = order.balanceType === 'live';
         let selectedBalance = balances.getBalances().find(b =>
             b.type === (wantLive ? BalanceType.Real : BalanceType.Demo)
@@ -277,9 +308,14 @@ export async function settle(sdk: ClientSdk, order: CoreOrder): Promise<CoreFina
         const currentTime = sdk.currentTime();
         const targetSize = order.timeframeSec ?? 60;
         const normalizedInput = normTicker(pair);
-        const blitzOptions = await sdkTimeout(sdk.blitzOptions(), 'blitzOptions');
+        const blitzOptions = await sdkTimeout(sdk.blitzOptions(), 'blitzOptions', 15_000);
         // refresh actives when available
-        try { await (blitzOptions as any).refreshActives?.(); } catch { /* */ }
+        try {
+            const refresh = (blitzOptions as any).refreshActives?.();
+            if (refresh) await sdkTimeout(refresh, 'refreshActives', 15_000);
+        } catch (e) {
+            logger.warn('trade-core', `refreshActives failed (using cached actives): ${e instanceof Error ? e.message : e}`);
+        }
         const active = blitzOptions.getActives().find(a =>
             normTicker(a.ticker) === normalizedInput ||
             normTicker(a.localizationKey) === normalizedInput
@@ -291,15 +327,18 @@ export async function settle(sdk: ClientSdk, order: CoreOrder): Promise<CoreFina
         const dir = direction === 'call' ? BlitzOptionsDirection.Call : BlitzOptionsDirection.Put;
         let option: { id: number };
         try {
-            option = await sdkTimeout(blitzOptions.buy(active, dir, targetSize, amount, selectedBalance), 'buy');
+            option = await sdkTimeout(blitzOptions.buy(active, dir, targetSize, amount, selectedBalance), 'buy', 20_000);
         } catch (buyErr) {
             const msg = buyErr instanceof Error ? buyErr.message : String(buyErr);
-            // one silent refresh+retry on profit rate
+            // Same-stake refresh+retry on profit-rate change (4117) — the buy did not
+            // fill, so retrying the SAME amount can never double a round.
             if (/4117|profit rate|not been purchased/i.test(msg)) {
+                logger.warn('trade-core', `buy rejected (profit-rate/4117) pair=${pair} amt=${amount} — refreshing actives and retrying same stake`);
                 try {
-                    await (blitzOptions as any).refreshActives?.();
+                    const refresh = (blitzOptions as any).refreshActives?.();
+                    if (refresh) await sdkTimeout(refresh, 'refreshActives-retry', 15_000);
                     await new Promise(r => setTimeout(r, 400));
-                    option = await sdkTimeout(blitzOptions.buy(active, dir, targetSize, amount, selectedBalance), 'buy-retry');
+                    option = await sdkTimeout(blitzOptions.buy(active, dir, targetSize, amount, selectedBalance), 'buy-retry', 20_000);
                 } catch (e2) {
                     return noFill(e2 instanceof Error ? e2.message : String(e2));
                 }

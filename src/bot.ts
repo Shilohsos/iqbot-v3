@@ -1328,13 +1328,13 @@ async function runMartingale(ctx, ssid, pair, direction, amount, timeframeSec = 
                 userId, pair, direction, amount, amount, 1, effectiveRounds, timeframeSec, balanceType, currency, ssid, logMsg.message_id, JSON.stringify(sentMessages)
             );
             galeSessionId = result.lastInsertRowid;
-        } catch (e) { /* non-fatal */ }
+        } catch (e) { logger.warn('gale', `gale_sessions insert failed (non-fatal): ${e instanceof Error ? e.message : e}`); }
         const scheduleCleanup = () => {
             const chatId = ctx.chat.id;
             // Capture reference (not snapshot) so IDs pushed after this call are included
             setTimeout(() => {
                 for (const id of sentMessages) {
-                    ctx.telegram.deleteMessage(chatId, id).catch(() => { });
+                    ctx.telegram.deleteMessage(chatId, id).catch((e) => logger.warn('gale', `cleanup delete failed msg ${id}: ${e instanceof Error ? e.message : e}`));
                 }
             }, 3_600_000);
         };
@@ -1345,7 +1345,7 @@ async function runMartingale(ctx, ssid, pair, direction, amount, timeframeSec = 
                 try {
                     await ctx.telegram.deleteMessage(ctx.chat.id, lastRoundImgId);
                 }
-                catch { }
+                catch (e) { logger.warn('gale', `round image delete failed: ${e instanceof Error ? e.message : e}`); }
                 lastRoundImgId = undefined;
             }
             try {
@@ -1353,13 +1353,13 @@ async function runMartingale(ctx, ssid, pair, direction, amount, timeframeSec = 
                 lastRoundImgId = m.message_id;
                 sentMessages.push(m.message_id);
             }
-            catch { }
+            catch (e) { logger.warn('gale', `round image send failed: ${e instanceof Error ? e.message : e}`); }
         };
         const syncLog = async () => {
             try {
                 await ctx.telegram.editMessageText(ctx.chat.id, logMsg.message_id, undefined, logLines.join('\n'));
             }
-            catch { }
+            catch (e) { logger.warn('gale', `session log edit failed: ${e instanceof Error ? e.message : e}`); }
         };
         // SDK can drop between analysis and execution (or between rounds). Keep a
         // mutable handle so an auth-expiry reconnect can swap in a fresh connection
@@ -1368,7 +1368,7 @@ async function runMartingale(ctx, ssid, pair, direction, amount, timeframeSec = 
         let activeSsid = ssid;
         let authRetried = false;
         let buyFailRetries = 0; // 4117 / profit-rate / market-closed — no trade placed
-        try { sdkPool.pin(userId); } catch { /* */ }
+        try { sdkPool.pin(userId); } catch (e) { logger.warn('gale', `sdk pin failed for ${userId}: ${e instanceof Error ? e.message : e}`); }
         const isAdminUser = userId === getAdminId();
         // Render the standard "trade could not be placed" message (used when a trade
         // fails for good, including after an exhausted auth retry).
@@ -1422,7 +1422,7 @@ async function runMartingale(ctx, ssid, pair, direction, amount, timeframeSec = 
                                 activeSdk = await sdkPool.get(userId, freshSsid);
                             }
                         }
-                        catch { /* keep prior handle; execRound falls back to ssid path */ }
+                        catch (e) { logger.warn('gale', `pre-round SDK refresh failed (keeping prior handle): ${e instanceof Error ? e.message : e}`); }
                         try {
                             result = await execRound();
                         }
@@ -1454,7 +1454,7 @@ async function runMartingale(ctx, ssid, pair, direction, amount, timeframeSec = 
                             }
                             activeSsid = freshSsid;
                         }
-                        catch { /* rebuild failed */ }
+                        catch (e) { logger.warn('gale', `SDK rebuild after auth retry failed: ${e instanceof Error ? e.message : e}`); }
                     }
                     // Retry the same round at the same amount — no trade was placed
                     try {
@@ -1466,7 +1466,7 @@ async function runMartingale(ctx, ssid, pair, direction, amount, timeframeSec = 
                         await syncLog();
                         await ctx.reply('⚠️ Connection lost mid-trade. No trade was placed.\n\nTry again ', {
                             reply_markup: { inline_keyboard: [[{ text: '↻ New Opportunity', callback_data: 'ui:trade' }]] },
-                        }).catch(() => { });
+                        }).catch((e) => logger.warn('gale', `connection-lost notice send failed: ${e instanceof Error ? e.message : e}`));
                         return;
                     }
                 }
@@ -1514,7 +1514,7 @@ async function runMartingale(ctx, ssid, pair, direction, amount, timeframeSec = 
                     await syncLog();
                     await ctx.reply('⚠️ *Insufficient balance*\\n\\nFund your account to continue trading.', { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [
                                 [{ text: '✦ Fund Account', url: 'https://iqoption.com/pwa/payments/deposit' }],
-                            ] } }).catch(() => { });
+                            ] } }).catch((e) => logger.warn('gale', `insufficient-balance notice send failed: ${e instanceof Error ? e.message : e}`));
                     return;
                 }
                 logLines[lastIdx] = `✦ Trade ${round}|⚠️ ${fmtMoney(currentAmount, currency)} → ${result.error ?? result.status}`;
@@ -1557,7 +1557,7 @@ async function runMartingale(ctx, ssid, pair, direction, amount, timeframeSec = 
                         const counterMsg = remaining > 0
                             ? `◆ Trade ${newDailyCount}/10 — ${remaining} demo trades remaining today`
                             : `◆ Trade 10/10 — Demo limit reached for today`;
-                        await ctx.reply(counterMsg).catch(() => { });
+                        await ctx.reply(counterMsg).catch((e) => logger.warn('gale', `demo counter send failed: ${e instanceof Error ? e.message : e}`));
                     }
                     if (demoPrevCount > 0 && newDailyCount < 10) {
                         await showDemoUpsell(ctx, sentMessages);
@@ -1617,7 +1617,7 @@ async function runMartingale(ctx, ssid, pair, direction, amount, timeframeSec = 
                                     recovered = historyPos;
                                 }
                             }
-                            catch { /* fall through */ }
+                            catch (e) { logger.warn('gale', `settlement double-check failed (falling through): ${e instanceof Error ? e.message : e}`); }
                         }
                         if (!recovered) {
                             try {
@@ -1635,7 +1635,7 @@ async function runMartingale(ctx, ssid, pair, direction, amount, timeframeSec = 
                                 if (match)
                                     recovered = match;
                             }
-                            catch { /* ignore */ }
+                            catch (e) { logger.warn('gale', `history re-check failed: ${e instanceof Error ? e.message : e}`); }
                         }
                         if (recovered) {
                             const reason = recovered.closeReason ?? '';
@@ -1728,7 +1728,7 @@ async function runMartingale(ctx, ssid, pair, direction, amount, timeframeSec = 
                                 }
                                 activeSsid = freshSsid;
                             }
-                            catch { /* rebuild failed */ }
+                            catch (e) { logger.warn('gale', `SDK rebuild after auth retry failed: ${e instanceof Error ? e.message : e}`); }
                         }
                     }
                     if (shouldAbort) {
@@ -1780,7 +1780,7 @@ async function runMartingale(ctx, ssid, pair, direction, amount, timeframeSec = 
                     if (buyFailRetries >= 2) {
                         await ctx.reply('⚠️ Result unconfirmed — stopped without gale double. Try New Opportunity.', {
                             reply_markup: { inline_keyboard: [[{ text: '↻ New Opportunity', callback_data: 'ui:trade' }]] },
-                        }).catch(() => { });
+                        }).catch((e) => logger.warn('gale', `unconfirmed-result notice send failed: ${e instanceof Error ? e.message : e}`));
                         scheduleCleanup();
                         return;
                     }
@@ -1811,7 +1811,7 @@ async function runMartingale(ctx, ssid, pair, direction, amount, timeframeSec = 
                             }
                             activeSsid = freshSsid;
                         }
-                        catch { /* SDK rebuild failed — continue with dead handle, will exhaust */ }
+                        catch (e) { logger.warn('gale', `SDK rebuild failed — continuing with dead handle, will exhaust: ${e instanceof Error ? e.message : e}`); }
                     }
                 }
                 // Fall through to LOSS path below — continue recovery
@@ -1853,16 +1853,16 @@ async function runMartingale(ctx, ssid, pair, direction, amount, timeframeSec = 
     }
     finally {
         // Always clear active gale session (completed or aborted)
-        if (galeSessionId) { try { db.prepare('UPDATE gale_sessions SET status=CASE WHEN status=\'active\' THEN \'completed\' ELSE status END, updated_at=datetime(\'now\') WHERE id=?').run(galeSessionId); } catch (e) { /* */ } }
-        try { sdkPool.unpin(userId); } catch { /* */ }
-        try { sdkPool.release(userId); } catch { /* */ }
+        if (galeSessionId) { try { db.prepare('UPDATE gale_sessions SET status=CASE WHEN status=\'active\' THEN \'completed\' ELSE status END, updated_at=datetime(\'now\') WHERE id=?').run(galeSessionId); } catch (e) { logger.warn('gale', `gale session close failed: ${e instanceof Error ? e.message : e}`); } }
+        try { sdkPool.unpin(userId); } catch (e) { logger.warn('gale', `sdk unpin failed: ${e instanceof Error ? e.message : e}`); }
+        try { sdkPool.release(userId); } catch (e) { logger.warn('gale', `sdk release failed: ${e instanceof Error ? e.message : e}`); }
         // Shut down a replacement admin SDK created during an auth retry (the
         // caller's finally only knows about the original handle).
         if (createdAdminSdk) {
             try {
                 await createdAdminSdk.shutdown();
             }
-            catch { }
+            catch (e) { logger.warn('gale', `admin SDK shutdown failed: ${e instanceof Error ? e.message : e}`); }
         }
         const prev = activeTradeSessions.get(userId) ?? 0;
         if (prev <= 1)
@@ -2686,7 +2686,8 @@ async function editSignalCard(uid, chatId, msgId, text, keyboard, guard) {
                 await doEdit();
                 return true;
             }
-            catch {
+            catch (e2) {
+                logger.warn('signals', `card edit retry failed for ${uid}: ${e2 instanceof Error ? e2.message : e2}`);
                 return false;
             }
         }
@@ -2971,7 +2972,10 @@ bot.action(/^stf:(\d+)$/, async (ctx) => {
                     await editSignalCard(uid, chatId, cardMsg.message_id, renderCard(`🟢 *ENTER NOW* — place your ${dirStr} trade`), backOnly, () => !prepCancelled);
                 }
                 prepCountdowns.delete(uid);
-            })();
+            })().catch((e) => {
+                prepCountdowns.delete(uid);
+                logger.warn('signals', `prep countdown failed for ${uid}: ${e instanceof Error ? e.message : e}`);
+            });
         }
         catch (err) {
             logger.error('signals', `signal generation failed for ${uid}: ${err instanceof Error ? err.message : err}`);
@@ -7555,8 +7559,14 @@ setTimeout(async () => {
         console.error('[GALE-BOOT] Error:', err instanceof Error ? err.message : err);
     }
 }, 10_000); // 10s after boot — let recovery run first
+let recoveryBusy = false; // busy lock — a pass that resumes a gale can outlive the 2min interval
 setInterval(() => {
-    recoverMissedTradeResults(bot, runMartingale).catch(() => { });
+    if (recoveryBusy)
+        return;
+    recoveryBusy = true;
+    recoverMissedTradeResults(bot, runMartingale)
+        .catch((err) => logger.warn('recovery', `periodic pass failed: ${err instanceof Error ? err.message : err}`))
+        .finally(() => { recoveryBusy = false; });
 }, 2 * 60 * 1000);
 // Auto Trading engine: inject the Telegram sender and resume any running sessions.
 // Route the SDK's WebSocket through the residential proxy pool when enabled —
@@ -7952,6 +7962,55 @@ backgroundIntervals.push(setInterval(async () => {
 // Uses the SDK of the user whose signal expired (their SSID is fresh since they
 // just generated a signal). Market data is not user-specific so the same SDK
 // can check candles for all expired signals in this tick.
+//
+// Settlement preference (Part 4.3): when the signal owner's OWN closed position
+// on the pair/window is detectable via position history, that real IQ Option
+// settlement decides the result; the candle open-vs-close heuristic stays the
+// documented fallback for users who follow signals without a detectable position.
+async function findRealSignalSettlement(sig, activeId, ownerSdk) {
+    const owner = getUser(sig.telegram_id);
+    if (!owner?.ssid || owner.ssid_valid === 0) return null;
+    const entrySec = Math.floor(new Date(sig.entry_time.replace(' ', 'T') + 'Z').getTime() / 1000);
+    const expirySec = Math.floor(new Date(sig.expiry_time.replace(' ', 'T') + 'Z').getTime() / 1000);
+    let sdk = ownerSdk;
+    let pooled = false;
+    try {
+        if (!sdk) {
+            sdk = await withTimeout(sdkPool.get(sig.telegram_id, owner.ssid), 8_000, 'sig-settle-pool');
+            pooled = true;
+        }
+        const positions = await withTimeout(sdk.positions(), 10_000, 'sig-settle-positions');
+        const facade = positions.positionsHistoryFacade;
+        if (facade?.fetchPrevPage) {
+            await withTimeout(facade.fetchPrevPage(), 10_000, 'sig-settle-page')
+                .catch(e => logger.warn('signal-track', `history page fetch failed for ${sig.telegram_id}: ${e instanceof Error ? e.message : e}`));
+        }
+        const list = typeof facade?.getPositions === 'function'
+            ? await withTimeout(Promise.resolve(facade.getPositions()), 10_000, 'sig-settle-list')
+            : [];
+        const pool = [...(Array.isArray(list) ? list : []), ...positions.getOpenedPositions()];
+        const match = pool
+            .filter(p => p && p.status === 'closed' && p.activeId === activeId)
+            .filter(p => !p.direction || String(p.direction).toLowerCase() === sig.direction)
+            .filter(p => {
+                const ot = p.openTime ? Math.floor(new Date(p.openTime).getTime() / 1000) : 0;
+                // Opened between signal entry (30s slack for early clickers) and expiry.
+                return ot >= entrySec - 30 && ot <= expirySec;
+            })
+            .sort((a, b) => new Date(b.closeTime || 0).getTime() - new Date(a.closeTime || 0).getTime())[0];
+        if (!match) return null;
+        const pnl = Number(match.closeProfit ?? 0);
+        const reason = String(match.closeReason ?? '').toLowerCase();
+        let status;
+        if (reason === 'win') status = 'WIN';
+        else if (reason === 'equal') status = 'TIE';
+        else if (reason === 'loss' || reason === 'loose') status = 'LOSS';
+        else status = pnl > 0 ? 'WIN' : pnl === 0 ? 'TIE' : 'LOSS';
+        return { status, pnl, closeReason: reason, externalId: match.externalId };
+    } finally {
+        if (pooled) sdkPool.release(sig.telegram_id);
+    }
+}
 let trackingBusy = false; // prevent overlapping ticks (setInterval race)
 backgroundIntervals.push(setInterval(async () => {
     if (trackingBusy)
@@ -7985,31 +8044,49 @@ backgroundIntervals.push(setInterval(async () => {
             return;
         }
         try {
-            const blitz = await refSdk.blitzOptions();
+            const blitz = await withTimeout(refSdk.blitzOptions(), 15_000, 'sig-track blitzOptions');
             const actives = blitz.getActives();
             const norm = (s) => s.toUpperCase().replace(/^front\./i, '').replace(/[-\/\s]/g, '');
             const toSqlite = (d) => d.toISOString().replace('T', ' ').slice(0, 19);
+            // Whole-tick budget (Part 3.2): signals left over stay 'active' and are
+            // re-picked next tick, so deferring is safe — hanging is not.
+            const tickDeadline = Date.now() + 40_000;
             for (const sig of expired) {
+                if (Date.now() > tickDeadline) {
+                    logger.warn('signal-track', 'tick budget exhausted — deferring remaining signals to next tick');
+                    break;
+                }
                 try {
                     const active = actives.find(a => norm(a.ticker) === norm(sig.pair));
                     if (!active) {
-                        updateSignalTrackResult(sig.id, 'lost', 'unknown_pair');
-                        logger.warn('signal-track', `signal #${sig.id}: unknown pair ${sig.pair}`);
+                        // Indeterminate, not a loss (settlement law): pair missing from
+                        // actives means we can't read the market, not that the user lost.
+                        updateSignalTrackResult(sig.id, 'expired', 'unknown_pair');
+                        logger.warn('signal-track', `signal #${sig.id}: unknown pair ${sig.pair} — finalized neutral`);
                         continue;
                     }
-                    // ── Candle lookup: request 2 most recent candles,
-                    const candles = await refSdk.candles();
+                    // ── Real settlement first (Part 4.3): the owner's own closed
+                    // position on this pair/window beats any candle heuristic.
+                    let realSettle = null;
+                    try {
+                        const ownerSdk = sig.telegram_id === refUser.telegram_id ? refSdk : null;
+                        realSettle = await findRealSignalSettlement(sig, active.id, ownerSdk);
+                    } catch (e) {
+                        logger.warn('signal-track', `real-settlement lookup failed for signal #${sig.id}: ${e instanceof Error ? e.message : e} — falling back to candle heuristic`);
+                    }
+                    // ── Candle lookup (fallback path only): request recent candles,
+                    const candles = realSettle ? null : await withTimeout(refSdk.candles(), 15_000, 'sig-track candles');
                     // Request 2 candles — getCandles may return the currently-open
                     // candle with a live "close" price. Filter to completed candles
                     // only, then take the most recent one as the best available price
                     // data point at expiry time.
-                    let history = await candles.getCandles(active.id, sig.timeframe, { count: 15 });
+                    let history = realSettle ? [] : await withTimeout(candles.getCandles(active.id, sig.timeframe, { count: 15 }), 15_000, 'sig-track getCandles');
                     const nowSec = Math.floor(Date.now() / 1000);
                     const completed = history.filter(c => c.from + sig.timeframe <= nowSec);
-                    if (completed.length === 0) {
-                        // No candle data — can't determine result. Mark as error,
+                    if (!realSettle && completed.length === 0) {
+                        // No candle data — can't determine result. Mark as expired,
                         // NOT as loss. Don't trigger martingale recovery.
-                        updateSignalTrackResult(sig.id, 'lost', 'no_data');
+                        updateSignalTrackResult(sig.id, 'expired', 'no_data');
                         logger.warn('signal-track', `signal #${sig.id}: no completed candle for ${sig.pair} — marking as finished (no recovery)`);
                         // Send a neutral message — no "re-enter" or "double your amount"
                         const nFlags = {
@@ -8042,15 +8119,27 @@ backgroundIntervals.push(setInterval(async () => {
                         }
                         if (!nEdited) {
                             if (sig.card_chat_id && sig.card_msg_id) {
-                                bot.telegram.deleteMessage(sig.card_chat_id, sig.card_msg_id).catch(() => { });
+                                bot.telegram.deleteMessage(sig.card_chat_id, sig.card_msg_id).catch((e) => logger.warn('signal-track', `stale card delete failed for ${sig.telegram_id}: ${e instanceof Error ? e.message : e}`));
                             }
                             try {
                                 await bot.telegram.sendMessage(sig.telegram_id, nText, { parse_mode: 'Markdown', reply_markup: nKb });
                             }
-                            catch { /* user may have blocked bot */ }
+                            catch (e) { logger.warn('signal-track', `expired-notice send failed for ${sig.telegram_id} (blocked?): ${e instanceof Error ? e.message : e}`); }
                         }
                         continue;
                     }
+                    let isWin;
+                    let isTie = false;
+                    if (realSettle) {
+                        // Real IQ Option settlement (owner's own position on this
+                        // pair/window) decides the result outright — the candle
+                        // heuristic is never consulted (Part 4.3).
+                        isTie = realSettle.status === 'TIE';
+                        isWin = realSettle.status === 'WIN';
+                        const settleTag = isTie ? 'iq_settlement_tie' : isWin ? 'iq_settlement_win' : 'iq_settlement_loss';
+                        updateSignalTrackResult(sig.id, (isTie || isWin) ? 'won' : 'lost', settleTag);
+                        logger.info('signal-track', `signal #${sig.id} user ${sig.telegram_id} ${sig.pair} ${sig.direction} → ${realSettle.status} via REAL settlement (closeReason=${realSettle.closeReason || '-'}, pnl=${realSettle.pnl}, ext=${realSettle.externalId ?? '-'})`);
+                    } else {
                     completed.sort((a, b) => a.from - b.from);
                     // Anchor to the TRADE WINDOW candle, not "whatever completed last".
                     // Signal expiry = prep(60s) + grace(2s) + timeframe. The live trade
@@ -8078,8 +8167,6 @@ backgroundIntervals.push(setInterval(async () => {
                     const eps = Math.max(Math.abs(openPrice) * 1e-8, 1e-8);
                     const wentUp = closePrice > openPrice + eps;
                     const wentDown = closePrice < openPrice - eps;
-                    let isWin;
-                    let isTie = false;
                     if (!wentUp && !wentDown) {
                         isTie = true;
                         isWin = false;
@@ -8088,7 +8175,6 @@ backgroundIntervals.push(setInterval(async () => {
                     } else {
                         isWin = wentDown;
                     }
-                    const status = isTie ? 'won' : (isWin ? 'won' : 'lost'); // status enum only won/lost — tie handled in messaging via result
                     const result = isTie ? 'price_flat' : (isWin ? 'price_moved_favor' : 'price_moved_against');
                     // TIE: mark finished without martingale (nothing lost)
                     if (isTie) {
@@ -8097,6 +8183,7 @@ backgroundIntervals.push(setInterval(async () => {
                     } else {
                         updateSignalTrackResult(sig.id, isWin ? 'won' : 'lost', result);
                         logger.info('signal-track', `signal #${sig.id} user ${sig.telegram_id} ${sig.pair} ${sig.direction} → ${isWin ? 'won' : 'lost'} (entry=${openPrice}, exit=${closePrice}, candleFrom=${tradeCandle.from}, targetStart=${tradeStartSec})`);
+                    }
                     }
                     const dirEmoji = sig.direction === 'call' ? '🟢' : '🔴';
                     const dirStr = sig.direction === 'call' ? 'BUY' : 'SELL';
@@ -8187,7 +8274,7 @@ backgroundIntervals.push(setInterval(async () => {
                     }
                     if (!edited) {
                         if (sig.card_chat_id && sig.card_msg_id) {
-                            bot.telegram.deleteMessage(sig.card_chat_id, sig.card_msg_id).catch(() => { });
+                            bot.telegram.deleteMessage(sig.card_chat_id, sig.card_msg_id).catch((e) => logger.warn('signal-track', `stale card delete failed for ${sig.telegram_id}: ${e instanceof Error ? e.message : e}`));
                         }
                         try {
                             const newMsg = await bot.telegram.sendMessage(sig.telegram_id, notifyText, { parse_mode: 'Markdown', reply_markup: keyboard });
@@ -8199,8 +8286,15 @@ backgroundIntervals.push(setInterval(async () => {
                     }
                 }
                 catch (err) {
+                    // Settlement law: an error is not a result. Leave the signal
+                    // active so the next tick retries; only after 10 minutes of
+                    // failed checks finalize NEUTRAL ('expired'), never 'lost'.
                     logger.warn('signal-track', `error checking signal ${sig.id}: ${err instanceof Error ? err.message : err}`);
-                    updateSignalTrackResult(sig.id, 'lost', 'check_error');
+                    const expiredAtMs = Date.parse(sig.expiry_time.replace(' ', 'T') + 'Z') || 0;
+                    if (Date.now() - expiredAtMs > 10 * 60_000) {
+                        updateSignalTrackResult(sig.id, 'expired', 'check_error');
+                        logger.warn('signal-track', `signal #${sig.id}: unresolvable after 10min of check errors — finalized neutral`);
+                    }
                 }
             }
         }

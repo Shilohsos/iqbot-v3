@@ -93,7 +93,9 @@ export async function executeTrade(ssid: string, trade: TradeRequest): Promise<T
     try {
         return await executeTradeWithSdk(sdk, trade);
     } finally {
-        try { await sdk.shutdown(); } catch { /* */ }
+        try { await sdk.shutdown(); } catch (e) {
+            logger.warn('trade', `sdk shutdown after trade failed: ${e instanceof Error ? e.message : e}`);
+        }
     }
 }
 

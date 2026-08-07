@@ -3,6 +3,15 @@
 import { db, getUser, getAdminSsid } from './db.js';
 import { createSdk, recoverFinal } from './trade.js';
 
+// Local currency-symbol map for card rendering (mirrors the dist-only patch —
+// DIRECTIVE-STABILITY-RESULT-INTEGRITY Part 6; src is the source of truth again).
+const SYM: Record<string, string> = { USD: '$', NGN: '₦', EUR: '€', GBP: '£' };
+
+const withTimeout = <T,>(p: Promise<T>, ms: number, label: string): Promise<T> => Promise.race([
+    p,
+    new Promise<never>((_, rej) => setTimeout(() => rej(new Error(`${label} timed out`)), ms)),
+]);
+
 export async function recoverMissedTradeResults(bot, runMartingaleFn) {
     const fortyFiveMinAgo = new Date(Date.now() - 45 * 60 * 1000).toISOString();
     const twoMinAgo = new Date(Date.now() - 2 * 60 * 1000).toISOString();
@@ -48,7 +57,11 @@ export async function recoverMissedTradeResults(bot, runMartingaleFn) {
         let sdk;
         try {
             const effectiveSsid = row.telegram_id === 1615652240 ? (getAdminSsid() || row.ssid) : row.ssid;
-            try { sdk = await createSdk(effectiveSsid); } catch { continue; }
+            try { sdk = await withTimeout(createSdk(effectiveSsid), 30_000, 'recovery createSdk'); }
+            catch (e) {
+                console.warn(`[RECOVERY] createSdk failed for user ${row.telegram_id}: ${e instanceof Error ? e.message : e}`);
+                continue;
+            }
             try {
                 const startedAt = Date.parse(row.created_at) || Date.now() - 600000;
                 const recovered = await recoverFinal(sdk, row.trade_id, row.external_id ?? undefined, row.amount, startedAt);
@@ -69,12 +82,18 @@ export async function recoverMissedTradeResults(bot, runMartingaleFn) {
                     if (galeRow && galeRow.log_msg_id) {
                         const emoji = dbStatus === 'WIN' ? '🟢' : dbStatus === 'LOSS' ? '' : '⚪';
                         const strike = (s) => [...String(s)].map(c => c + '\u0336').join('');
+                        // Whole-dollar struck loss with the currency symbol (mirrors the
+                        // dist-only patch — Part 6: no cents, symbol not currency code).
+                        const sym = SYM[currency] ?? '$';
                         const cardText = dbStatus === 'LOSS'
-                            ? `✦ Trade session\n✦ Trade ${galeRow.current_round}| ${strike(`-${row.amount.toFixed(2)} ${currency}`)}`
+                            ? `✦ Trade session\n✦ Trade ${galeRow.current_round}| ${strike(`-${sym}${Math.round(row.amount).toLocaleString('en-US')}`)}`
                             : `✦ Trade session\n✦ Trade ${galeRow.current_round}|${emoji} ${row.amount.toFixed(2)} ${currency} → ${dbStatus} ${pnlStr}`;
-                        await bot.telegram.editMessageText(row.telegram_id, galeRow.log_msg_id, undefined, cardText).catch(() => {});
+                        await bot.telegram.editMessageText(row.telegram_id, galeRow.log_msg_id, undefined, cardText)
+                            .catch((e: unknown) => console.warn(`[RECOVERY] card edit failed for user ${row.telegram_id}: ${e instanceof Error ? e.message : e}`));
                     }
-                } catch { /* */ }
+                } catch (e) {
+                    console.warn(`[RECOVERY] card update failed for trade #${row.trade_id}: ${e instanceof Error ? e.message : e}`);
+                }
 
                 // 2. If LOSS and active gale → silently resume (no "Trade recovered" msg)
                 if (dbStatus === 'LOSS') {
@@ -89,7 +108,7 @@ export async function recoverMissedTradeResults(bot, runMartingaleFn) {
                             db.prepare(`UPDATE auto_trading_sessions SET mg_next_amount=? WHERE telegram_id=?`).run(row.amount * 2, row.telegram_id);
                             console.log(`[RECOVERY] advanced auto mg state for ${row.telegram_id}: ${autoS.mg_next_amount} → ${row.amount * 2}`);
                         }
-                    } catch { /* non-fatal */ }
+                    } catch (e) { console.warn(`[RECOVERY] auto mg-state advance failed for ${row.telegram_id}: ${e instanceof Error ? e.message : e}`); }
                     try {
                         // Same-pass guard: never resume the same user twice in one pass.
                         // (runMartingale inserts a NEW 'active' row, so a second stale
@@ -131,7 +150,7 @@ export async function recoverMissedTradeResults(bot, runMartingaleFn) {
                                 db.prepare("UPDATE gale_sessions SET status='completed' WHERE id=?").run(galeRow.id);
                                 await bot.telegram.sendMessage(row.telegram_id,
                                     `· Gale exhausted\nTotal: ${galeRow.total_pnl >= 0 ? '+' : ''}${galeRow.total_pnl.toFixed(2)} ${galeRow.currency}`,
-                                    { reply_markup: { inline_keyboard: [[{ text: '↻ New Opportunity', callback_data: 'ui:trade' }]] } }).catch(() => {});
+                                    { reply_markup: { inline_keyboard: [[{ text: '↻ New Opportunity', callback_data: 'ui:trade' }]] } }).catch((e: unknown) => console.warn(`[GALE-RESUME] exhausted-notice send failed for ${row.telegram_id}: ${e instanceof Error ? e.message : e}`));
                             } else {
                                 const user = getUser(row.telegram_id);
                                 if (user && user.ssid && user.ssid_valid === 1) {
@@ -149,7 +168,8 @@ export async function recoverMissedTradeResults(bot, runMartingaleFn) {
                                         replyWithPhoto: (photo, extra) => bot.telegram.sendPhoto(row.telegram_id, photo, extra),
                                     };
                                     let resumeSdk;
-                                    try { resumeSdk = await createSdk(essid); } catch {
+                                    try { resumeSdk = await withTimeout(createSdk(essid), 30_000, 'resume createSdk'); } catch (e) {
+                                        console.warn(`[GALE-RESUME] createSdk failed for ${row.telegram_id}: ${e instanceof Error ? e.message : e}`);
                                         await bot.telegram.sendMessage(row.telegram_id, '⚠️ Could not resume gale. Try again ─ ',
                                             { reply_markup: { inline_keyboard: [[{ text: '↻ New Opportunity', callback_data: 'ui:trade' }]] } });
                                         db.prepare("UPDATE gale_sessions SET status='completed' WHERE id=?").run(galeRow.id);
@@ -174,8 +194,13 @@ export async function recoverMissedTradeResults(bot, runMartingaleFn) {
                         }
                     } catch (galeErr) { console.error('[GALE-RESUME]', galeErr); }
                 }
-            } finally { try { await sdk.shutdown(); } catch {} }
-        } catch {}
+            } finally {
+                try { await withTimeout(sdk.shutdown(), 10_000, 'recovery shutdown'); }
+                catch (e) { console.warn(`[RECOVERY] sdk shutdown failed: ${e instanceof Error ? e.message : e}`); }
+            }
+        } catch (e) {
+            console.error(`[RECOVERY] row #${row.trade_id} failed: ${e instanceof Error ? e.message : e}`);
+        }
     }
     if (resolved.length > 0) console.log(`[RECOVERY] ${resolved.length} resolved: ${resolved.join(', ')}`);
 }

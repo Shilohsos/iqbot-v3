@@ -261,7 +261,7 @@ db.exec(`
     round        INTEGER NOT NULL DEFAULT 0,
     max_rounds   INTEGER NOT NULL DEFAULT 3,
     entry_price  REAL,
-    status       TEXT    NOT NULL DEFAULT 'active',   -- active | won | lost
+    status       TEXT    NOT NULL DEFAULT 'active',   -- active | won | lost | expired
     result       TEXT,
     card_chat_id INTEGER,                              -- chat where the signal card lives
     card_msg_id  INTEGER,                              -- message_id of the signal card
@@ -1271,7 +1271,9 @@ export function getExpiredActiveSignals(): SignalTrackRecord[] {
     ).all() as SignalTrackRecord[];
 }
 
-export function updateSignalTrackResult(id: number, status: 'won' | 'lost', result: string): void {
+/** 'expired' = indeterminate outcome (no market data / unresolvable) — settlement
+ *  law: never stored as 'lost', so stats can't be polluted by invented losses. */
+export function updateSignalTrackResult(id: number, status: 'won' | 'lost' | 'expired', result: string): void {
     db.prepare('UPDATE signal_tracking SET status = ?, result = ? WHERE id = ?')
         .run(status, result, id);
 }
