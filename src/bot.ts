@@ -1295,7 +1295,7 @@ async function runMartingale(ctx, ssid, pair, direction, amount, timeframeSec = 
         const roundTimeoutMs = (timeframeSec + 120) * 1000 + 300_000;
         // Subtle-loss display: strike a lost round via combining U+0336 so it renders
         // in PLAIN text (the trade card has no parse_mode — Markdown ~~ never shows).
-        const strike = (s: string | number) => [...String(s)].map(c => c + '\u0336').join('');
+        const strike = (s) => [...String(s)].map(c => c + '\u0336').join('');
         let currentAmount = amount;
         let totalPnl = 0;
         const logLines = ['✦ Trade session initialized…'];
@@ -5646,10 +5646,10 @@ bot.action(/^user_action:(approve|pause|reset_ssid|trades|message):(\d+)$/, asyn
             const sdk = await sdkPool.get(uid, ssid);
             try {
                 const all = (await withTimeout(sdk.balances(), 15_000, 'balance')).getBalances();
-                const real = all.find((b: any) => b.type === BalanceType.Real);
-                const demo = all.find((b: any) => b.type === BalanceType.Demo);
+                const real = all.find((b) => b.type === BalanceType.Real);
+                const demo = all.find((b) => b.type === BalanceType.Demo);
                 const cur = real?.currency ?? user.currency ?? 'USD';
-                const sym = (CURRENCY_SYMBOLS as Record<string, string>)[cur] ?? '$';
+                const sym = CURRENCY_SYMBOLS[cur] ?? '$';
                 const lines = [
                     `◆ *Live Balance — ${maskUserId(uid)}*`,
                     ``,
@@ -6063,13 +6063,13 @@ bot.action('admin:checkins', async (ctx) => {
         SELECT checkin_date, window, COUNT(*) AS n FROM checkin_sent
         WHERE checkin_date >= datetime('now', '-2 days')
         GROUP BY checkin_date, window ORDER BY checkin_date DESC, window
-    `).all() as { checkin_date: string; window: string; n: number }[];
+    `).all();
     let msg = '· *Check-in Stats*\n\n';
     if (rows.length === 0) {
         msg += 'No check-ins recorded yet.\n';
     }
     else {
-        const byDate: Record<string, { window: string; n: number }[]> = {};
+        const byDate = {};
         for (const r of rows) {
             (byDate[r.checkin_date] ??= []).push({ window: r.window, n: r.n });
         }
@@ -7597,7 +7597,7 @@ setSmartFlowScanner(async (uid) => {
     const sdk = await sdkPool.get(uid, ssid);
     try {
         const all = (await withTimeout(sdk.balances(), 15_000, 'balance')).getBalances();
-        const d = all.find((b: any) => b.type === BalanceType.Demo);
+        const d = all.find((b) => b.type === BalanceType.Demo);
         demo = d ? { amount: d.amount, currency: d.currency } : null;
         // Market awareness — same actives/canBeBoughtAt pattern as trade-core.ts.
         try {
@@ -7608,8 +7608,8 @@ setSmartFlowScanner(async (uid) => {
             catch { }
             const now = sdk.currentTime();
             openPairs = blitz.getActives()
-                .filter((a: any) => a.canBeBoughtAt(now))
-                .map((a: any) => a.ticker)
+                .filter((a) => a.canBeBoughtAt(now))
+                .map((a) => a.ticker)
                 .filter(Boolean);
         }
         catch (mktErr) {
