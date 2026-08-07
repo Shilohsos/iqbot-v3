@@ -248,11 +248,12 @@ function buildCard(rec: SmartRecommendation, live: number | null, demo: number |
         lines.push('Practice mode and No-charge Signals stay open to you.');
     } else {
         lines.push('Product: ⟡ Private Trader');
-        const stakeList = rec.stakes.length > 0 ? rec.stakes.map(s => fmtWholeMoney(s, rec.currency)).join(' · ') : fmtWholeMoney(rec.stake ?? 0, rec.currency);
+        const stakeList = (rec.stakes && rec.stakes.length > 0 ? rec.stakes : [rec.stake ?? 0]).map(s => fmtWholeMoney(s, rec.currency)).join(' · ');
         lines.push(`Suggested stake: ${stakeList}`);
     }
     lines.push(`Suggested assets: ${rec.assets.join(' · ')}`);
-    lines.push(`Timeframes: ${rec.timeframesSec.map(tf => tfLabel(tf)).join(' · ')}`);
+    const tfs = rec.timeframesSec && rec.timeframesSec.length > 0 ? rec.timeframesSec : [rec.timeframeSec];
+    lines.push(`Timeframes: ${tfs.map(tf => tfLabel(tf)).join(' · ')}`);
 
     if (rec.autopilotEligible) {
         lines.push('', 'Also available: ✦ Autopilot — hands-free, it runs the session for you.');
@@ -279,7 +280,14 @@ function buildCard(rec: SmartRecommendation, live: number | null, demo: number |
 
 function parseRec(raw: string | null | undefined): SmartRecommendation | null {
     if (!raw) return null;
-    try { return JSON.parse(raw) as SmartRecommendation; } catch { return null; }
+    try {
+        const rec = JSON.parse(raw) as SmartRecommendation;
+        // Schema guard: caches written before the 2-timeframe/3-stake change lack
+        // these fields. Treat them as stale so the next open rescans and writes
+        // a current-schema row instead of crashing the card renderer.
+        if (!Array.isArray(rec.stakes) || !Array.isArray(rec.timeframesSec)) return null;
+        return rec;
+    } catch { return null; }
 }
 
 /**
