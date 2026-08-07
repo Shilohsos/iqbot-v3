@@ -43,6 +43,12 @@ Scope: AI Trading (bot.ts runMartingale), Auto Trading (trade.ts runMartingaleCo
 3. If a real IQ Option settlement is obtainable for a signal (user's own position on the pair/window is detectable via position history), prefer the real settlement over the candle heuristic. Otherwise keep candle-based as the documented fallback and never present it as an IQ Option settlement.
 4. Signal recovery rounds must respect the same settlement law as Part 1 — a recovery round is only "lost" when its own window settles against direction.
 
+## Part 5 — Smart Flow Setup Card Crash (observed in production)
+1. **Bug:** `smart:open` callback fails with `TypeError: Cannot read properties of undefined (reading 'length')` at `buildCard` (dist/smart-flow.js). Observed 2026-08-07 in production logs (multiple occurrences). The setup card never appears — a silent stall on the Private Trader entry.
+2. **Root cause:** a stale `smart_flow_cache.recommendations` row missing the `assets` array (schema guard only validates `stakes` + `timeframesSec`). `buildCard` calls `rec.assets.join(' · ')` unguarded.
+3. **Fix:** (a) extend the schema guard in `parseRec` to reject rows missing `assets` (forces rescan → fresh row), and (b) make the card renderer fall back to `['EURUSD-OTC']` when `assets` is missing/empty so a malformed row can never crash the card.
+4. Note: a temporary guard was authored and reverted — the fix must come from this directive, not a one-off patch.
+
 ## Verification Checklist (run before considering done)
 - [ ] No `catch {}` empty blocks in the trading paths listed above.
 - [ ] Every SDK call in the trading paths has a timeout (grep `withTimeout` in trade-core.ts, gale-engine.ts, trade.ts, signals tracking).
@@ -51,6 +57,7 @@ Scope: AI Trading (bot.ts runMartingale), Auto Trading (trade.ts runMartingaleCo
 - [ ] A simulated profit-rate-change (4117) mid-chain does not double the stake.
 - [ ] A simulated WebSocket death mid-chain retries same-stake, never doubles.
 - [ ] A missed settlement is resolved from position history; if the real result was WIN the session total is corrected and no gale was burned.
+- [ ] `smart:open` renders the setup card even when the cached recommendations row is missing `assets`.
 - [ ] `npx tsc --noEmit` clean for changed modules; `node --check` clean on changed dist files.
 - [ ] PM2 restart with 0 in-flight trades; boot log free of SyntaxError/Cannot-find.
 
