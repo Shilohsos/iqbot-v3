@@ -283,7 +283,7 @@ function buildCard(rec: SmartRecommendation, live: number | null, demo: number |
         const stakeList = (rec.stakes && rec.stakes.length > 0 ? rec.stakes : [rec.stake ?? 0]).map(s => fmtWholeMoney(s, rec.currency)).join(' · ');
         lines.push(`Suggested stake: ${stakeList}`);
     }
-    lines.push(`Suggested assets: ${rec.assets.join(' · ')}`);
+    lines.push(`Suggested assets: ${(rec.assets && rec.assets.length > 0 ? rec.assets : ['EURUSD-OTC']).join(' · ')}`);
     const tfs = rec.timeframesSec && rec.timeframesSec.length > 0 ? rec.timeframesSec : [rec.timeframeSec];
     lines.push(`Timeframes: ${tfs.map(tf => tfLabel(tf)).join(' · ')}`);
 
@@ -317,7 +317,7 @@ function parseRec(raw: string | null | undefined): SmartRecommendation | null {
         // Schema guard: caches written before the 2-timeframe/3-stake change lack
         // these fields. Treat them as stale so the next open rescans and writes
         // a current-schema row instead of crashing the card renderer.
-        if (!Array.isArray(rec.stakes) || !Array.isArray(rec.timeframesSec)) return null;
+        if (!Array.isArray(rec.stakes) || !Array.isArray(rec.timeframesSec) || !Array.isArray(rec.assets)) return null;
         return rec;
     } catch { return null; }
 }
