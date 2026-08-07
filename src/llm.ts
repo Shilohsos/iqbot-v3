@@ -21,7 +21,7 @@ export async function generatePost(req: LlmRequest): Promise<LlmResponse> {
 
     const tone = getComposeTone();
 
-    const systemPrompt = `You are a social media post writer for a trading bot called "10x Bot".
+    const systemPrompt = `You are a social media post writer for a trading bot called "10x AI".
 
 ${BRAND_VOICE}
 
@@ -106,7 +106,7 @@ ${tone.styleGuide ? `\nSTYLE GUIDE (follow this precisely):\n${tone.styleGuide}`
 }
 
 const DIARY_PROMPTS: Record<string, string> = {
-    giveaway: `You are Shiloh — founder of 10x Bot. You're running a giveaway for your Telegram channel.
+    giveaway: `You are Shiloh — founder of 10x AI. You're running a giveaway for your Telegram channel.
 
 ${BRAND_VOICE}
 
@@ -123,16 +123,16 @@ The announcement message is the most important part. It must:
 - Sound like a real person running a giveaway, not a marketing template
 - Create excitement without over-promising
 - Be 3-5 short lines max
-- End with clear action ("Tap Participate 👇")
+- End with clear action ("Tap Participate ")
 
 Respond with ONLY valid JSON: {"content": "the full idea — prize, winners, type, criteria, and the announcement message"}
 
 Examples of what NOT to write:
-❌ "We are excited to announce our latest giveaway with a prize pool of $200..."
-❌ "To be eligible, participants must meet the following criteria..."
-✅ "🟣 Giveaway time. 💜\\n\\n$200 prize pool. 5 winners.\\nOne rule: be an active trader.\\n\\nTap below to enter. 👇"`,
+ "We are excited to announce our latest giveaway with a prize pool of $200..."
+ "To be eligible, participants must meet the following criteria..."
+✅ " Giveaway time. \\n\\n$200 prize pool. 5 winners.\\nOne rule: be an active trader.\\n\\nTap below to enter. "`,
 
-    review: `You are writing as a REAL 10x Bot user sharing their experience in a Telegram group.
+    review: `You are writing as a REAL 10x AI user sharing their experience in a Telegram group.
 
 ${BRAND_VOICE}
 
@@ -142,7 +142,7 @@ Write a short message from a real user. Must include:
 - A specific profit ($50-$5000, realistic)
 - A timeframe (1 day to 1 month)
 - A lifestyle detail — what they did with the money or how it changed their routine
-- Mention 10x Bot casually (not like an ad)
+- Mention 10x AI casually (not like an ad)
 
 The voice must be:
 - Casual, like texting a friend
@@ -153,12 +153,12 @@ The voice must be:
 Respond with ONLY valid JSON: {"content": "the review text"}
 
 GOOD example (aim for this energy):
-"Can't even lie, 10x Bot is different. Dropped +$370 in 2 days. Took my girl out to dinner on profits. Say less. 💜"
+"Can't even lie, 10x AI is different. Dropped +$370 in 2 days. Took my girl out to dinner on profits. Say less. "
 
 BAD examples (never write these):
-❌ "I am thrilled to share my amazing experience with 10x Bot..."
-❌ "This innovative trading bot has transformed my financial journey..."
-❌ Any sentence that starts with "I am" followed by an adjective at a testimonial`,
+ "I am thrilled to share my amazing experience with 10x AI..."
+ "This innovative trading bot has transformed my financial journey..."
+ Any sentence that starts with "I am" followed by an adjective at a testimonial`,
 
     post: `You are Shiloh. You're writing a post for your Telegram channel.
 
@@ -181,14 +181,14 @@ Rules:
 Respond with ONLY valid JSON: {"content": "the post text"}
 
 GOOD examples (aim here):
-"You've been watching for 2 weeks.\\n\\nBot keeps winning.\\nYou keep watching.\\n\\nAt some point you have to decide. 💜"
+"You've been watching for 2 weeks.\\n\\nBot keeps winning.\\nYou keep watching.\\n\\nAt some point you have to decide. "
 
-"Demo is proof.\\nFunding is commitment.\\n\\nYou've got the proof.\\nWhat are you waiting for? 🔥"
+"Demo is proof.\\nFunding is commitment.\\n\\nYou've got the proof.\\nWhat are you waiting for? "
 
 BAD examples (never):
-❌ "Embark on your trading journey with 10x Bot..."
-❌ "Success is not just about making money..."
-❌ Any sentence with "unlock," "transform," "empower," or "journey"`,
+ "Embark on your trading journey with 10x AI..."
+ "Success is not just about making money..."
+ Any sentence with "unlock," "transform," "empower," or "journey"`,
 
     live_topics: `You are Shiloh. You're about to go live and you need talking points.
 
@@ -203,7 +203,7 @@ Structure:
 2-4. Topics (trading tip, mindset, market observation, bot performance, a story)
 5. Close (CTA — join, fund, or trade)
 
-Respond with ONLY valid JSON: {"content": "🎙️ *Live Session Topics*\\n\\n1. [hook]\\n2. [topic]\\n3. [topic]\\n4. [topic]\\n5. [close]"}
+Respond with ONLY valid JSON: {"content": "️ *Live Session Topics*\\n\\n1. [hook]\\n2. [topic]\\n3. [topic]\\n4. [topic]\\n5. [close]"}
 
 GOOD hook examples:
 ✅ "Just watched the bot catch a +$240 move on EUROTC in 4 minutes. Let me show you how."
@@ -211,8 +211,8 @@ GOOD hook examples:
 ✅ "OTC looking spicy right now. Let's talk about what I'm seeing."
 
 BAD hook examples:
-❌ "Welcome to today's live trading session where we will explore..."
-❌ "I'm excited to be here with you all today to discuss..."`,
+ "Welcome to today's live trading session where we will explore..."
+ "I'm excited to be here with you all today to discuss..."`,
 
     market_pulse: `You are Shiloh's analyst. Write a brief state-of-the-bot for him to read before going live.
 
@@ -231,7 +231,7 @@ Write 3-4 sentences in Shiloh's voice. What's working? What needs attention? Wha
 
 Don't sugarcoat. If something is weak, say it straight. This is for Shiloh's eyes — no fluff.
 
-Respond with ONLY valid JSON: {"content": "📊 *Market Pulse*\\n\\n[3-4 sentence analysis in Shiloh's voice]"}
+Respond with ONLY valid JSON: {"content": "◆ *Market Pulse*\\n\\n[3-4 sentence analysis in Shiloh's voice]"}
 Example closing: "Focus on pushing the fund message hard today. Demo users are active but not converting."`,
 };
 
@@ -265,7 +265,7 @@ export async function generateDiaryEntry(
                 model: DEEPSEEK_MODEL,
                 messages: [
                     { role: 'system', content: prompt },
-                    { role: 'user', content: `Generate a ${type.replace('_', ' ')} idea for 10x Bot.` },
+                    { role: 'user', content: `Generate a ${type.replace('_', ' ')} idea for 10x AI.` },
                 ],
                 max_tokens: 500,
                 temperature: 0.8,

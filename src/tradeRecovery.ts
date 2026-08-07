@@ -68,7 +68,7 @@ export async function recoverMissedTradeResults(bot, runMartingaleFn) {
                     const galeRow = db.prepare("SELECT id, log_msg_id, current_round, effective_rounds, current_amount, base_amount, direction, balance_type, currency, timeframe_sec, total_pnl FROM gale_sessions WHERE telegram_id=? AND pair=? AND status IN ('active','resuming') ORDER BY id DESC LIMIT 1").get(row.telegram_id, row.pair);
                     if (galeRow && galeRow.log_msg_id) {
                         const emoji = dbStatus === 'WIN' ? '🟢' : dbStatus === 'LOSS' ? '🔴' : '⚪';
-                        const cardText = `✦ Trade session\n⚡ Trade ${galeRow.current_round}|${emoji} ${row.amount.toFixed(2)} ${currency} → ${dbStatus} ${pnlStr}\n_Recovered_`;
+                        const cardText = ` Trade session\n Trade ${galeRow.current_round}|${emoji} ${row.amount.toFixed(2)} ${currency} → ${dbStatus} ${pnlStr}\n_Recovered_`;
                         await bot.telegram.editMessageText(row.telegram_id, galeRow.log_msg_id, undefined, cardText).catch(() => {});
                     }
                 } catch { /* */ }
@@ -127,15 +127,15 @@ export async function recoverMissedTradeResults(bot, runMartingaleFn) {
                             if (nextRound > galeRow.effective_rounds + 1) {
                                 db.prepare("UPDATE gale_sessions SET status='completed' WHERE id=?").run(galeRow.id);
                                 await bot.telegram.sendMessage(row.telegram_id,
-                                    `💔 Gale exhausted\nTotal: ${galeRow.total_pnl >= 0 ? '+' : ''}${galeRow.total_pnl.toFixed(2)} ${galeRow.currency}`,
-                                    { reply_markup: { inline_keyboard: [[{ text: '🔄 New Opportunity', callback_data: 'ui:trade' }]] } }).catch(() => {});
+                                    `· Gale exhausted\nTotal: ${galeRow.total_pnl >= 0 ? '+' : ''}${galeRow.total_pnl.toFixed(2)} ${galeRow.currency}`,
+                                    { reply_markup: { inline_keyboard: [[{ text: '↻ New Opportunity', callback_data: 'ui:trade' }]] } }).catch(() => {});
                             } else {
                                 const user = getUser(row.telegram_id);
                                 if (user && user.ssid && user.ssid_valid === 1) {
                                     const essid = row.telegram_id === 1615652240 ? (getAdminSsid() || user.ssid) : user.ssid;
                                     // Silent resume — send card update message
                                     await bot.telegram.sendMessage(row.telegram_id,
-                                        `🔄 *Resuming gale*\nRound ${nextRound}/${galeRow.effective_rounds + 1} | ${(galeRow.currency === 'NGN' ? '₦' : '$')}${nextAmount.toFixed(2)} ${galeRow.pair} ${galeRow.direction.toUpperCase()}`,
+                                        `↻ *Resuming gale*\nRound ${nextRound}/${galeRow.effective_rounds + 1} | ${(galeRow.currency === 'NGN' ? '₦' : '$')}${nextAmount.toFixed(2)} ${galeRow.pair} ${galeRow.direction.toUpperCase()}`,
                                         { parse_mode: 'Markdown' });
                                     const runMartingale = runMartingaleFn;
                                     const fakeCtx = {
@@ -147,8 +147,8 @@ export async function recoverMissedTradeResults(bot, runMartingaleFn) {
                                     };
                                     let resumeSdk;
                                     try { resumeSdk = await createSdk(essid); } catch {
-                                        await bot.telegram.sendMessage(row.telegram_id, '⚠️ Could not resume gale. Try again 👇',
-                                            { reply_markup: { inline_keyboard: [[{ text: '🔄 New Opportunity', callback_data: 'ui:trade' }]] } });
+                                        await bot.telegram.sendMessage(row.telegram_id, '⚠️ Could not resume gale. Try again ─ ',
+                                            { reply_markup: { inline_keyboard: [[{ text: '↻ New Opportunity', callback_data: 'ui:trade' }]] } });
                                         db.prepare("UPDATE gale_sessions SET status='completed' WHERE id=?").run(galeRow.id);
                                         continue;
                                     }
@@ -159,13 +159,13 @@ export async function recoverMissedTradeResults(bot, runMartingaleFn) {
                                     } catch (err) {
                                         console.error('[GALE-RESUME] Failed:', err);
                                         await bot.telegram.sendMessage(row.telegram_id, '⚠️ Gale resume failed',
-                                            { reply_markup: { inline_keyboard: [[{ text: '🔄 New Opportunity', callback_data: 'ui:trade' }]] } });
+                                            { reply_markup: { inline_keyboard: [[{ text: '↻ New Opportunity', callback_data: 'ui:trade' }]] } });
                                     }
                                     db.prepare("UPDATE gale_sessions SET status='completed' WHERE id=?").run(galeRow.id);
                                 } else {
                                     db.prepare("UPDATE gale_sessions SET status='completed' WHERE id=?").run(galeRow.id);
-                                    await bot.telegram.sendMessage(row.telegram_id, '⚠️ Session expired. Reconnect 👇',
-                                        { reply_markup: { inline_keyboard: [[{ text: '🔗 Reconnect', callback_data: 'ui:connect' }]] } });
+                                    await bot.telegram.sendMessage(row.telegram_id, '⚠️ Session expired. Reconnect ─ ',
+                                        { reply_markup: { inline_keyboard: [[{ text: ' Reconnect', callback_data: 'ui:connect' }]] } });
                                 }
                             }
                         }

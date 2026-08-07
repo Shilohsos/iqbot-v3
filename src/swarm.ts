@@ -80,16 +80,16 @@ class SwarmRunner {
         const fmtPnl = isNGN ? Math.abs(pnl).toLocaleString() : Math.abs(pnl).toFixed(2);
         const pnlStr = `${pnl >= 0 ? '+' : '-'}${curSymbol}${fmtPnl}`;
         const openCount = this.openTradeCount;
-        const openSlots = '🐝'.repeat(openCount) + '⚪'.repeat(MAX_CONCURRENT - openCount);
+        const openSlots = ''.repeat(openCount) + '⚪'.repeat(MAX_CONCURRENT - openCount);
         return [
-            `🐝 *Swarm Trading* · ${stateLine}`,
+            ` *Swarm Trading* · ${stateLine}`,
             ``,
             `${openSlots}  ${openCount}/${MAX_CONCURRENT} active`,
             ``,
-            `💰 Capital: ${curSymbol}${fmtCap}`,
-            `🔄 Recovery: ${this.session.gale_rounds} rounds`,
-            `📊 Trades: ${this.session.total_trades}   P&L: ${pnlStr}`,
-            `⏱ Time left: ${remaining} min`,
+            ` Capital: ${curSymbol}${fmtCap}`,
+            `↻ Recovery: ${this.session.gale_rounds} rounds`,
+            `◆ Trades: ${this.session.total_trades}   P&L: ${pnlStr}`,
+            `··· Time left: ${remaining} min`,
         ].join('\n');
     }
     async updateStatusMessage(final = false) {
@@ -100,7 +100,7 @@ class SwarmRunner {
         const extra = final ? { parse_mode: 'Markdown' } : {
             parse_mode: 'Markdown',
             reply_markup: { inline_keyboard: [[
-                        { text: '⏹ Stop Swarm', callback_data: 'swarm:stop' },
+                        { text: '■ Stop Swarm', callback_data: 'swarm:stop' },
                     ]] },
         };
         try {
@@ -118,7 +118,7 @@ class SwarmRunner {
         }
         catch (err) {
             logger.error('swarm', `Swarm ${this.session.id} failed to connect: ${err}`);
-            await notifier?.sendMessage(this.chatId, `❌ Swarm failed to start: could not connect. Please try again.`).catch(() => { });
+            await notifier?.sendMessage(this.chatId, ` Swarm failed to start: could not connect. Please try again.`).catch(() => { });
             db.prepare('UPDATE swarm_sessions SET status = ? WHERE id = ?').run('expired', this.session.id);
             activeRunners.delete(this.session.id);
             return;
@@ -170,10 +170,10 @@ class SwarmRunner {
         await notifier?.sendMessage(uid, [
             `✅ *Swarm Session Complete*`,
             ``,
-            `💰 Capital: ${curSym}${fmtCap}`,
-            `📊 Total trades: ${trades}`,
-            `💵 Net P&L: ${pnlStr}`,
-            `⏱ Session ended`,
+            ` Capital: ${curSym}${fmtCap}`,
+            `◆ Total trades: ${trades}`,
+            ` Net P&L: ${pnlStr}`,
+            `··· Session ended`,
         ].join('\n'), { parse_mode: 'Markdown' });
         db.prepare('UPDATE swarm_sessions SET status = ? WHERE id = ?').run('completed', this.session.id);
         activeRunners.delete(this.session.id);
@@ -351,7 +351,7 @@ class SwarmRunner {
             }
             db.prepare('UPDATE swarm_sessions SET total_trades = ?, total_pnl = ? WHERE id = ?')
                 .run(this.session.total_trades, this.session.total_pnl, this.session.id);
-            const resultEmoji = outcome.status === 'WIN' ? '🟢' : outcome.status === 'LOSS' ? '🟥' : '🟡';
+            const resultEmoji = outcome.status === 'WIN' ? '🟢' : outcome.status === 'LOSS' ? '🔴' : '🟡';
             const resultText = outcome.status === 'WIN' ? 'WIN' : outcome.status === 'LOSS' ? 'LOSS' : outcome.status;
             const tfLabel = timeframe === 30 ? '30s' : timeframe === 60 ? '1m' : timeframe === 120 ? '2m' : '5m';
             const isNGN = this.session.currency === 'NGN';
@@ -431,7 +431,7 @@ export async function startSwarm(telegramId, startingCapital, galeRounds, durati
         logger.error('swarm', `Swarm ${session.id} crashed: ${err}`);
         db.prepare('UPDATE swarm_sessions SET status = ? WHERE id = ?').run('expired', session.id);
         activeRunners.delete(session.id);
-        notifier?.sendMessage(telegramId, `❌ Swarm session ended unexpectedly: ${err.message}`).catch(() => { });
+        notifier?.sendMessage(telegramId, ` Swarm session ended unexpectedly: ${err.message}`).catch(() => { });
     });
     return { ok: true };
 }

@@ -223,7 +223,7 @@ async function sendAlert(alert: Alert): Promise<void> {
     if (lastSent && Date.now() - lastSent < ALERT_COOLDOWN_MS) return;
     recentAlerts.set(key, Date.now());
 
-    const emoji = alert.level === 'critical' ? '🚨' : alert.level === 'warning' ? '⚠️' : 'ℹ️';
+    const emoji = alert.level === 'critical' ? '⚠️' : alert.level === 'warning' ? '⚠️' : 'ℹ️';
     const text  = `${emoji} *${alert.level.toUpperCase()}* — ${alert.component}\n\n${alert.message}`;
 
     try {
@@ -306,11 +306,11 @@ function getDailyStats(): string {
     const winRate = trades.total > 0 ? ((trades.wins / trades.total) * 100).toFixed(0) : '0';
 
     return [
-        `📊 *10x Bot Daily Report*`,
+        `◆ *10x AI Daily Report*`,
         ``,
-        `👥 *Users:* ${users.total} total | ✅ ${users.approved} approved | ⏳ ${users.pending} pending`,
+        ` *Users:* ${users.total} total | ✅ ${users.approved} approved | ··· ${users.pending} pending`,
         ``,
-        `📈 *Today's Trades:* ${trades.total} total`,
+        `◆ *Today's Trades:* ${trades.total} total`,
         `• Wins: ${trades.wins} (${winRate}%)`,
         `• Losses: ${trades.losses}`,
         `• PnL: ${pnlSign}$${trades.totalPnl.toFixed(2)}`,

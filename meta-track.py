@@ -1,4 +1,5 @@
-"""Meta Conversions API proxy — receives events from funnel page, forwards to Meta."""
+"""Meta Conversions API proxy — receives events from funnel page, forwards to Meta.
+Supports multiple pixels simultaneously (dual-dispatch)."""
 import os
 import json
 import time
@@ -22,49 +23,67 @@ logger = logging.getLogger("meta-track")
 
 app = Flask(__name__)
 
-PIXEL_ID = "2115121012365333"
-TOKEN = os.getenv("META_ACCESS_TOKEN", "")
-API_URL = f"https://graph.facebook.com/v22.0/{PIXEL_ID}/events?access_token={TOKEN}"
+# ── Pixel registry ──────────────────────────────────────────────────────
+PIXELS = [
+    {
+        "pixel_id": "3638787306272037",
+        "token": "EAAO4u6ZBDBZCsBRwzJ4Swj4rpo6hgX2v41AFpBNjk4lArZBXdDjQFZCRIoiTuVZBLcEQmuSfiqRNgaowZAZCxdxfZBlBFe4xzCTQTbUFJGoOZBcstzuwE9gfLBrHKkJos18YROcZAsleLydZCUY9eC0pkwIKeVvzU9bAwYxEsUHvK5nZAe0GFsk4jC1gu5gliqYk1QZDZD",
+    },
+]
+
+def send_to_meta(pixel_id: str, token: str, payload: dict) -> str:
+    """Send a single CAPI event to Meta. Returns status string."""
+    api_url = f"https://graph.facebook.com/v22.0/{pixel_id}/events?access_token={token}"
+    try:
+        import urllib.request
+        req = urllib.request.Request(
+            api_url,
+            data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            result = resp.read().decode()
+            logger.info(f"meta: pixel={pixel_id} event={payload['data'][0]['event_name']} → {resp.status}")
+            logger.info(f"meta detail: fbp={payload['data'][0]['user_data'].get('fbp','')} fbc={payload['data'][0]['user_data'].get('fbc','')} em={payload['data'][0]['user_data'].get('em','')} ip={payload['data'][0]['user_data'].get('client_ip_address','')[:20]} ext_id={payload['data'][0]['user_data'].get('external_id','')}")
+            logger.info(f"meta response: {result[:200]}")
+            return f"200: {result}"
+    except Exception as e:
+        logger.error(f"meta fail: pixel={pixel_id} → {e}")
+        return f"error: {e}"
+
 
 @app.route("/api/track", methods=["POST"])
 def track():
     data = request.get_json(silent=True) or {}
     event_name = data.get("event_name", "ViewContent")
     event_source_url = data.get("event_source_url", request.headers.get("Referer", ""))
-    # CF-Connecting-IP carries the real visitor IP when behind Cloudflare
     client_ip = (request.headers.get("CF-Connecting-IP") or
                  request.headers.get("X-Forwarded-For", request.remote_addr) or "")
     client_ua = request.headers.get("User-Agent", "")
 
-    # IP geolocation via ip-api.com — free, no key, 3s timeout, non-blocking
+    # IP geolocation via ip-api.com
     geo: dict = {}
     try:
         import urllib.request as ureq
         geo_resp = ureq.urlopen(
             f"http://ip-api.com/json/{client_ip}?fields=city,regionName,countryCode",
-            timeout=3
+            timeout=3,
         )
         geo = json.loads(geo_resp.read().decode())
     except Exception:
         pass
 
-    # Build user_data — omit keys with empty values so Meta ignores missing params
-    # rather than counting them as mismatches
     user_data: dict = {"client_user_agent": client_ua}
 
-    # Skip IP when caller explicitly opts out or when the IP is a loopback/private address
-    # (e.g. bot calling from localhost, or Cloudflare tunnel stripping the real IP)
     skip_ip = data.get("skip_ip", False)
     if not skip_ip and client_ip and client_ip not in ("127.0.0.1", "::1", ""):
         user_data["client_ip_address"] = client_ip
 
-    for field in ("fbc", "fbp", "em", "ph"):
+    for field in ("fbc", "fbp", "em", "ph", "external_id"):
         val = data.get(field, "")
         if val:
             user_data[field] = val
 
-    # Meta requires PII fields (country, st, ct) to be SHA-256 hashed.
-    # Exceptions: client_ip_address, client_user_agent, fbc, fbp — sent raw.
     if geo.get("countryCode"):
         user_data["country"] = hashlib.sha256(geo["countryCode"].encode()).hexdigest()
     if geo.get("regionName"):
@@ -72,42 +91,37 @@ def track():
     if geo.get("city"):
         user_data["ct"] = hashlib.sha256(geo["city"].encode()).hexdigest()
 
-    # Build CAPI payload. event_id enables Meta-side deduplication between
-    # browser pixel and server events; client may supply it, otherwise we
-    # derive a stable id from event_name + fbp/fbc + minute bucket so rapid
-    # duplicates within the same minute are collapsed.
     event_id = data.get("event_id")
     if not event_id:
         bucket = int(time.time()) // 60
         seed = f"{event_name}|{data.get('fbp','')}|{data.get('fbc','')}|{client_ip}|{bucket}"
         event_id = hashlib.sha256(seed.encode()).hexdigest()[:32]
 
-    payload = {
-        "data": [{
-            "event_name": event_name,
-            "event_id": event_id,
-            "event_time": int(time.time()),
-            "action_source": "website",
-            "event_source_url": event_source_url,
-            "user_data": user_data,
-            "custom_data": data.get("custom_data", {}),
-        }]
+    custom_data = data.get("custom_data", {})
+    if event_name == "Lead" and "currency" not in custom_data:
+        custom_data["currency"] = "USD"
+
+    base_event = {
+        "event_name": event_name,
+        "event_id": event_id,
+        "event_time": int(time.time()),
+        "action_source": "website",
+        "event_source_url": event_source_url,
+        "user_data": user_data,
+        "custom_data": custom_data,
     }
 
-    try:
-        import urllib.request
-        req = urllib.request.Request(
-            API_URL,
-            data=json.dumps(payload).encode(),
-            headers={"Content-Type": "application/json"}
-        )
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            result = resp.read().decode()
-            logger.info(f"meta: {event_name} → {resp.status}")
-            return jsonify({"status": "ok", "meta_response": json.loads(result)})
-    except Exception as e:
-        logger.error(f"meta fail: {event_name} → {e}")
-        return jsonify({"status": "error", "detail": str(e)}), 502
+    # ── Fire to all pixels simultaneously ───────────────────────────────
+    results = {}
+    for pixel in PIXELS:
+        if not pixel["token"]:
+            results[pixel["pixel_id"]] = "skipped (no token)"
+            continue
+        payload = {"data": [base_event]}
+        results[pixel["pixel_id"]] = send_to_meta(pixel["pixel_id"], pixel["token"], payload)
+
+    return jsonify({"status": "ok", "pixels": results})
+
 
 @app.route("/api/log_visit", methods=["POST"])
 def log_visit():
@@ -129,11 +143,14 @@ def log_visit():
         logger.error(f"log_visit error: {e}")
         return jsonify({"ok": False, "error": str(e)}), 500
 
+
 @app.route("/health")
 def health():
-    return jsonify({"status": "ok", "pixel": PIXEL_ID})
+    pixels_status = {p["pixel_id"]: bool(p["token"]) for p in PIXELS}
+    return jsonify({"status": "ok", "pixels": pixels_status})
+
 
 if __name__ == "__main__":
     port = int(os.getenv("META_TRACK_PORT", "8766"))
-    logger.info(f"meta tracking proxy on :{port}")
+    logger.info(f"meta tracking proxy on :{port} — {len(PIXELS)} pixels")
     app.run(host="0.0.0.0", port=port, debug=False, threaded=True)

@@ -225,7 +225,7 @@ async function tradeForUser(telegramId, amount, pair, timeframe, gale) {
             telegramId,
         });
         // Notify user
-        const emoji = outcome.status === 'WIN' ? '🟢' : outcome.status === 'LOSS' ? '🟥' : outcome.status === 'NO_FILL' ? '⚠️' : '🟡';
+        const emoji = outcome.status === 'WIN' ? '🟢' : outcome.status === 'LOSS' ? '🔴' : outcome.status === 'NO_FILL' ? '⚠️' : '🟡';
         const tfLabel = timeframe === 30 ? '30s' : timeframe === 60 ? '1m' : timeframe === 120 ? '2m' : '5m';
         const pnlStr = outcome.totalPnl >= 0 ? `+$${Math.abs(outcome.totalPnl).toFixed(2)}` : `-$${Math.abs(outcome.totalPnl).toFixed(2)}`;
         const roundsStr = outcome.rounds > 1 ? ` (${outcome.rounds} rounds)` : '';

@@ -73,19 +73,19 @@ export async function startMarathonBroadcast(
     if (testUserId) console.log(`[test-mode] marathon broadcast only to test user ${testUserId}`);
 
     const msg = [
-        '🏃 *TRADING MARATHON IS LIVE*',
+        ' *TRADING MARATHON IS LIVE*',
         '',
-        `💰 *Prize Pool: See event details*`,
-        `📊 *Requirements:*`,
+        ` *Prize Pool: See event details*`,
+        `◆ *Requirements:*`,
         `   • Minimum balance: *$${minBalanceUsd}*`,
         `   • Minimum trades: *${minTrades}*`,
         `   • Minimum growth: *${minGrowth}x*`,
         '',
-        'Trade. Grow. Win. 👇',
+        'Trade. Grow. Win. ─ ',
     ].join('\n');
 
     const markup = {
-        inline_keyboard: [[{ text: '🏃 Join Marathon', callback_data: `marathon_v2:join:${configId}` }]],
+        inline_keyboard: [[{ text: ' Join Marathon', callback_data: `marathon_v2:join:${configId}` }]],
     };
 
     for (const u of users) {
@@ -97,7 +97,7 @@ export async function startMarathonBroadcast(
 export async function handleMarathonJoin(telegramId: number, configId: number): Promise<{ message: string; markup?: any }> {
     const config = getMarathonConfig(configId);
     if (!config || config.status !== 'active') {
-        return { message: '❌ This marathon is no longer active.' };
+        return { message: ' This marathon is no longer active.' };
     }
 
     // Check if already joined
@@ -109,13 +109,13 @@ export async function handleMarathonJoin(telegramId: number, configId: number): 
             message: [
                 `✅ *You're in the marathon!*`,
                 '',
-                `📊 *Your progress:*`,
+                `◆ *Your progress:*`,
                 `   • Trades: *${existing.trades_done}/${config.min_trades}*`,
                 `   • Growth: *${existing.growth_multiplier.toFixed(2)}x / ${config.min_growth_multiplier}x*`,
                 `   • Balance: *$${existing.current_balance_usd.toFixed(2)}*`,
                 tradesLeft > 0 ? `   • Trades remaining: *${tradesLeft}*` : `   ✅ Trade requirement met!`,
                 growthNeeded > 0 ? `   • Growth needed: *${growthNeeded.toFixed(2)}x more*` : `   ✅ Growth requirement met!`,
-                existing.qualified ? '\n🎉 *You\'re qualified!*' : '',
+                existing.qualified ? '\n *You\'re qualified!*' : '',
             ].filter(Boolean).join('\n'),
         };
     }
@@ -131,12 +131,12 @@ export async function handleMarathonJoin(telegramId: number, configId: number): 
                 '',
                 'Make sure your account is connected to 10x AI, then try again.',
                 '',
-                '👇 Click below to fund or contact admin:',
+                '─  Click below to fund or contact admin:',
             ].join('\n'),
             markup: {
                 inline_keyboard: [
-                    [{ text: '💰 Fund Account', url: DEPOSIT_URL }],
-                    [{ text: '👤 Contact Admin', url: ADMIN_CONTACT }],
+                    [{ text: ' Fund Account', url: DEPOSIT_URL }],
+                    [{ text: '· Contact Admin', url: ADMIN_CONTACT }],
                 ],
             },
         };
@@ -146,17 +146,17 @@ export async function handleMarathonJoin(telegramId: number, configId: number): 
         // Below minimum — redirect to fund
         return {
             message: [
-                `❌ *Balance too low for this marathon.*`,
+                ` *Balance too low for this marathon.*`,
                 '',
                 `Your balance: *$${balanceUsd.toFixed(2)}*`,
                 `Required: *$${config.min_balance_usd.toFixed(2)}*`,
                 '',
-                'Fund your account and come back 👇',
+                'Fund your account and come back ─ ',
             ].join('\n'),
             markup: {
                 inline_keyboard: [
-                    [{ text: '💰 Fund Account', url: DEPOSIT_URL }],
-                    [{ text: '🏃 Try Again', callback_data: `marathon_v2:join:${configId}` }],
+                    [{ text: ' Fund Account', url: DEPOSIT_URL }],
+                    [{ text: ' Try Again', callback_data: `marathon_v2:join:${configId}` }],
                 ],
             },
         };
@@ -167,20 +167,20 @@ export async function handleMarathonJoin(telegramId: number, configId: number): 
 
     return {
         message: [
-            '🎉 *You\'re participating!*',
+            ' *You\'re participating!*',
             '',
             `Starting balance: *$${balanceUsd.toFixed(2)}*`,
             '',
-            `📊 *Requirements to qualify:*`,
+            `◆ *Requirements to qualify:*`,
             `   • Minimum trades: *${config.min_trades}*`,
             `   • Minimum growth: *${config.min_growth_multiplier}x*`,
             `   • Minimum balance: *$${config.min_balance_usd.toFixed(2)}*`,
             '',
-            `Trade to hit your targets 💜`,
+            `Trade to hit your targets `,
         ].join('\n'),
         markup: {
             inline_keyboard: [
-                [{ text: '📊 My Stats', callback_data: `marathon_v2:join:${configId}` }],
+                [{ text: '◆ My Stats', callback_data: `marathon_v2:join:${configId}` }],
             ],
         },
     };
@@ -210,11 +210,11 @@ export async function tickMarathonTracking(telegram: Telegram): Promise<void> {
         if (balanceUsd < 1) {
             markMarathonParticipantBlown(config.id, p.telegram_id);
             await sendPushMessage(telegram, p.telegram_id, [
-                '💥 *Your account balance is too low.*',
+                ' *Your account balance is too low.*',
                 '',
-                'Fund your account to keep trading in the marathon! 👇',
+                'Fund your account to keep trading in the marathon! ─ ',
             ].join('\n'), {
-                inline_keyboard: [[{ text: '💰 Fund Account', url: DEPOSIT_URL }]],
+                inline_keyboard: [[{ text: ' Fund Account', url: DEPOSIT_URL }]],
             });
             continue;
         }
@@ -240,14 +240,14 @@ export async function tickMarathonTracking(telegram: Telegram): Promise<void> {
         if (tradesMet && growthMet && balanceMet) {
             markMarathonParticipantQualified(config.id, p.telegram_id);
             await sendPushMessage(telegram, p.telegram_id, [
-                '🎉 *CONGRATULATIONS! You\'re qualified!*',
+                ' *CONGRATULATIONS! You\'re qualified!*',
                 '',
-                `📊 *Final stats:*`,
+                `◆ *Final stats:*`,
                 `   • Trades: *${updated.trades_done}*`,
                 `   • Growth: *${updated.growth_multiplier.toFixed(2)}x*`,
                 `   • Balance: *$${balanceUsd.toFixed(2)}*`,
                 '',
-                'You\'re eligible to win! Keep trading until the marathon ends 🚀',
+                'You\'re eligible to win! Keep trading until the marathon ends ',
             ].join('\n'));
             continue;
         }
@@ -265,15 +265,15 @@ export async function tickMarathonTracking(telegram: Telegram): Promise<void> {
             const pushLines: string[] = [];
 
             if (tradesLeft > 0) {
-                pushLines.push(`📊 *Marathon progress:* ${updated.trades_done}/${config.min_trades} trades (${tradesLeft} to go)`);
+                pushLines.push(`◆ *Marathon progress:* ${updated.trades_done}/${config.min_trades} trades (${tradesLeft} to go)`);
             }
             if (growthLeft > 0) {
-                pushLines.push(`📈 Growth: ${updated.growth_multiplier.toFixed(2)}x / ${config.min_growth_multiplier}x (${growthLeft.toFixed(2)}x to go)`);
+                pushLines.push(`◆ Growth: ${updated.growth_multiplier.toFixed(2)}x / ${config.min_growth_multiplier}x (${growthLeft.toFixed(2)}x to go)`);
             }
 
             if (pushLines.length > 0) {
-                pushLines.unshift('🏃 *Keep going!*');
-                pushLines.push('', 'Trade now to hit your targets 💜');
+                pushLines.unshift(' *Keep going!*');
+                pushLines.push('', 'Trade now to hit your targets ');
                 await sendPushMessage(telegram, p.telegram_id, pushLines.join('\n'));
             }
         }

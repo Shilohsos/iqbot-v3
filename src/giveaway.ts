@@ -67,9 +67,9 @@ export interface ParticipateResult {
 
 function formatCriteriaDescription(criteriaType: string | null, criteriaValue: string | null): string {
     if (!criteriaType || criteriaType === 'none') return '';
-    if (criteriaType === 'new_user') return `📋 Open to new users (joined ≤ ${criteriaValue ?? '7'} days ago)`;
-    if (criteriaType === 'min_balance') return `📋 Minimum balance: $${criteriaValue ?? '0'}`;
-    if (criteriaType === 'top_traders') return `📋 Top ${criteriaValue ?? '10'} traders by trade count win`;
+    if (criteriaType === 'new_user') return `◆ Open to new users (joined ≤ ${criteriaValue ?? '7'} days ago)`;
+    if (criteriaType === 'min_balance') return `◆ Minimum balance: $${criteriaValue ?? '0'}`;
+    if (criteriaType === 'top_traders') return `◆ Top ${criteriaValue ?? '10'} traders by trade count win`;
     return '';
 }
 
@@ -103,17 +103,17 @@ export async function activateGiveaway(giveawayId: number): Promise<void> {
     for (const u of users) {
         // All users can participate now (directive §8.1).
         const lines = [
-            `🎁 *LIVE GIVEAWAY*`,
+            ` *LIVE GIVEAWAY*`,
             ``,
             `*${event.title}*`,
             event.description ?? '',
             prizePoolText ? `Prize Pool: ${prizePoolText}` : '',
             criteriaText,
             ``,
-            `Tap below to participate 👇`,
+            `Tap below to participate ─ `,
         ].filter(Boolean);
 
-        const markup = { inline_keyboard: [[{ text: '🎯 Participate', callback_data: `giveaway:participate:${giveawayId}` }]] };
+        const markup = { inline_keyboard: [[{ text: ' Participate', callback_data: `giveaway:participate:${giveawayId}` }]] };
 
         insertNotification(u.telegram_id, lines.join('\n'), { replyMarkup: JSON.stringify(markup) });
     }
@@ -124,17 +124,17 @@ export async function activateGiveaway(giveawayId: number): Promise<void> {
 export async function participate(giveawayId: number, telegramId: number): Promise<ParticipateResult> {
     const event = getGiveawayEvent(giveawayId);
     if (!event || event.status !== 'active') {
-        return { success: false, message: '❌ This giveaway is no longer active.' };
+        return { success: false, message: ' This giveaway is no longer active.' };
     }
 
     const user = getUser(telegramId);
-    if (!user) return { success: false, message: '❌ User not found.' };
+    if (!user) return { success: false, message: ' User not found.' };
 
     // All users can participate in giveaways now (directive §8.1) — no tier gate.
 
     const existing = getGiveawayParticipant(giveawayId, telegramId);
     if (existing) {
-        return { success: false, alreadyIn: true, message: '✅ You\'re already in this giveaway! Good luck 🍀' };
+        return { success: false, alreadyIn: true, message: '✅ You\'re already in this giveaway! Good luck ' };
     }
 
     if (event.criteria_type === 'new_user') {
@@ -145,7 +145,7 @@ export async function participate(giveawayId: number, telegramId: number): Promi
         if (userCreated < cutoff) {
             return {
                 success: false,
-                message: `❌ This giveaway is only for new users (joined within ${daysThreshold} days of the event start).`,
+                message: ` This giveaway is only for new users (joined within ${daysThreshold} days of the event start).`,
             };
         }
     }
@@ -155,9 +155,9 @@ export async function participate(giveawayId: number, telegramId: number): Promi
         if (!user.ssid) {
             return {
                 success: false,
-                message: `❌ You need to connect your IQ Option account before participating.\n\nTap /connect to get started.`,
+                message: ` You need to connect your IQ Option account before participating.\n\nTap /connect to get started.`,
                 replyMarkup: {
-                    inline_keyboard: [[{ text: '🔗 Connect Account', callback_data: 'ui:connect' }]],
+                    inline_keyboard: [[{ text: ' Connect Account', callback_data: 'ui:connect' }]],
                 },
             };
         }
@@ -182,10 +182,10 @@ export async function participate(giveawayId: number, telegramId: number): Promi
                 if (amount < minBalance) {
                     return {
                         success: false,
-                        message: `❌ You need at least $${minBalance} in your real account to participate.\n\nFund your account and try again 👇`,
+                        message: ` You need at least $${minBalance} in your real account to participate.\n\nFund your account and try again ─ `,
                         replyMarkup: {
                             inline_keyboard: [[{
-                                text: '💰 Fund Account',
+                                text: ' Fund Account',
                                 url: 'https://iqoption.com/pwa/payments/deposit?payment_method_id=6786',
                             }]],
                         },
@@ -199,9 +199,9 @@ export async function participate(giveawayId: number, telegramId: number): Promi
 
         const couldNotVerify: ParticipateResult = {
             success: false,
-            message: `❌ Could not verify your balance. Please try again later or contact admin.`,
+            message: ` Could not verify your balance. Please try again later or contact admin.`,
             replyMarkup: {
-                inline_keyboard: [[{ text: '👾 Contact Admin', url: process.env.ADMIN_CONTACT_LINK ?? 'https://t.me/shiloh_is_10xing' }]],
+                inline_keyboard: [[{ text: ' Contact Admin', url: process.env.ADMIN_CONTACT_LINK ?? 'https://t.me/shiloh_is_10xing' }]],
             },
         };
 
@@ -230,7 +230,7 @@ export async function participate(giveawayId: number, telegramId: number): Promi
 
     return {
         success: true,
-        message: `✅ You've joined the *${event.title}* giveaway! Good luck! 🍀`,
+        message: `✅ You've joined the *${event.title}* giveaway! Good luck! `,
     };
 }
 
@@ -243,7 +243,7 @@ export function recordTrade(telegramId: number, isMartingaleRecovery = false): v
             const sendAt = futureTimestamp(60_000, 300_000);
             insertGiveawayUpdate(
                 p.giveaway_id, p.participation_id, telegramId, 'progress',
-                `📈 Trade recorded for *${p.title}*! Keep trading to climb the rankings.`,
+                `◆ Trade recorded for *${p.title}*! Keep trading to climb the rankings.`,
                 sendAt,
             );
         }
@@ -328,7 +328,7 @@ export function selectWinners(giveawayId: number): Array<{ telegram_id: number; 
         const prizeText = event.prize_per_winner != null ? ` — Prize: *$${event.prize_per_winner.toFixed(2)}*` : '';
         queueParticipantUpdate(
             giveawayId, w.id, w.telegram_id, 'won',
-            `🎉 Congratulations! You won the *${event.title}* giveaway!${prizeText}\n\nThe admin will contact you shortly.`,
+            ` Congratulations! You won the *${event.title}* giveaway!${prizeText}\n\nThe admin will contact you shortly.`,
         );
         // Fabricated winners have negative telegram_ids — sendMessage will fail silently
     }
@@ -340,14 +340,14 @@ export function selectWinners(giveawayId: number): Array<{ telegram_id: number; 
         const totalPool = event.prize_pool != null ? `$${event.prize_pool.toFixed(2)}` : 'N/A';
         const perWinner = event.prize_per_winner != null ? `$${event.prize_per_winner.toFixed(2)}` : 'N/A';
         const announcementMsg =
-            `🎉 *GIVEAWAY RESULTS*\n\n` +
-            `💰 *Total Prize Pool:* ${totalPool}\n` +
-            `💵 *Amount Per Winner:* ${perWinner}\n\n` +
-            `🏆 *WINNERS:*\n${winnersList}\n\n` +
+            ` *GIVEAWAY RESULTS*\n\n` +
+            ` *Total Prize Pool:* ${totalPool}\n` +
+            ` *Amount Per Winner:* ${perWinner}\n\n` +
+            ` *WINNERS:*\n${winnersList}\n\n` +
             `Winners contact admin now for your winnings\\!\n\n` +
-            `Missed out? Don't let it happen again\\. Upgrade your access and join the next one\\! 🔥`;
+            `Missed out? Don't let it happen again\\. Upgrade your access and join the next one\\! `;
         const adminLink = process.env.ADMIN_CONTACT_LINK ?? 'https://t.me/shiloh_is_10xing';
-        const replyMarkup = JSON.stringify({ inline_keyboard: [[{ text: '👤 Contact Admin', url: adminLink }]] });
+        const replyMarkup = JSON.stringify({ inline_keyboard: [[{ text: '· Contact Admin', url: adminLink }]] });
         for (const uid of allUserIds) {
             insertNotification(uid, announcementMsg, { replyMarkup });
         }
@@ -384,7 +384,7 @@ export function sendMotivationalMessages(giveawayId: number): void {
         .replace(/\$\{recent_winner\}/g, 'a recent winner');
 
     const markup = JSON.stringify({
-        inline_keyboard: [[{ text: '🎯 Participate', callback_data: `giveaway:participate:${giveawayId}` }]],
+        inline_keyboard: [[{ text: ' Participate', callback_data: `giveaway:participate:${giveawayId}` }]],
     });
 
     const testUserId = getTestUserId();
@@ -410,19 +410,19 @@ export async function activatePromoCode(giveawayId: number): Promise<void> {
     for (const u of users) {
         // All users can claim promo codes now (directive §8.1).
         const lines = [
-            `🏷️ *NEW PROMO CODE*`,
+            `·️ *NEW PROMO CODE*`,
             ``,
             `*${event.title}*`,
             event.description ?? '',
             event.max_winners != null ? `Limited: ${event.max_winners} claims available` : '',
             ``,
-            `Tap below to claim your code 👇`,
+            `Tap below to claim your code ─ `,
         ].filter(Boolean);
 
         const fundUrl = process.env.FUNDING_URL ?? 'https://iqoption.com/pwa/payments/deposit';
         const markup = { inline_keyboard: [
-            [{ text: '🎁 Claim Code', callback_data: `promo:claim:${giveawayId}` }],
-            [{ text: '💰 Fund Account', url: fundUrl }],
+            [{ text: ' Claim Code', callback_data: `promo:claim:${giveawayId}` }],
+            [{ text: ' Fund Account', url: fundUrl }],
         ]};
 
         insertNotification(u.telegram_id, lines.join('\n'), { replyMarkup: JSON.stringify(markup) });
@@ -463,7 +463,7 @@ export async function activateMarathon(giveawayId: number): Promise<void> {
     for (const u of users) {
         // All users can join marathons now (directive §8.1).
         const lines = [
-            `🏃 *LIVE MARATHON*`,
+            ` *LIVE MARATHON*`,
             ``,
             `*${event.title}*`,
             event.description ?? '',
@@ -471,10 +471,10 @@ export async function activateMarathon(giveawayId: number): Promise<void> {
             `Top ${event.max_winners} traders win`,
             endsLine,
             ``,
-            `Trade the most to win! 👇`,
+            `Trade the most to win! ─ `,
         ].filter(Boolean);
 
-        const markup = { inline_keyboard: [[{ text: '🏃 Join Marathon', callback_data: `giveaway:participate:${giveawayId}` }]] };
+        const markup = { inline_keyboard: [[{ text: ' Join Marathon', callback_data: `giveaway:participate:${giveawayId}` }]] };
 
         insertNotification(u.telegram_id, lines.join('\n'), { replyMarkup: JSON.stringify(markup) });
     }
@@ -486,11 +486,11 @@ export async function claimPromoCode(
 ): Promise<{ success: boolean; code?: string; message: string; replyMarkup?: ParticipateResult['replyMarkup'] }> {
     const event = getGiveawayEvent(giveawayId);
     if (!event || event.status !== 'active' || event.event_type !== 'promo_code') {
-        return { success: false, message: '❌ This promo code is no longer available.' };
+        return { success: false, message: ' This promo code is no longer available.' };
     }
 
     const user = getUser(telegramId);
-    if (!user) return { success: false, message: '❌ User not found.' };
+    if (!user) return { success: false, message: ' User not found.' };
 
     // All users can claim promo codes now (directive §8.1) — no tier gate.
 
@@ -498,13 +498,13 @@ export async function claimPromoCode(
 
     const existing = getGiveawayParticipant(giveawayId, telegramId);
     if (existing) {
-        return { success: true, code, message: `✅ Already claimed!\n\n🎉 Your code: *${code}*\n\nUse this when funding your account.` };
+        return { success: true, code, message: `✅ Already claimed!\n\n Your code: *${code}*\n\nUse this when funding your account.` };
     }
 
     const claimed = getGiveawayParticipantCount(giveawayId);
     const totalClaimed = claimed + (event.fabricated_claims ?? 0);
     if (event.max_winners != null && totalClaimed >= event.max_winners) {
-        return { success: false, message: '❌ This promo code has reached its maximum number of claims. Check back for more promos!' };
+        return { success: false, message: ' This promo code has reached its maximum number of claims. Check back for more promos!' };
     }
 
     const participantId = insertGiveawayParticipant(giveawayId, telegramId);
@@ -519,7 +519,7 @@ export async function claimPromoCode(
     return {
         success: true,
         code,
-        message: `🎉 Your code: *${code}*\n\nUse this when funding your account.`,
+        message: ` Your code: *${code}*\n\nUse this when funding your account.`,
     };
 }
 
@@ -548,8 +548,8 @@ export async function checkMarathonDeadlines(telegram: Telegram): Promise<void> 
         const all = getGiveawayParticipants(m.id, true);
         for (const p of all) {
             const msg = winnerIds.has(p.telegram_id)
-                ? `🏆 Marathon *${escapeMd(m.title)}* has ended — you're a top winner! The admin will contact you shortly.`
-                : `📊 Marathon *${escapeMd(m.title)}* has ended. Thanks for competing! Top ${m.max_winners} won.`;
+                ? ` Marathon *${escapeMd(m.title)}* has ended — you're a top winner! The admin will contact you shortly.`
+                : `◆ Marathon *${escapeMd(m.title)}* has ended. Thanks for competing! Top ${m.max_winners} won.`;
             try { await telegram.sendMessage(p.telegram_id, msg, { parse_mode: 'Markdown' }); } catch {}
         }
         deleteMarathonFabricants(m.id);
@@ -614,15 +614,15 @@ export async function tickPromoFabrication(): Promise<void> {
             markPromoUrgencySent(event.id, 1);
             for (const u of audience) {
                 insertNotification(u.telegram_id,
-                    `🏃 *Last promo code — grab it now!*\n\n*${event.title}*\n\nOnly 1 left!`,
-                    { replyMarkup: claimBtn('🏃 Grab It Now') });
+                    ` *Last promo code — grab it now!*\n\n*${event.title}*\n\nOnly 1 left!`,
+                    { replyMarkup: claimBtn(' Grab It Now') });
             }
         } else if (remaining <= 5 && !event.urgency_5_sent) {
             markPromoUrgencySent(event.id, 5);
             for (const u of audience) {
                 insertNotification(u.telegram_id,
-                    `🔥 *Only 5 promo codes remaining!*\n\n*${event.title}*\n\nGrab yours before they're gone!`,
-                    { replyMarkup: claimBtn('🔥 Claim Now') });
+                    ` *Only 5 promo codes remaining!*\n\n*${event.title}*\n\nGrab yours before they're gone!`,
+                    { replyMarkup: claimBtn(' Claim Now') });
             }
         } else if (remaining <= 10 && !event.urgency_10_sent) {
             markPromoUrgencySent(event.id, 10);
