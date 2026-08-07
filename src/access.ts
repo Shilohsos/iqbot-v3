@@ -284,7 +284,7 @@ const rateCache = new Map<string, { rate: number; expires: number }>();
 
 // Fallback rates for currencies the SDK may not support. Approximate — fine for
 // access thresholds; updated periodically.
-const FALLBACK_RATES: Record<string, number> = {
+export const FALLBACK_RATES: Record<string, number> = {
     NGN: 0.00067,   // ~₦1,500 = $1
     KES: 0.0077,    // ~KES 130 = $1
     GHS: 0.069,     // ~GHS 14.5 = $1
@@ -293,6 +293,25 @@ const FALLBACK_RATES: Record<string, number> = {
     IDR: 0.000062,  // ~IDR 16,000 = $1
     BRL: 0.19,      // ~BRL 5.3 = $1
 };
+
+// ── Currency display (shared — moved here so non-bot.ts modules like checkin.ts
+// can format money without importing bot.ts, which would create a cycle) ──────
+
+export const CURRENCY_SYMBOLS: Record<string, string> = {
+    USD: '$', NGN: '₦', EUR: '€', GBP: '£', JPY: '¥', AUD: 'A$', CAD: 'C$',
+};
+
+/** Format a balance with its currency symbol and a fixed 2 decimals, e.g. `$1,000.00`. */
+export function fmtBalance(b: { amount: number; currency?: string | null }): string {
+    const sym = (b.currency && CURRENCY_SYMBOLS[b.currency]) || b.currency || '$';
+    const amt = b.amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return `${sym}${amt}`;
+}
+
+/** Format a plain number as money with a fixed 2 decimals, e.g. `$5.00`. */
+export function fmtMoney(n: number, cur = 'USD'): string {
+    return `${CURRENCY_SYMBOLS[cur] ?? '$'}${n.toFixed(2)}`;
+}
 
 /**
  * Converts an amount to USD. Returns null when no rate is available — callers

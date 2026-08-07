@@ -8,8 +8,9 @@ import { recoverMissedTradeResults } from './tradeRecovery.js';
 import { sdkPool } from './sdk-pool.js';
 import { bootBanner, startMetricsLoop, setStatsProvider, safeExit, writeMetrics } from './stay-alive.js';
 import { withBackgroundSdk, bgSdkStats } from './concurrency.js';
-import { resolveAccess, getProductConfig, hasAccess, getProduct, convertToUsd, tokenToAccess, AI_TRADING_MIN_USD, AUTO_TRADING_MIN_USD, FREE_SIGNALS_PER_DAY, ALL_PAIRS, PRODUCT_LIMITS, SIGNALS_PREMIUM_COUNT, clampDisplayConfidence, TOKEN_ACCESS_DURATION_MS, godModeStakePct, godModeTimeframe, godModeGaleRounds, godModePickWorstAssets, } from './access.js';
+import { resolveAccess, getProductConfig, hasAccess, getProduct, convertToUsd, tokenToAccess, AI_TRADING_MIN_USD, AUTO_TRADING_MIN_USD, FREE_SIGNALS_PER_DAY, ALL_PAIRS, PRODUCT_LIMITS, SIGNALS_PREMIUM_COUNT, clampDisplayConfidence, TOKEN_ACCESS_DURATION_MS, godModeStakePct, godModeTimeframe, godModeGaleRounds, godModePickWorstAssets, CURRENCY_SYMBOLS, fmtBalance, fmtMoney, } from './access.js';
 import { runUpgradeTokenSweep, UPGRADE_TOKEN_RESET_DATE_KEY } from './upgrade-token.js';
+import { initCheckinDb, startCheckinScheduler, setCheckinLiveRefresher, handleCheckinCallback, tryHandleCheckinTargetText } from './checkin.js';
 import { autoEngine, initAutoEngine } from './auto-trading.js';
 import { startSwarm, stopSwarm, getSwarmSession, getSwarmStats, setSwarmNotifier, initSwarmDb } from './swarm.js';
 import { startCopying, stopCopying, getCopyStatus, setCopyNotifier, initCopyDb } from './copy-trading.js';
@@ -213,7 +214,7 @@ bot.use(async (ctx, next) => {
 // Only the test account (Shara) + admin can use the rest. Toggle via config
 // 'maintenance_gate' = '1'|'0' (set alongside features_paused).
 const MAINTENANCE_ALLOWED_IDS = new Set([6622587977, getAdminId()]);
-const MAINTENANCE_SIGNAL_PREFIXES = ['ui:signals', 'signals:cancel', 'spage:', 'spair:', 'stf:'];
+const MAINTENANCE_SIGNAL_PREFIXES = ['ui:signals', 'signals:cancel', 'spage:', 'spair:', 'stf:', 'checkin:'];
 bot.use(async (ctx, next) => {
     if (!ctx.callbackQuery) return next();
     if (getConfig('maintenance_gate') !== '1') return next();
@@ -283,17 +284,6 @@ const ROUND_COOLDOWN_MS = 5_000;
 // trigger "Character '-' is reserved" parse errors. So escapeMd == legacy escape.
 function escapeMd(s) { return s.replace(/[_*`[]/g, '\\$&'); }
 function escapeMdLegacy(s) { return s.replace(/[_*`[]/g, '\\$&'); }
-const CURRENCY_SYMBOLS = {
-    USD: '$', NGN: '₦', EUR: '€', GBP: '£', JPY: '¥', AUD: 'A$', CAD: 'C$',
-};
-function fmtBalance(b) {
-    const sym = (b.currency && CURRENCY_SYMBOLS[b.currency]) || b.currency || '$';
-    const amt = b.amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    return `${sym}${amt}`;
-}
-function fmtMoney(n, cur = 'USD') {
-    return `${CURRENCY_SYMBOLS[cur] ?? '$'}${n.toFixed(2)}`;
-}
 function withTimeout(promise, ms, label) {
     return Promise.race([
         promise,
@@ -694,11 +684,15 @@ async function syncAccessFromBalance(telegramId, realAmount, currency, sdk) {
 /** Best-effort: query the user's LIVE IQ Option balance and refresh their
  *  funded_balance_usd + access_level in the DB. Silent no-op on any failure
  *  (no SSID, timeout, network) so callers can fall back to the cached value.
- *  Handles auth expiry with one reconnect+retry. */
+ *  Handles auth expiry with one reconnect+retry. Returns the live native-currency
+ *  real balance ({amount, currency}, un-converted) for callers that need to
+ *  display it — checkin.ts is the only current consumer of the return value;
+ *  existing callers ignore it, so this stays fully backward compatible. */
 async function refreshFundedBalanceFromLive(uid) {
     let ssid = getSsidForUser(uid);
     if (!ssid)
-        return; // never connected — nothing to refresh
+        return null; // never connected — nothing to refresh
+    let liveReal = null;
     const fetchAndSync = async (sid) => {
         const sdk = await sdkPool.get(uid, sid);
         try {
@@ -706,6 +700,7 @@ async function refreshFundedBalanceFromLive(uid) {
             const real = all.find(b => b.type === BalanceType.Real);
             // No real balance → treat as $0; syncAccessFromBalance will keep them gated.
             await syncAccessFromBalance(uid, real?.amount ?? 0, real?.currency ?? 'USD', sdk);
+            liveReal = real ? { amount: real.amount, currency: real.currency } : null;
         }
         finally {
             sdkPool.release(uid);
@@ -740,6 +735,7 @@ async function refreshFundedBalanceFromLive(uid) {
             logger.warn('bot', `balance refresh failed for ${uid} (using cached): ${err instanceof Error ? err.message : err}`);
         }
     }
+    return liveReal;
 }
 // Per-user in-flight guard so rapid button mashing doesn't fire parallel SDK
 // balance calls (C3). Concurrent callers await the same refresh promise.
@@ -5995,8 +5991,12 @@ async function handleUserIdBrainRoute(ctx, telegramId, lastInput, failCount) {
     setOnboardingState(telegramId, 'awaiting_user_id');
 }
 // ─── Text handler (all wizards) ───────────────────────────────────────────────
+// Daily AI Check-in — single router for every checkin:* callback (DIRECTIVE-AI-CHECKIN-DAILY.md).
+bot.action(/^checkin:/, async (ctx) => { await handleCheckinCallback(ctx); });
 bot.on('text', async (ctx) => {
     if (ctx.message.text.startsWith('/'))
+        return;
+    if (await tryHandleCheckinTargetText(ctx))
         return;
     const chatId = ctx.chat.id;
     const text = ctx.message.text.trim();
@@ -7483,6 +7483,12 @@ setSwarmNotifier({
 setCopyNotifier({
     sendMessage: (chatId, text, extra) => bot.telegram.sendMessage(chatId, text, extra),
 });
+// Daily AI Check-in (DIRECTIVE-AI-CHECKIN-DAILY.md) — 08:00/13:00/20:00 WAT,
+// approved by Master 2026-08-07: a distinct, newly-commissioned interactive
+// system, not a revival of the auto-broadcast flows killed below.
+initCheckinDb();
+setCheckinLiveRefresher(refreshFundedBalanceFromLive);
+startCheckinScheduler(bot);
 // ⛔ KILLED 2026-08-07: all automatic broadcast flows removed per Master.
 // startAutoBroadcast(bot);
 // seedFundingCycle();
