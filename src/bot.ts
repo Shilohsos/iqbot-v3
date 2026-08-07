@@ -44,16 +44,16 @@ const IQ_SSID = process.env.IQ_SSID;
 const AFFILIATE_LINK = process.env.AFFILIATE_LINK ?? 'https://iqbroker.com/lp/regframe-01-light-nosocials/?aff=749367&aff_model=revenue';
 const ADMIN_CONTACT_LINK = process.env.ADMIN_CONTACT_LINK ?? 'https://t.me/shiloh_is_10xing';
 const FLOW_BUTTONS = {
-    start_trading: { text: ' Start Trading', action: 'ui:trade' },
-    reconnect: { text: ' Reconnect', action: 'ui:connect' },
+    start_trading: { text: '✦ Start Trading', action: 'ui:trade' },
+    reconnect: { text: '✦ Reconnect', action: 'ui:connect' },
     continue_onboarding: { text: '►️ Continue', action: 'ui:start' },
     verify_user_id: { text: '· Contact Admin', action: { url: process.env.ADMIN_CONTACT_LINK ?? 'https://t.me/shiloh_is_10xing' } },
-    fund_account: { text: ' Fund Account', action: { url: 'https://iqoption.com/pwa/payments/deposit' } },
-    go_home: { text: ' Menu', action: 'ui:start' },
+    fund_account: { text: '✦ Fund Account', action: { url: 'https://iqoption.com/pwa/payments/deposit' } },
+    go_home: { text: '✦ Menu', action: 'ui:start' },
     help_contact: { text: '· Contact Admin', action: { url: process.env.ADMIN_CONTACT_LINK ?? 'https://t.me/shiloh_is_10xing' } },
-    help_user_id: { text: ' Create Account', action: { url: process.env.AFFILIATE_LINK ?? 'https://iqbroker.com/lp/regframe-01-light-nosocials/?aff=749367&aff_model=revenue' } },
-    link_account: { text: ' Connect Account', action: 'ui:connect' },
-    create_account: { text: ' Create Account', action: { url: process.env.AFFILIATE_LINK ?? 'https://iqbroker.com/lp/regframe-01-light-nosocials/?aff=749367&aff_model=revenue' } },
+    help_user_id: { text: '✦ Create Account', action: { url: process.env.AFFILIATE_LINK ?? 'https://iqbroker.com/lp/regframe-01-light-nosocials/?aff=749367&aff_model=revenue' } },
+    link_account: { text: '✦ Connect Account', action: 'ui:connect' },
+    create_account: { text: '✦ Create Account', action: { url: process.env.AFFILIATE_LINK ?? 'https://iqbroker.com/lp/regframe-01-light-nosocials/?aff=749367&aff_model=revenue' } },
 };
 const FALLBACK_MESSAGES = {
     reconnect: "Your session expired — tap Reconnect to sign back in.",
@@ -67,7 +67,7 @@ const FALLBACK_MESSAGES = {
     verify_user_id: "Enter your User ID number to continue.",
     continue_onboarding: "Let's continue where you left off.",
 };
-const FALLBACK_DEFAULT = "Tap below to get started ";
+const FALLBACK_DEFAULT = "Tap below to get started ✦";
 function getUserSegment(telegramId) {
     const user = getUser(telegramId);
     if (!user)
@@ -248,7 +248,7 @@ bot.use(async (ctx, next) => {
     const data = ctx.callbackQuery?.data;
     if (data && ADMIN_CALLBACK_PREFIXES.some(p => data.startsWith(p)) && ctx.from?.id !== getAdminId()) {
         console.warn(`[security] blocked admin callback "${data.slice(0, 40)}" from non-admin ${ctx.from?.id}`);
-        await ctx.answerCbQuery(' Not authorized.').catch(() => { });
+        await ctx.answerCbQuery('✕ Not authorized.').catch(() => { });
         return;
     }
     return next();
@@ -626,7 +626,7 @@ async function executeBroadcast(chatId, deleteAfterMs, ctx) {
     const pending = pendingBroadcasts.get(chatId);
     pendingBroadcasts.delete(chatId);
     if (!pending) {
-        await ctx.reply(' Session expired.', { reply_markup: adminBackKeyboard() });
+        await ctx.reply('❌ Session expired.', { reply_markup: adminBackKeyboard() });
         return;
     }
     const { sent, deferred } = await dispatchBroadcastPayload({ ...pending, deleteAfterMs });
@@ -849,7 +849,7 @@ async function handlePossibleAuthExpiry(err, ctx, isAdmin) {
             console.error(`[auth] setSsidValid failed for ${ctx.from.id}:`, e instanceof Error ? e.message : e);
         }
     }
-    await ctx.reply(' Your session expired.\n\nReconnect in 3 steps:\n1. Tap the  Reconnect button below\n2. Enter your IQ Option email and password\n3. Get back to trading immediately', { reply_markup: { inline_keyboard: [[{ text: ' Reconnect', callback_data: isAdmin ? 'admin:trade_connect' : 'ui:connect' }]] } }).catch(() => { });
+    await ctx.reply('✦ Your session expired.\n\nReconnect in 3 steps:\n1. Tap the ✦ Reconnect button below\n2. Enter your IQ Option email and password\n3. Get back to trading immediately', { reply_markup: { inline_keyboard: [[{ text: '✦ Reconnect', callback_data: isAdmin ? 'admin:trade_connect' : 'ui:connect' }]] } }).catch(() => { });
     return true;
 }
 /** Thrown when IQ Option requires email 2FA before issuing an SSID. Carries the
@@ -875,8 +875,8 @@ function verifyMethodLabel(method) {
     switch ((method || '').toLowerCase()) {
         case 'sms': return '· A verification code has been sent to your phone (SMS).';
         case 'push': return '· Approve the login from the IQ Option push notification, then enter the code shown (if any).';
-        case 'email': return ' A verification code has been sent to your email.';
-        default: return ` A verification code has been sent via ${method || 'email'}.`;
+        case 'email': return '✦ A verification code has been sent to your email.';
+        default: return `✦ A verification code has been sent via ${method || 'email'}.`;
     }
 }
 /** Single login attempt. Builds the request, optionally through the proxy, and returns the SSID + ready SDK. */
@@ -990,8 +990,8 @@ async function sendStartMenu(ctx) {
     const telegramId = ctx.from.id;
     if (telegramId === getAdminId()) {
         const stats = getApprovalStats();
-        await ctx.reply(`️ *Admin Dashboard*\n\n` +
-            ` Users: ${stats.total} total | ✅ ${stats.approved} approved | ··· ${stats.pending} pending |  ${stats.rejected} rejected\n` +
+        await ctx.reply(`✦️ *Admin Dashboard*\n\n` +
+            `✦ Users: ${stats.total} total | ✅ ${stats.approved} approved | ··· ${stats.pending} pending | ❌ ${stats.rejected} rejected\n` +
             `· Signals used today: ${getTotalSignalsToday()}`, { parse_mode: 'Markdown', reply_markup: adminKeyboard(getConfig("admin_analysis_all") === "true") });
         return;
     }
@@ -1001,7 +1001,7 @@ async function sendStartMenu(ctx) {
         const img1 = getSequenceMedia('entry_welcome_1');
         if (img1)
             await ctx.replyWithPhoto(img1.file_id).catch(() => { });
-        await ctx.reply("I'm 10x Special Bot \n\n" +
+        await ctx.reply("I'm 10x Special Bot ✦\n\n" +
             "The most refined semi auto-trading bot for IQ Option OTC pairs.\n\n" +
             "I scan markets. I read signals. I place trades.\n" +
             "You sit back and watch the wins land.");
@@ -1015,21 +1015,21 @@ async function sendStartMenu(ctx) {
             reply_markup: {
                 inline_keyboard: [[
                         { text: '✅ I have an IQ Option account', callback_data: 'onboard:yes' },
-                        { text: ' Create Account', url: AFFILIATE_LINK },
+                        { text: '✦ Create Account', url: AFFILIATE_LINK },
                     ]]
             }
         });
         return;
     }
     if (user.approval_status === 'rejected') {
-        await ctx.reply(' Your access has been rejected. Contact the admin if this is a mistake.');
+        await ctx.reply('❌ Your access has been rejected. Contact the admin if this is a mistake.');
         return;
     }
     // Approved — build rich menu
     const ss = getUserSessionStats(telegramId);
     const access = getProduct(user.access_level);
     const productLabel = getProductConfig(user.access_level).label;
-    const accessEmoji = access === 'auto_trading' ? '' : access === 'ai_trading' ? '⟡' : '·';
+    const accessEmoji = access === 'auto_trading' ? '✦' : access === 'ai_trading' ? '⟡' : '·';
     const pnlSign = ss.pnl >= 0 ? '+' : '';
     // Daily signal quota line — only shown to unfunded users on Signals access.
     let signalsLine = '';
@@ -1042,7 +1042,7 @@ async function sendStartMenu(ctx) {
     const cachedLine = (cached && Date.now() - cached.ts < BALANCE_CACHE_TTL) ? cached.line : '';
     const needsFetch = !!ssid && !cachedLine;
     const buildMenu = (balLine) => [
-        ` 10x — Private Client Desk`, ``,
+        `✦ 10x — Private Client Desk`, ``,
         `Access: ${accessEmoji} ${productLabel}`,
         balLine ? `Balance: ${balLine}` : '',
         signalsLine,
@@ -1056,11 +1056,11 @@ async function sendStartMenu(ctx) {
         const prizeText = giveaway.prize_pool != null ? `\nPrize Pool: *$${giveaway.prize_pool.toFixed(2)}*` : '';
         // All users can participate in giveaways now (directive §8.1).
         const giveawayCard = [
-            ` *LIVE GIVEAWAY*`,
+            `✦ *LIVE GIVEAWAY*`,
             `*${escapeMdLegacy(giveaway.title)}*`,
             prizeText,
         ].filter(l => l !== '').join('\n');
-        const giveawayMarkup = { inline_keyboard: [[{ text: ' Participate', callback_data: `giveaway:participate:${giveaway.id}` }]] };
+        const giveawayMarkup = { inline_keyboard: [[{ text: '✦ Participate', callback_data: `giveaway:participate:${giveaway.id}` }]] };
         await ctx.reply(giveawayCard, { parse_mode: 'Markdown', reply_markup: giveawayMarkup });
     }
     if (ssid) {
@@ -1124,11 +1124,11 @@ async function askCreateAccountUserId(ctx) {
     const escapedLink = AFFILIATE_LINK.replace(/_/g, '\\_');
     await ctx.reply(`─  Create your IQ Option account\n` +
         `─  Create your IQ Option Account: ${escapedLink}\n` +
-        `Click Above \n\n` +
+        `Click Above ✦\n\n` +
         `· Once your account is created, enter your User ID here:\n\n` +
         `How to find it:\n` +
         `Open IQ Option → Profile → copy the numeric User ID ·\n\n` +
-        `Then paste that here `, { parse_mode: 'Markdown' });
+        `Then paste that here ✦`, { parse_mode: 'Markdown' });
 }
 // ─── Approval gate ────────────────────────────────────────────────────────────
 async function requireApproval(ctx) {
@@ -1142,10 +1142,10 @@ async function requireApproval(ctx) {
     if (user.approval_status === 'approved')
         return true;
     if (user.approval_status === 'paused') {
-        await ctx.reply('️ Your account is temporarily paused. Contact the admin to resume.');
+        await ctx.reply('❚❚️ Your account is temporarily paused. Contact the admin to resume.');
         return false;
     }
-    await ctx.reply(' Your access has been rejected. Contact the admin if this is a mistake.');
+    await ctx.reply('❌ Your access has been rejected. Contact the admin if this is a mistake.');
     return false;
 }
 // ─── Martingale loop ──────────────────────────────────────────────────────────
@@ -1228,7 +1228,7 @@ async function resumeGaleAfterRestart(bot, galeRow, recoveredStatus) {
             await bot.telegram.sendMessage(userId,
                 `⚠️ Recovery: your IQ Option session expired during a gale chain.\n` +
                 `Reconnect to continue trading `,
-                { reply_markup: { inline_keyboard: [[{ text: ' Reconnect', callback_data: 'ui:connect' }]] } });
+                { reply_markup: { inline_keyboard: [[{ text: '✦ Reconnect', callback_data: 'ui:connect' }]] } });
             return;
         }
         
@@ -1294,7 +1294,7 @@ async function runMartingale(ctx, ssid, pair, direction, amount, timeframeSec = 
         const roundTimeoutMs = (timeframeSec + 120) * 1000 + 300_000;
         let currentAmount = amount;
         let totalPnl = 0;
-        const logLines = [' Trade session initialized…'];
+        const logLines = ['✦ Trade session initialized…'];
         const logMsg = await ctx.reply(logLines.join('\n'));
         const sentMessages = [...preTradeMessageIds, logMsg.message_id];
         var galeSessionId = null;
@@ -1351,12 +1351,12 @@ async function runMartingale(ctx, ssid, pair, direction, amount, timeframeSec = 
         // fails for good, including after an exhausted auth retry).
         const showTradeError = async (err) => {
             const errMsg = err instanceof Error ? err.message : 'Unknown error';
-            logLines[logLines.length - 1] = ` Trade|⚠️ ${fmtMoney(currentAmount, currency)} → error`;
+            logLines[logLines.length - 1] = `✦ Trade|⚠️ ${fmtMoney(currentAmount, currency)} → error`;
             await syncLog();
             const isBalanceError = /4112|investment amount|smaller.*minimum|insufficient.*balance/i.test(errMsg);
             const catchReply = isBalanceError
                 ? await ctx.reply('⚠️ *You do not have an active balance*\n\nFund your account now with as little as $10 to start trading.', { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [
-                            [{ text: ' Fund Account', url: 'https://iqoption.com/pwa/payments/deposit' }],
+                            [{ text: '✦ Fund Account', url: 'https://iqoption.com/pwa/payments/deposit' }],
                             [{ text: '↻ New Opportunity', callback_data: 'ui:trade' }],
                         ] } })
                 : await ctx.reply(friendlyError(err, '⚠️ Trade could not be placed. Try again.'), {
@@ -1370,7 +1370,7 @@ async function runMartingale(ctx, ssid, pair, direction, amount, timeframeSec = 
             if (galeSessionId) {
                 try { updateGaleSession(galeSessionId, currentAmount, round, totalPnl, sentMessages, 'active'); } catch (e) { /* */ }
             }
-            logLines.push(` Trade ${round}|🟡 ${fmtMoney(currentAmount, currency)} → in flight`);
+            logLines.push(`✦ Trade ${round}|🟡 ${fmtMoney(currentAmount, currency)} → in flight`);
             await syncLog();
             const roundTrade = { pair, direction, amount: currentAmount, martingaleRunId: runId, timeframeSec, balanceType, telegramId: ctx.from.id };
             const execRound = () => activeSdk
@@ -1439,7 +1439,7 @@ async function runMartingale(ctx, ssid, pair, direction, amount, timeframeSec = 
                     }
                     catch (err2) {
                         // Retry also failed — show error, don't double, don't continue chain
-                        logLines[logLines.length - 1] = ` Trade|⚠️ ${fmtMoney(currentAmount, currency)} → connection lost`;
+                        logLines[logLines.length - 1] = `✦ Trade|⚠️ ${fmtMoney(currentAmount, currency)} → connection lost`;
                         await syncLog();
                         await ctx.reply('⚠️ Connection lost mid-trade. No trade was placed.\n\nTry again ', {
                             reply_markup: { inline_keyboard: [[{ text: '↻ New Opportunity', callback_data: 'ui:trade' }]] },
@@ -1475,28 +1475,28 @@ async function runMartingale(ctx, ssid, pair, direction, amount, timeframeSec = 
             const lastIdx = logLines.length - 1;
             if (result.status === 'WIN') {
                 const winNet = (typeof result.pnl === 'number' && result.pnl >= currentAmount) ? (result.pnl - currentAmount) : (result.pnl || 0);
-                logLines[lastIdx] = ` Trade ${round}|🟢 ${fmtMoney(currentAmount, currency)} → +${fmtMoney(winNet, currency)}`;
+                logLines[lastIdx] = `✦ Trade ${round}|🟢 ${fmtMoney(currentAmount, currency)} → +${fmtMoney(winNet, currency)}`;
             }
             else if (result.status === 'LOSS') {
-                logLines[lastIdx] = ` Trade ${round}|🔴 ${fmtMoney(currentAmount, currency)} → -${fmtMoney(currentAmount, currency)}`;
+                logLines[lastIdx] = `✦ Trade ${round}|🔴 ${fmtMoney(currentAmount, currency)} → -${fmtMoney(currentAmount, currency)}`;
             }
             else if (result.status === 'TIE') {
-                logLines[lastIdx] = ` Trade ${round}|⚪ ${fmtMoney(currentAmount, currency)} → ${fmtMoney(0, currency)}`;
+                logLines[lastIdx] = `✦ Trade ${round}|⚪ ${fmtMoney(currentAmount, currency)} → ${fmtMoney(0, currency)}`;
             }
             else if (result.status === 'ERROR') {
                 const balErrMsg = result.error ?? '';
                 if (/4100|4112|4113|insufficient.*(funds|balance)|balance.*(insufficient|low|empty)|amount.*(higher|smaller).*allowed|minimum|smaller.*minimum/i.test(balErrMsg)) {
-                    logLines[lastIdx] = ` Trade ${round}|⚠️ ${fmtMoney(currentAmount, currency)} → insufficient balance`;
+                    logLines[lastIdx] = `✦ Trade ${round}|⚠️ ${fmtMoney(currentAmount, currency)} → insufficient balance`;
                     await syncLog();
                     await ctx.reply('⚠️ *Insufficient balance*\\n\\nFund your account to continue trading.', { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [
-                                [{ text: ' Fund Account', url: 'https://iqoption.com/pwa/payments/deposit' }],
+                                [{ text: '✦ Fund Account', url: 'https://iqoption.com/pwa/payments/deposit' }],
                             ] } }).catch(() => { });
                     return;
                 }
-                logLines[lastIdx] = ` Trade ${round}|⚠️ ${fmtMoney(currentAmount, currency)} → ${result.error ?? result.status}`;
+                logLines[lastIdx] = `✦ Trade ${round}|⚠️ ${fmtMoney(currentAmount, currency)} → ${result.error ?? result.status}`;
             }
             else {
-                logLines[lastIdx] = ` Trade ${round}|⚠️ ${fmtMoney(currentAmount, currency)} → ${result.error ?? result.status}`;
+                logLines[lastIdx] = `✦ Trade ${round}|⚠️ ${fmtMoney(currentAmount, currency)} → ${result.error ?? result.status}`;
             }
             await syncLog();
             // Update session stats on any settled trade
@@ -1517,9 +1517,9 @@ async function runMartingale(ctx, ssid, pair, direction, amount, timeframeSec = 
                 updateLeaderboardAuto(ctx.from.id, netWinDisplay(result.pnl, currentAmount));
                 // Round 1 = direct win (L11a); round 2+ = comeback (L11b)
                 await sendRoundImage(round === 1 ? 'L11a.png' : 'L11b.png');
-                const winReply = await ctx.reply(` +${fmtMoney(netWinDisplay(result.pnl, currentAmount), currency)} added to your balance.\n\n` +
+                const winReply = await ctx.reply(`1. +${fmtMoney(netWinDisplay(result.pnl, currentAmount), currency)} added to your balance.\n\n` +
                     (round > 1 ? `Recovery complete.\n\n` : '') +
-                    ` You just made +${fmtMoney(netWinDisplay(result.pnl, currentAmount), currency)}`, { reply_markup: { inline_keyboard: [[{ text: '↻ New Opportunity', callback_data: 'ui:trade' }]] } });
+                    `✦ You just made +${fmtMoney(netWinDisplay(result.pnl, currentAmount), currency)}`, { reply_markup: { inline_keyboard: [[{ text: '↻ New Opportunity', callback_data: 'ui:trade' }]] } });
                 sentMessages.push(winReply.message_id);
                 scheduleCleanup();
                 if (galeSessionId) { try { updateGaleSession(galeSessionId, currentAmount, round, totalPnl, sentMessages, 'completed'); } catch (e) { /* */ } }
@@ -1548,7 +1548,7 @@ async function runMartingale(ctx, ssid, pair, direction, amount, timeframeSec = 
                 // OTC Blitz ties are common — price didn't move enough. The stake was
                 // refunded, so there's nothing to recover. Retry with the SAME stake
                 // — don't double, don't consume a gale round.
-                logLines[logLines.length - 1] = ` Trade ${round}|⚪ ${fmtMoney(currentAmount, currency)} → tied`;
+                logLines[logLines.length - 1] = `✦ Trade ${round}|⚪ ${fmtMoney(currentAmount, currency)} → tied`;
                 await syncLog();
                 round--; // don't consume a gale round
                 await new Promise(r => setTimeout(r, ROUND_COOLDOWN_MS));
@@ -1557,7 +1557,7 @@ async function runMartingale(ctx, ssid, pair, direction, amount, timeframeSec = 
             // Upgrade law: NO_FILL = buy/result unconfirmed — never double gale
             if (result.status === 'NO_FILL') {
                 buyFailRetries++;
-                logLines[logLines.length - 1] = ` Trade ${round}|⚠️ ${fmtMoney(currentAmount, currency)} → not filled (${result.error ?? 'unconfirmed'})`;
+                logLines[logLines.length - 1] = `✦ Trade ${round}|⚠️ ${fmtMoney(currentAmount, currency)} → not filled (${result.error ?? 'unconfirmed'})`;
                 await syncLog();
                 if (buyFailRetries >= 2) {
                     const abortReply = await ctx.reply(
@@ -1642,21 +1642,21 @@ async function runMartingale(ctx, ssid, pair, direction, amount, timeframeSec = 
                             // Re-process WIN/TIE immediately
                             if (result.status === 'WIN') {
                                 const lastIdx2 = logLines.length - 1;
-                                logLines[lastIdx2] = ` Trade ${round}|🟢 ${fmtMoney(currentAmount, currency)} → +${fmtMoney(netWinDisplay(result.pnl, currentAmount), currency)}`;
+                                logLines[lastIdx2] = `✦ Trade ${round}|🟢 ${fmtMoney(currentAmount, currency)} → +${fmtMoney(netWinDisplay(result.pnl, currentAmount), currency)}`;
                                 await syncLog();
                                 totalPnl += result.pnl;
                                 addUserSessionStats(ctx.from.id, 1, result.pnl);
                                 updateLeaderboardAuto(ctx.from.id, netWinDisplay(result.pnl, currentAmount));
                                 await sendRoundImage(round === 1 ? 'L11a.png' : 'L11b.png');
-                                const winReply = await ctx.reply(` +${fmtMoney(result.pnl, currency)} added to your balance.\n\n` +
+                                const winReply = await ctx.reply(`1. +${fmtMoney(result.pnl, currency)} added to your balance.\n\n` +
                                     (round > 1 ? `Recovery complete.\n\n` : '') +
-                                    ` You just made +${fmtMoney(result.pnl, currency)}`, { reply_markup: { inline_keyboard: [[{ text: '↻ New Opportunity', callback_data: 'ui:trade' }]] } });
+                                    `✦ You just made +${fmtMoney(result.pnl, currency)}`, { reply_markup: { inline_keyboard: [[{ text: '↻ New Opportunity', callback_data: 'ui:trade' }]] } });
                                 sentMessages.push(winReply.message_id);
                                 scheduleCleanup();
                                 return;
                             }
                             if (result.status === 'TIE') {
-                                logLines[logLines.length - 1] = ` Trade ${round}|⚪ ${fmtMoney(currentAmount, currency)} → tied`;
+                                logLines[logLines.length - 1] = `✦ Trade ${round}|⚪ ${fmtMoney(currentAmount, currency)} → tied`;
                                 await syncLog();
                                 round--;
                                 await new Promise(r => setTimeout(r, ROUND_COOLDOWN_MS));
@@ -1681,7 +1681,7 @@ async function runMartingale(ctx, ssid, pair, direction, amount, timeframeSec = 
                     /market is closed|Unknown pair|No .* instrument|can.*be bought|closed right now|WebSocket.*clos|ws.*clos|socket.*clos|is closing|profit rate change|not been purchased|4117|no trade placed|Buy timed out|Buy failed|IQ Option timed out|SDK .* timed out|timed out/i.test(errMsg);
                 if (isBuyFailure) {
                     buyFailRetries++;
-                    logLines[logLines.length - 1] = ` Trade ${round}|⚠️ ${fmtMoney(currentAmount, currency)} → ${errMsg}`;
+                    logLines[logLines.length - 1] = `✦ Trade ${round}|⚠️ ${fmtMoney(currentAmount, currency)} → ${errMsg}`;
                     await syncLog();
                     const isMarketClosed = /market is closed|closed right now|can.*be bought|No .* instrument|Unknown pair/i.test(errMsg);
                     const isTimeout = /timed out|timeout/i.test(errMsg);
@@ -1750,7 +1750,7 @@ async function runMartingale(ctx, ssid, pair, direction, amount, timeframeSec = 
                 // TIMEOUT must NOT auto-double (TradeCore should have converted already).
                 // If we still see TIMEOUT, treat as NO_FILL — never invent a LOSS.
                 if (result.status === 'TIMEOUT') {
-                    logLines[logLines.length - 1] = ` Trade ${round}|⚠️ ${fmtMoney(currentAmount, currency)} → result unconfirmed`;
+                    logLines[logLines.length - 1] = `✦ Trade ${round}|⚠️ ${fmtMoney(currentAmount, currency)} → result unconfirmed`;
                     await syncLog();
                     buyFailRetries++;
                     if (buyFailRetries >= 2) {
@@ -1765,7 +1765,7 @@ async function runMartingale(ctx, ssid, pair, direction, amount, timeframeSec = 
                     continue;
                 }
                 // Other ERROR that may have placed a trade — treat as loss for recovery
-                logLines[logLines.length - 1] = ` Trade ${round}|🔴 ${fmtMoney(currentAmount, currency)} → ${errMsg || result.status}`;
+                logLines[logLines.length - 1] = `✦ Trade ${round}|🔴 ${fmtMoney(currentAmount, currency)} → ${errMsg || result.status}`;
                 await syncLog();
                 totalPnl += -currentAmount; // only now — buy failures never reach here
                 addUserSessionStats(ctx.from.id, 1, -currentAmount);
@@ -1809,7 +1809,7 @@ async function runMartingale(ctx, ssid, pair, direction, amount, timeframeSec = 
         const pnlSign2 = totalPnl >= 0 ? '+' : '';
         if (galeSessionId) { try { updateGaleSession(galeSessionId, currentAmount, effectiveRounds + 1, totalPnl, sentMessages, 'completed'); } catch (e) { /* */ } }
         await sendRoundImage('L11c.png');
-        const lostReply = await ctx.reply(`Lost this one ·! Remain confident! New setup loading \n\nTotal: ${pnlSign2}${fmtMoney(absPnl, currency)}`, { reply_markup: { inline_keyboard: [[{ text: '↻ New Opportunity', callback_data: 'ui:trade' }]] } });
+        const lostReply = await ctx.reply(`Lost this one ·! Remain confident! New setup loading ✦\n\nTotal: ${pnlSign2}${fmtMoney(absPnl, currency)}`, { reply_markup: { inline_keyboard: [[{ text: '↻ New Opportunity', callback_data: 'ui:trade' }]] } });
         sentMessages.push(lostReply.message_id);
         scheduleCleanup();
         const mgPromoSettings = getUserMartingaleSettings(userId);
@@ -1817,7 +1817,7 @@ async function runMartingale(ctx, ssid, pair, direction, amount, timeframeSec = 
             const promoImg = await ctx.replyWithPhoto(ASSET('recovery-promo.png')).catch(() => undefined);
             if (promoImg)
                 sentMessages.push(promoImg.message_id);
-            const promoText = await ctx.reply(` 90% of trades recover and make more money using SMART RECOVERY \n\nENABLE SMART RECOVERY `, { reply_markup: { inline_keyboard: [[{ text: 'Enable Smart Recovery', callback_data: 'martingale:6' }]] } }).catch(() => undefined);
+            const promoText = await ctx.reply(`1. 90% of trades recover and make more money using SMART RECOVERY ✦\n\nENABLE SMART RECOVERY ✦`, { reply_markup: { inline_keyboard: [[{ text: 'Enable Smart Recovery', callback_data: 'martingale:6' }]] } }).catch(() => undefined);
             if (promoText)
                 sentMessages.push(promoText.message_id);
         }
@@ -1868,8 +1868,8 @@ async function showDemoUpsell(ctx, messageIds) {
 }
 async function sendFirstTradeCongrats(ctx) {
     const name = ctx.from?.first_name ?? 'there';
-    await ctx.reply(` Congratulations ${name}! You just won your first trade.\n\n` +
-        `This is just the beginning — you're now trading with the 10x Special Bot `);
+    await ctx.reply(`✦ Congratulations ${name}! You just won your first trade.\n\n` +
+        `This is just the beginning — you're now trading with the 10x Special Bot ✦`);
     await ctx.reply(`Use the commands below to make use of your 10x bot \n\n` +
         `/start — Main menu\n` +
         `/help — Help & FAQ\n` +
@@ -1879,13 +1879,13 @@ async function sendFirstTradeCongrats(ctx) {
     await sendStartMenu(ctx);
 }
 async function showDemoLimitReached(ctx) {
-    await ctx.reply(` Demo limit reached for today.\n\n` +
+    await ctx.reply(`✦ Demo limit reached for today.\n\n` +
         `You've used all 10 demo trades. To keep winning:\n\n` +
         `─  Fund your IQ Option account and go LIVE\n` +
         `─  Live trades = real profits you can withdraw\n\n` +
         `· Or wait until tomorrow for a fresh 10 demo trades.`, { reply_markup: {
             inline_keyboard: [
-                [{ text: ' Fund Account', url: 'https://iqoption.com/pwa/payments/deposit?payment_method_id=6786' }],
+                [{ text: '✦ Fund Account', url: 'https://iqoption.com/pwa/payments/deposit?payment_method_id=6786' }],
                 [{ text: '◆ Check Balance', callback_data: 'ui:balance' }],
             ],
         } });
@@ -1914,7 +1914,7 @@ bot.action('onboard:no', async (ctx) => {
     await sendStartMenu(ctx);
 });
 bot.action('onboard:autocreate', async (ctx) => {
-    await ctx.answerCbQuery('Contact admin to create an account ', { show_alert: true }).catch(() => { });
+    await ctx.answerCbQuery('Contact admin to create an account ✦', { show_alert: true }).catch(() => { });
 });
 // ─── Onboarding callbacks — all redirect to start menu ───────────────────────
 bot.action('onboard:new', async (ctx) => { await ctx.answerCbQuery().catch(() => { }); await sendStartMenu(ctx); });
@@ -1937,15 +1937,15 @@ bot.action(/^mode:(demo|live)$/, async (ctx) => {
         const cap = PRODUCT_LIMITS.ai_trading.dailyCap;
         if (used >= cap) {
             wizardSessions.delete(chatId);
-            await ctx.reply(` You've used all ${cap} demo trades for today.\n\nFund $${PRODUCT_LIMITS.ai_trading.unlockBalance}+ to unlock limitless live trading `, { reply_markup: { inline_keyboard: [
-                        [{ text: ' Fund Account', url: DEPOSIT_URL }],
+            await ctx.reply(`✦ You've used all ${cap} demo trades for today.\n\nFund $${PRODUCT_LIMITS.ai_trading.unlockBalance}+ to unlock limitless live trading `, { reply_markup: { inline_keyboard: [
+                        [{ text: '✦ Fund Account', url: DEPOSIT_URL }],
                         [{ text: '⟵ Back', callback_data: 'ui:start' }],
                     ] } });
             return;
         }
         state.mode = mode;
         state.step = 'currency';
-        await ctx.reply(` *Demo Mode* — ${cap} trades/day\n\nFund $${PRODUCT_LIMITS.ai_trading.unlockBalance}+ for limitless live trading.\n\nSelect your trading currency:`, { parse_mode: 'Markdown', reply_markup: currencyKeyboard() });
+        await ctx.reply(`✦ *Demo Mode* — ${cap} trades/day\n\nFund $${PRODUCT_LIMITS.ai_trading.unlockBalance}+ for limitless live trading.\n\nSelect your trading currency:`, { parse_mode: 'Markdown', reply_markup: currencyKeyboard() });
         return;
     }
     // Live — requires ai_trading access (funded $30+ or token). Unfunded users get
@@ -1961,13 +1961,13 @@ bot.action(/^mode:(demo|live)$/, async (ctx) => {
     if (!hasValidSsid) {
         const isExpired = !!user?.ssid;
         await ctx.reply(isExpired
-            ? ' Your IQ Option session expired. Reconnect to continue trading '
-            : '⚠️ You need to connect your IQ Option account first.\nTap Connect below to get started ', { reply_markup: { inline_keyboard: [[{ text: isExpired ? ' Reconnect' : ' Connect Account', callback_data: 'ui:connect' }]] } });
+            ? '✦ Your IQ Option session expired. Reconnect to continue trading '
+            : '⚠️ You need to connect your IQ Option account first.\nTap Connect below to get started ', { reply_markup: { inline_keyboard: [[{ text: isExpired ? '✦ Reconnect' : '✦ Connect Account', callback_data: 'ui:connect' }]] } });
         return;
     }
     state.mode = mode;
     state.step = 'currency';
-    await ctx.reply(' Select your trading currency:', { reply_markup: currencyKeyboard() });
+    await ctx.reply('✦ Select your trading currency:', { reply_markup: currencyKeyboard() });
 });
 // ─── Trade wizard — currency ───────────────────────────────────────────────────
 bot.action(/^cur:(.+)$/, async (ctx) => {
@@ -1993,7 +1993,7 @@ bot.action(/^cur:(.+)$/, async (ctx) => {
         state.lastImageMsgId = m?.message_id;
     }
     catch { }
-    await ctx.reply(' Enter amount:', { reply_markup: amountKeyboard(state.currency) });
+    await ctx.reply('✦ Enter amount:', { reply_markup: amountKeyboard(state.currency) });
 });
 // ─── Trade wizard — amount ────────────────────────────────────────────────────
 bot.action('wizard:cancel', async (ctx) => {
@@ -2007,7 +2007,7 @@ bot.action('wizard:cancel', async (ctx) => {
     }
     wizardSessions.delete(ctx.chat.id);
     try {
-        await ctx.editMessageText(' Trade cancelled.');
+        await ctx.editMessageText('❌ Trade cancelled.');
     }
     catch { }
 });
@@ -2027,7 +2027,7 @@ bot.action(/^amt:(.+)$/, async (ctx) => {
         const curUser = getUser(ctx.from.id);
         const cur = curUser?.currency || 'USD';
         try {
-            await ctx.editMessageText(` Enter your custom amount (e.g. 75 ${cur}):`);
+            await ctx.editMessageText(`✦ Enter your custom amount (e.g. 75 ${cur}):`);
         }
         catch { }
     }
@@ -2036,7 +2036,7 @@ bot.action(/^amt:(.+)$/, async (ctx) => {
         if (state.mode === 'demo') {
             const maxAmt = state.currency === 'NGN' ? 20000 : 20;
             if (amt > maxAmt) {
-                await ctx.reply(` Demo max is ${state.currency === 'NGN' ? '₦20,000' : '$20'} or equivalent.`);
+                await ctx.reply(`❌ Demo max is ${state.currency === 'NGN' ? '₦20,000' : '$20'} or equivalent.`);
                 return;
             }
         }
@@ -2084,15 +2084,15 @@ bot.action(/^tf:(\d+)$/, async (ctx) => {
     }
     catch { }
     const picks = getTopPicks();
-    const medals = ['', '', '', '', '4.'];
-    let picksMsg = 'Top picks ready \n\nHighest chance to win right now:\n\n';
+    const medals = ['1.', '2.', '3.', '4.', '4.'];
+    let picksMsg = 'Top picks ready ✦\n\nHighest chance to win right now:\n\n';
     if (picks.length > 0) {
         picks.forEach((p, i) => { picksMsg += `${medals[i] ?? `${i + 1}.`} ${p.pair} — Win rate ≈${clampDisplayConfidence(p.winRate)}%\n`; });
     }
     else {
-        picksMsg += ' EUR/USD OTC\n GBP/USD OTC\n EUR/JPY OTC\n';
+        picksMsg += '1. EUR/USD OTC\n2. GBP/USD OTC\n3. EUR/JPY OTC\n';
     }
-    picksMsg += '\n Make your choice below ';
+    picksMsg += '\n✦ Make your choice below ';
     try {
         await ctx.editMessageText(picksMsg, { reply_markup: pairKeyboard(0) });
     }
@@ -2116,9 +2116,9 @@ bot.action(/^page:(\d+)$/, async (ctx) => {
 //     no longer gated; kept as a safety net for any stale inline buttons) ──────
 async function sendLockedFeaturePrompt(ctx) {
     const fundUrl = process.env.FUNDING_URL ?? 'https://iqoption.com/pwa/payments/deposit';
-    await ctx.reply(` *Unlock more with funding*\n\nFund your account to unlock Private Trader ($${AI_TRADING_MIN_USD}+) and Autopilot ($${AUTO_TRADING_MIN_USD}+).`, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [
-                [{ text: ` Fund Account`, url: fundUrl }],
-                [{ text: ` Upgrade with Token`, callback_data: 'ui:upgrade' }],
+    await ctx.reply(`✦ *Unlock more with funding*\n\nFund your account to unlock Private Trader ($${AI_TRADING_MIN_USD}+) and Autopilot ($${AUTO_TRADING_MIN_USD}+).`, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [
+                [{ text: `✦ Fund Account`, url: fundUrl }],
+                [{ text: `✦ Upgrade with Token`, callback_data: 'ui:upgrade' }],
                 [{ text: '⟵ Back', callback_data: 'wizard:cancel' }],
             ] } });
 }
@@ -2148,7 +2148,7 @@ bot.action(/^pair:(.+)$/, async (ctx) => {
     wizardSessions.set(chatId, state);
     try {
         await ctx.editMessageText(`↻ *Smart Recovery*\n\nChoose recovery level for THIS trade:\n\n` +
-            ` No Recovery — Single trade, no retry\n` +
+            `✦ No Recovery — Single trade, no retry\n` +
             `↻ Medium — Up to 3 recovery rounds\n` +
             `↻↻ Full — Up to 6 recovery rounds\n\n` +
             `Your choice applies to this trade only.`, { parse_mode: 'Markdown', reply_markup: galeKeyboard() });
@@ -2172,7 +2172,7 @@ bot.action(/^gale:(\d+)$/, async (ctx) => {
     const { amount, timeframe, mode, currency, lastImageMsgId: prevImgId, gale } = state;
     wizardSessions.delete(chatId);
     if (!amount || !timeframe) {
-        await ctx.reply(' Session error — start over.');
+        await ctx.reply('❌ Session error — start over.');
         return;
     }
     const useCur = currency || 'USD';
@@ -2183,11 +2183,11 @@ bot.action(/^gale:(\d+)$/, async (ctx) => {
         const { used } = getProductUsage(ctx.from.id, 'ai_trading');
         const cap = PRODUCT_LIMITS.ai_trading.dailyCap;
         if (used >= cap) {
-            await ctx.answerCbQuery(` Demo limit reached (${cap} trades/day). Fund $${PRODUCT_LIMITS.ai_trading.unlockBalance}+ to go live or wait until tomorrow.`, { show_alert: true }).catch(() => { });
-            await ctx.reply(` You've used all ${cap} demo trades for today.\n\n` +
+            await ctx.answerCbQuery(`✦ Demo limit reached (${cap} trades/day). Fund $${PRODUCT_LIMITS.ai_trading.unlockBalance}+ to go live or wait until tomorrow.`, { show_alert: true }).catch(() => { });
+            await ctx.reply(`✦ You've used all ${cap} demo trades for today.\n\n` +
                 `Fund $${PRODUCT_LIMITS.ai_trading.unlockBalance}+ to unlock limitless live trading `, { reply_markup: {
                     inline_keyboard: [
-                        [{ text: ' Fund Account', url: DEPOSIT_URL }],
+                        [{ text: '✦ Fund Account', url: DEPOSIT_URL }],
                         [{ text: '◆ Check Balance', callback_data: 'ui:balance' }],
                     ],
                 } });
@@ -2198,7 +2198,7 @@ bot.action(/^gale:(\d+)$/, async (ctx) => {
     if (!ssid) {
         await ctx.reply(isAdmin
             ? '⚠️ No trading account connected. Use /connect first.'
-            : ' Not connected. Use /connect to link your IQ Option account.');
+            : '❌ Not connected. Use /connect to link your IQ Option account.');
         return;
     }
     // Clean up: delete the pair keyboard message and L6 image
@@ -2221,7 +2221,7 @@ bot.action(/^gale:(\d+)$/, async (ctx) => {
         l7MsgId = m.message_id;
     }
     catch { }
-    let progressMsg = await ctx.reply(`Selected: ${pair}\n\n Connecting to IQ Option...\n··· Usually instant if you traded recently`);
+    let progressMsg = await ctx.reply(`Selected: ${pair}\n\n✦ Connecting to IQ Option...\n··· Usually instant if you traded recently`);
     preTradeMessageIds.push(progressMsg.message_id);
     let sdk;
     {
@@ -2233,7 +2233,7 @@ bot.action(/^gale:(\d+)$/, async (ctx) => {
                 if (!ssidForConnect) {
                     await ctx.reply(isAdmin
                         ? '⚠️ No trading account connected. Use /connect first.'
-                        : ' Not connected. Use /connect to link your IQ Option account.');
+                        : '❌ Not connected. Use /connect to link your IQ Option account.');
                     return;
                 }
                 sdk = isAdmin ? await createSdk(ssidForConnect) : await sdkPool.get(ctx.from.id, ssidForConnect);
@@ -2259,7 +2259,7 @@ bot.action(/^gale:(\d+)$/, async (ctx) => {
                         return;
                     }
                     // Reconnected! Send new progress message and retry
-                    progressMsg = await ctx.reply(`Selected: ${pair}\n\n Reconnected! Retrying analysis...`).catch(() => null);
+                    progressMsg = await ctx.reply(`Selected: ${pair}\n\n✦ Reconnected! Retrying analysis...`).catch(() => null);
                     if (progressMsg)
                         preTradeMessageIds.push(progressMsg.message_id);
                     try {
@@ -2278,7 +2278,7 @@ bot.action(/^gale:(\d+)$/, async (ctx) => {
                         ? await adminAutoReconnect()
                         : (ctx.from?.id ? await autoReconnect(ctx.from.id) : false);
                     if (reconnected) {
-                        progressMsg = await ctx.reply(`Selected: ${pair}\n\n Reconnected! Retrying analysis...`).catch(() => null);
+                        progressMsg = await ctx.reply(`Selected: ${pair}\n\n✦ Reconnected! Retrying analysis...`).catch(() => null);
                         if (progressMsg)
                             preTradeMessageIds.push(progressMsg.message_id);
                         try {
@@ -2290,11 +2290,11 @@ bot.action(/^gale:(\d+)$/, async (ctx) => {
                     }
                 }
                 // All retries exhausted or no credentials — show reconnect prompt
-                await ctx.reply(' Could not connect to IQ Option.\n\n' +
+                await ctx.reply('✦ Could not connect to IQ Option.\n\n' +
                     'Your session may have expired. Reconnect in 3 steps:\n' +
-                    '1. Tap the  Reconnect button below\n' +
+                    '1. Tap the ✦ Reconnect button below\n' +
                     '2. Enter your IQ Option email and password\n' +
-                    '3. Get back to trading immediately', { reply_markup: { inline_keyboard: [[{ text: ' Reconnect', callback_data: 'ui:connect' }]] } }).catch(() => { });
+                    '3. Get back to trading immediately', { reply_markup: { inline_keyboard: [[{ text: '✦ Reconnect', callback_data: 'ui:connect' }]] } }).catch(() => { });
                 return;
             }
         }
@@ -2427,7 +2427,7 @@ bot.action(/^gale:(\d+)$/, async (ctx) => {
             preTradeMessageIds.push(l9.message_id);
         const opportunityMsg = await ctx.reply(`OPPORTUNITY FOUND\nConfidence: ${Math.round(displayConfidence)}% · Bot is ready to execute.\n\n${dirStr}\n\n` +
             `◆ Trading pair: ${pair}\n◆ Amount: ${fmtMoney(amount, useCur)} ${useCur}\n` +
-            `◆ Expiration: ${tfLabel(timeframe)}\n◆ Strategy: High-Profit `).catch(() => undefined);
+            `◆ Expiration: ${tfLabel(timeframe)}\n◆ Strategy: High-Profit ✦`).catch(() => undefined);
         if (opportunityMsg)
             preTradeMessageIds.push(opportunityMsg.message_id);
         const productCfg = getProductConfig(getUser(ctx.from.id)?.access_level);
@@ -2471,14 +2471,14 @@ bot.action('upsell:live', async (ctx) => {
     const chatId = ctx.chat.id;
     const state = { step: 'currency', mode: 'live' };
     wizardSessions.set(chatId, state);
-    await ctx.reply(' Select your currency for Live trade:', { reply_markup: currencyKeyboard() });
+    await ctx.reply('✦ Select your currency for Live trade:', { reply_markup: currencyKeyboard() });
 });
 bot.action('upsell:demo', async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
     const chatId = ctx.chat.id;
     const state = { step: 'currency', mode: 'demo' };
     wizardSessions.set(chatId, state);
-    await ctx.reply(' Select your currency for Demo trade:', { reply_markup: currencyKeyboard() });
+    await ctx.reply('✦ Select your currency for Demo trade:', { reply_markup: currencyKeyboard() });
 });
 // ─── User menu actions ────────────────────────────────────────────────────────
 bot.action('ui:start', async (ctx) => { await ctx.answerCbQuery().catch(() => { }); await sendStartMenu(ctx); });
@@ -2507,7 +2507,7 @@ bot.action('verify:resend', async (ctx) => {
             await ctx.reply(`${verifyMethodLabel(err.method)}\n\nEnter the new 6-digit code below:`, { reply_markup: { inline_keyboard: [[{ text: '↻ Resend code', callback_data: 'verify:resend' }]] } });
         }
         else {
-            await ctx.reply(` Couldn't resend the code: ${err instanceof Error ? err.message : 'error'}\n\nTap /connect to try again.`);
+            await ctx.reply(`❌ Couldn't resend the code: ${err instanceof Error ? err.message : 'error'}\n\nTap /connect to try again.`);
         }
     }
 });
@@ -2515,16 +2515,16 @@ bot.action('ui:connect', async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
     connectSessions.set(ctx.chat.id, { step: 'email' });
     setOnboardingState(ctx.from.id, 'awaiting_email');
-    await ctx.reply(' Enter your IQ Option email:');
+    await ctx.reply('✦ Enter your IQ Option email:');
 });
 bot.action('ui:trade_menu', async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
-    await ctx.reply('*Choose your trading mode:* ', {
+    await ctx.reply('*Choose your trading mode:* ✦', {
         parse_mode: 'Markdown',
         reply_markup: { inline_keyboard: [
-                [{ text: ' 10x Signals', callback_data: 'ui:signals' }],
+                [{ text: '✦ 10x Signals', callback_data: 'ui:signals' }],
                 [{ text: '⟡ Private Trader', callback_data: 'ui:trade' }],
-                [{ text: ' Autopilot', callback_data: 'ui:auto' }],
+                [{ text: '✦ Autopilot', callback_data: 'ui:auto' }],
                                 [{ text: '◆ Copy Trading', callback_data: 'ui:copy' }],
             ] }
     });
@@ -2542,9 +2542,9 @@ bot.action('ui:trade', async (ctx) => {
     if (!hasValidSsid) {
         const isExpired = !!user?.ssid;
         const msg = isExpired
-            ? ' Your IQ Option session expired. Reconnect to continue trading '
+            ? '✦ Your IQ Option session expired. Reconnect to continue trading '
             : '⚠️ You need to connect your IQ Option account first.\nTap Connect below to get started ';
-        const btnText = isExpired ? ' Reconnect' : ' Connect Account';
+        const btnText = isExpired ? '✦ Reconnect' : '✦ Connect Account';
         await ctx.reply(msg, { reply_markup: { inline_keyboard: [[{ text: btnText, callback_data: 'ui:connect' }]] } });
         return;
     }
@@ -2563,18 +2563,18 @@ bot.action('ui:trade', async (ctx) => {
 const DEPOSIT_URL = 'https://iqoption.com/pwa/payments/deposit';
 const fmtClock = (d) => d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'Africa/Lagos' });
 async function sendAiTradingLock(ctx) {
-    await ctx.reply(` *Private Trader* requires $${AI_TRADING_MIN_USD}+ funded.\n\n` +
+    await ctx.reply(`✦ *Private Trader* requires $${AI_TRADING_MIN_USD}+ funded.\n\n` +
         `Fund your account or use an upgrade token to unlock semi-auto trading.`, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [
-                [{ text: ' Fund Account', url: DEPOSIT_URL }],
-                [{ text: ' Use Upgrade Token', callback_data: 'ui:upgrade' }],
+                [{ text: '✦ Fund Account', url: DEPOSIT_URL }],
+                [{ text: '✦ Use Upgrade Token', callback_data: 'ui:upgrade' }],
                 [{ text: '⟵ Back', callback_data: 'ui:start' }],
             ] } });
 }
 async function sendAutoTradingLock(ctx) {
-    await ctx.reply(` *Autopilot* requires $${AUTO_TRADING_MIN_USD}+ funded.\n\n` +
+    await ctx.reply(`✦ *Autopilot* requires $${AUTO_TRADING_MIN_USD}+ funded.\n\n` +
         `Unlock full autonomous trading — the bot picks setups and trades for you.`, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [
-                [{ text: ' Fund Account', url: DEPOSIT_URL }],
-                [{ text: ' Use Upgrade Token', callback_data: 'ui:upgrade' }],
+                [{ text: '✦ Fund Account', url: DEPOSIT_URL }],
+                [{ text: '✦ Use Upgrade Token', callback_data: 'ui:upgrade' }],
                 [{ text: '⟵ Back', callback_data: 'ui:start' }],
             ] } });
 }
@@ -2587,7 +2587,7 @@ const YACHT_CLUB_LINK = 'https://t.me/+Y3LbEi18ECVmMWI0';
 function yachtInfo(closing, buttons) {
     return {
         text: `⟢ *10x Yacht Club* — Premium Trading Circle\n\n${YACHT_CLUB_DESC}\n\n`
-            + ` *Entry requirement:* $${YACHT_CLUB_MIN_USD} minimum funded IQ Option account.\n\n${closing}`,
+            + `✦ *Entry requirement:* $${YACHT_CLUB_MIN_USD} minimum funded IQ Option account.\n\n${closing}`,
         reply_markup: { inline_keyboard: buttons },
     };
 }
@@ -2598,7 +2598,7 @@ bot.action('ui:yacht', async (ctx) => {
     await ctx.reply(`⟢ *10x Yacht Club* — Premium Trading Circle\n\n`
         + `${YACHT_CLUB_DESC}\n\n`
         + `─  [Join the Yacht Club](${YACHT_CLUB_LINK})\n\n`
-        + `See you inside, ${name}. `, { parse_mode: 'Markdown' }).catch(() => { });
+        + `See you inside, ${name}. ✦`, { parse_mode: 'Markdown' }).catch(() => { });
 });
 const PRIVILEGED_USERS = new Set([6622587977, 8986669286, 6683209485]);
 function isPrivilegedUser(uid) {
@@ -2683,7 +2683,7 @@ bot.action('ui:signals', async (ctx) => {
         const cap = PRODUCT_LIMITS.signals.dailyCap;
         if (used >= cap) {
             await ctx.reply(`· You've used all ${cap} signals today.\n\nFund $${PRODUCT_LIMITS.signals.unlockBalance}+ for *limitless* signals.`, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [
-                        [{ text: ' Fund Account', url: DEPOSIT_URL }],
+                        [{ text: '✦ Fund Account', url: DEPOSIT_URL }],
                         [{ text: '⟵ Back', callback_data: 'ui:start' }],
                     ] } });
             return;
@@ -2694,7 +2694,7 @@ bot.action('ui:signals', async (ctx) => {
     const ssid = uid === getAdminId() ? getAdminSsid() : getSsidForUser(uid);
     if (!ssid) {
         await ctx.reply('⚠️ Connect your IQ Option account first.', {
-            reply_markup: { inline_keyboard: [[{ text: ' Connect Account', callback_data: 'ui:connect' }]] },
+            reply_markup: { inline_keyboard: [[{ text: '✦ Connect Account', callback_data: 'ui:connect' }]] },
         });
         return;
     }
@@ -2749,7 +2749,7 @@ bot.action(/^stf:(\d+)$/, async (ctx) => {
     let ssid = uid === getAdminId() ? getAdminSsid() : getSsidForUser(uid);
     if (!ssid) {
         // No SSID — prompt them to connect
-        await ctx.reply(' Not connected. Use /connect first.');
+        await ctx.reply('❌ Not connected. Use /connect first.');
         signalWizSessions.delete(chatId);
         return;
     }
@@ -2770,7 +2770,7 @@ bot.action(/^stf:(\d+)$/, async (ctx) => {
             // ─── 1. Analysis animation (2-3s — makes the bot feel alive) ───────
             const animMsg = await ctx.reply('· *Analyzing market data…*', { parse_mode: 'Markdown' });
             await new Promise(r => setTimeout(r, 1000));
-            await ctx.telegram.editMessageText(chatId, animMsg.message_id, undefined, ' *Scanning live prices for signals…*', { parse_mode: 'Markdown' }).catch(() => { });
+            await ctx.telegram.editMessageText(chatId, animMsg.message_id, undefined, '✦ *Scanning live prices for signals…*', { parse_mode: 'Markdown' }).catch(() => { });
             await new Promise(r => setTimeout(r, 1000));
             await ctx.telegram.editMessageText(chatId, animMsg.message_id, undefined, '◆ *Calculating optimal entry…*', { parse_mode: 'Markdown' }).catch(() => { });
             await new Promise(r => setTimeout(r, 1000));
@@ -2876,8 +2876,8 @@ bot.action(/^stf:(\d+)$/, async (ctx) => {
             const GRACE_SECS = 2; // 2s buffer so users can click into IQ Option
             // Currency → flag emoji
             const currencyFlags = {
-                EUR: '', USD: '', GBP: '', JPY: '', AUD: '',
-                NZD: '', CAD: '', CHF: '',
+                EUR: '🇪🇺', USD: '🇺🇸', GBP: '🇬🇧', JPY: '🇯🇵', AUD: '🇦🇺',
+                NZD: '🇳🇿', CAD: '🇨🇦', CHF: '🇨🇭',
             };
             const pairFlags = (p) => {
                 const m = p.match(/^(\w{3})(\w{3})/);
@@ -2893,9 +2893,9 @@ bot.action(/^stf:(\d+)$/, async (ctx) => {
             const renderCard = (status) => [
                 `· 10x Signal`,
                 ``,
-                ` Accuracy Level: ${accuracy}%`,
+                `✦ Accuracy Level: ${accuracy}%`,
                 ``,
-                ` Trade: ${pairDisplay}`,
+                `✦ Trade: ${pairDisplay}`,
                 `··· Expiry: ${tfLabel(timeframe)}`,
                 `→️ Entry: ${fmtClock(entryTime)}`,
                 `◆ Direction: ${dirStr} ${dirEmoji}`,
@@ -2964,7 +2964,7 @@ bot.action('signals:cancel', async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
     signalWizSessions.delete(ctx.chat.id);
     try {
-        await ctx.editMessageText(' Signal cancelled.');
+        await ctx.editMessageText('❌ Signal cancelled.');
     }
     catch { }
 });
@@ -2977,7 +2977,7 @@ function autoCurrencyKeyboard() {
     return { inline_keyboard: [
             [{ text: '₦ NGN', callback_data: 'acur:NGN' }, { text: '$ USD', callback_data: 'acur:USD' }],
             [{ text: '€ EUR', callback_data: 'acur:EUR' }, { text: '£ GBP', callback_data: 'acur:GBP' }],
-            [{ text: ' Cancel', callback_data: 'acancel' }],
+            [{ text: '❌ Cancel', callback_data: 'acancel' }],
         ] };
 }
 function autoAmountKeyboard(currency) {
@@ -2986,8 +2986,8 @@ function autoAmountKeyboard(currency) {
     const vals = AUTO_AMOUNTS[currency] ?? AUTO_AMOUNTS.DEFAULT;
     return { inline_keyboard: [
             vals.map(v => ({ text: `${sym}${v.toLocaleString()}`, callback_data: `aamt:${v}` })),
-            [{ text: ' Custom', callback_data: 'aamt:custom' }],
-            [{ text: ' Cancel', callback_data: 'acancel' }],
+            [{ text: '✦ Custom', callback_data: 'aamt:custom' }],
+            [{ text: '❌ Cancel', callback_data: 'acancel' }],
         ] };
 }
 function autoAssetKeyboard(selected) {
@@ -3000,13 +3000,13 @@ function autoAssetKeyboard(selected) {
         rows.push(row);
     }
     rows.push([{ text: `Done (${selected.length}/3) →️`, callback_data: 'aassetdone' }]);
-    rows.push([{ text: ' Cancel', callback_data: 'acancel' }]);
+    rows.push([{ text: '❌ Cancel', callback_data: 'acancel' }]);
     return { inline_keyboard: rows };
 }
 function autoTimeframeKeyboard() {
     return { inline_keyboard: [
             [{ text: '30s', callback_data: 'atf:30' }, { text: '1m', callback_data: 'atf:60' }, { text: '2m', callback_data: 'atf:120' }, { text: '5m', callback_data: 'atf:300' }],
-            [{ text: ' Cancel', callback_data: 'acancel' }],
+            [{ text: '❌ Cancel', callback_data: 'acancel' }],
         ] };
 }
 function autoGaleKeyboard() {
@@ -3014,7 +3014,7 @@ function autoGaleKeyboard() {
             [{ text: '1. Single Trade — No Recovery', callback_data: 'agale:0' }],
             [{ text: '3. Medium — 3 Recovery Rounds', callback_data: 'agale:3' }],
             [{ text: '6. Full — 6 Recovery Rounds', callback_data: 'agale:6' }],
-            [{ text: ' Cancel', callback_data: 'acancel' }],
+            [{ text: '❌ Cancel', callback_data: 'acancel' }],
         ] };
 }
 async function sendAutoMenu(ctx) {
@@ -3028,7 +3028,7 @@ async function sendAutoMenu(ctx) {
         const assets = JSON.parse(session.assets).join(' · ');
         const sign = session.pnl >= 0 ? '+' : '';
         const body = [
-            ` *Autopilot*`,
+            `✦ *Autopilot*`,
             ``,
             `Status: ${statusLabel}`,
             `Stake: ${session.amount.toLocaleString()} ${session.currency}/trade`,
@@ -3037,13 +3037,13 @@ async function sendAutoMenu(ctx) {
             `Trades: ${session.trades_done} · P&L: ${sign}${session.pnl.toFixed(2)} ${session.currency}`,
         ].join('\n');
         if (running) {
-            rows.push([{ text: '️ Pause', callback_data: 'auto:pause' }, { text: '■️ Stop', callback_data: 'auto:stop' }]);
+            rows.push([{ text: '❚❚️ Pause', callback_data: 'auto:pause' }, { text: '■️ Stop', callback_data: 'auto:stop' }]);
         }
         else {
             rows.push([{ text: '►️ Resume', callback_data: 'auto:resume' }, { text: '■️ Stop', callback_data: 'auto:stop' }]);
         }
         rows.push([{ text: '◆ Performance', callback_data: 'auto:perf' }]);
-        rows.push([{ text: ' Reconfigure (God Mode)', callback_data: 'auto:god' }]);
+        rows.push([{ text: '✦ Reconfigure (God Mode)', callback_data: 'auto:god' }]);
         rows.push([{ text: '⟵ Back', callback_data: 'ui:start' }]);
         await ctx.reply(body, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: rows } }).catch(() => { });
     }
@@ -3052,7 +3052,7 @@ async function sendAutoMenu(ctx) {
         const user = getUser(ctx.from.id);
         const funded = user?.funded_balance_usd ?? 0;
         // Unlocked if funded above the threshold OR holding auto_trading access via
-        // token — otherwise token users wrongly saw " Requires $100+" (Issue 5).
+        // token — otherwise token users wrongly saw "✦ Requires $100+" (Issue 5).
         const isFundedLive = funded >= PRODUCT_LIMITS.auto_trading.unlockBalance
             || hasAccess(user?.access_level, 'auto_trading')
             || ctx.from.id === getAdminId();
@@ -3062,33 +3062,33 @@ async function sendAutoMenu(ctx) {
         if (isFundedLive) {
             // Funded user — clean menu, no demo countdowns or unlock messages
             const body = [
-                ` *Autopilot*`,
+                `✦ *Autopilot*`,
                 ``,
                 `Let the bot trade for you — fully automated.`,
                 `Pick your assets, set your rules, walk away.`,
             ].join('\n');
-            rows.push([{ text: ' Live Trading', callback_data: 'auto:start:live' }]);
-            rows.push([{ text: ' Demo Mode', callback_data: 'auto:start:demo' }]);
-            rows.push([{ text: ' Auto God Mode', callback_data: 'auto:god' }]);
+            rows.push([{ text: '✦ Live Trading', callback_data: 'auto:start:live' }]);
+            rows.push([{ text: '✦ Demo Mode', callback_data: 'auto:start:demo' }]);
+            rows.push([{ text: '✦ Auto God Mode', callback_data: 'auto:god' }]);
             rows.push([{ text: '⟵ Back', callback_data: 'ui:start' }]);
             await ctx.reply(body, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: rows } }).catch(() => { });
         }
         else {
             // Unfunded user — show demo countdown and unlock requirements
             const body = [
-                ` *Autopilot*`,
+                `✦ *Autopilot*`,
                 ``,
                 `Let the bot trade for you — fully automated.`,
                 `Pick your assets, set your rules, walk away.`,
                 ``,
-                ` *Demo Mode* — ${demoRemaining} min remaining today`,
+                `✦ *Demo Mode* — ${demoRemaining} min remaining today`,
                 `Test with premium analysis (200 candles, 6 indicators).`,
                 ``,
-                ` *Live Mode* —  Requires $${PRODUCT_LIMITS.auto_trading.unlockBalance}+ funded`,
+                `✦ *Live Mode* — ✦ Requires $${PRODUCT_LIMITS.auto_trading.unlockBalance}+ funded`,
             ].join('\n');
-            rows.push([{ text: ` Demo (${demoRemaining}min left)`, callback_data: 'auto:start:demo' }]);
-            rows.push([{ text: ` Live (Fund $${PRODUCT_LIMITS.auto_trading.unlockBalance}+)`, url: DEPOSIT_URL }]);
-            rows.push([{ text: ' Auto God Mode', callback_data: 'auto:god' }]);
+            rows.push([{ text: `✦ Demo (${demoRemaining}min left)`, callback_data: 'auto:start:demo' }]);
+            rows.push([{ text: `✦ Live (Fund $${PRODUCT_LIMITS.auto_trading.unlockBalance}+)`, url: DEPOSIT_URL }]);
+            rows.push([{ text: '✦ Auto God Mode', callback_data: 'auto:god' }]);
             rows.push([{ text: '⟵ Back', callback_data: 'ui:start' }]);
             await ctx.reply(body, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: rows } }).catch(() => { });
         }
@@ -3114,42 +3114,42 @@ bot.action('ui:auto', async (ctx) => {
 bot.action('auto:start:demo', async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
     if (!canAutoDemo(ctx)) {
-        await ctx.reply(`· You've used all ${PRODUCT_LIMITS.auto_trading.dailyCap} minutes of demo Autopilot today.\n\nFund $${PRODUCT_LIMITS.auto_trading.unlockBalance}+ for limitless live trading.`, { reply_markup: { inline_keyboard: [[{ text: ' Fund Account', url: DEPOSIT_URL }], [{ text: '⟵ Back', callback_data: 'ui:auto' }]] } });
+        await ctx.reply(`· You've used all ${PRODUCT_LIMITS.auto_trading.dailyCap} minutes of demo Autopilot today.\n\nFund $${PRODUCT_LIMITS.auto_trading.unlockBalance}+ for limitless live trading.`, { reply_markup: { inline_keyboard: [[{ text: '✦ Fund Account', url: DEPOSIT_URL }], [{ text: '⟵ Back', callback_data: 'ui:auto' }]] } });
         return;
     }
     if (!getSsidForUser(ctx.from.id)) {
         await ctx.reply('⚠️ Connect your IQ Option account first.', {
-            reply_markup: { inline_keyboard: [[{ text: ' Connect Account', callback_data: 'ui:connect' }]] },
+            reply_markup: { inline_keyboard: [[{ text: '✦ Connect Account', callback_data: 'ui:connect' }]] },
         });
         return;
     }
     // Demo notice
-    await ctx.reply(` *Demo Mode*\n\nYou can test Autopilot for up to ${PRODUCT_LIMITS.auto_trading.dailyCap} min/day with premium analysis.\nFund $${PRODUCT_LIMITS.auto_trading.unlockBalance}+ for limitless live trading. `, { parse_mode: 'Markdown' });
+    await ctx.reply(`✦ *Demo Mode*\n\nYou can test Autopilot for up to ${PRODUCT_LIMITS.auto_trading.dailyCap} min/day with premium analysis.\nFund $${PRODUCT_LIMITS.auto_trading.unlockBalance}+ for limitless live trading. ✦`, { parse_mode: 'Markdown' });
     autoWizSessions.set(ctx.chat.id, { step: 'currency', assets: [], mode: 'demo' });
-    await ctx.reply(' Select your trading currency:', { reply_markup: autoCurrencyKeyboard() });
+    await ctx.reply('✦ Select your trading currency:', { reply_markup: autoCurrencyKeyboard() });
 });
 bot.action('auto:start:live', async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
     // Live-balance gate (refreshes from the SDK if the cached access looks locked),
     // so a user who funded after connecting isn't blocked by a stale DB value.
     if (!await hasAccessLive(ctx.from.id, 'auto_trading')) {
-        await ctx.reply(`⚠️ Live trading requires $${PRODUCT_LIMITS.auto_trading.unlockBalance}+ funded.\n\nUse Demo mode or fund your account.`, { reply_markup: { inline_keyboard: [[{ text: ' Fund Account', url: DEPOSIT_URL }], [{ text: ' Demo Mode', callback_data: 'auto:start:demo' }]] } });
+        await ctx.reply(`⚠️ Live trading requires $${PRODUCT_LIMITS.auto_trading.unlockBalance}+ funded.\n\nUse Demo mode or fund your account.`, { reply_markup: { inline_keyboard: [[{ text: '✦ Fund Account', url: DEPOSIT_URL }], [{ text: '✦ Demo Mode', callback_data: 'auto:start:demo' }]] } });
         return;
     }
     if (!getSsidForUser(ctx.from.id)) {
         await ctx.reply('⚠️ Connect your IQ Option account first.', {
-            reply_markup: { inline_keyboard: [[{ text: ' Connect Account', callback_data: 'ui:connect' }]] },
+            reply_markup: { inline_keyboard: [[{ text: '✦ Connect Account', callback_data: 'ui:connect' }]] },
         });
         return;
     }
     autoWizSessions.set(ctx.chat.id, { step: 'currency', assets: [], mode: 'live' });
-    await ctx.reply(' Select your trading currency:', { reply_markup: autoCurrencyKeyboard() });
+    await ctx.reply('✦ Select your trading currency:', { reply_markup: autoCurrencyKeyboard() });
 });
 bot.action('acancel', async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
     autoWizSessions.delete(ctx.chat.id);
     try {
-        await ctx.editMessageText(' Autopilot setup cancelled.');
+        await ctx.editMessageText('❌ Autopilot setup cancelled.');
     }
     catch { }
 });
@@ -3163,7 +3163,7 @@ bot.action(/^acur:(.+)$/, async (ctx) => {
     st.currency = ctx.match[1];
     st.step = 'amount';
     autoWizSessions.set(ctx.chat.id, st);
-    await ctx.editMessageText(` Amount per trade (${st.currency}):`, { reply_markup: autoAmountKeyboard(st.currency) });
+    await ctx.editMessageText(`✦ Amount per trade (${st.currency}):`, { reply_markup: autoAmountKeyboard(st.currency) });
 });
 bot.action(/^aamt:(\d+)$/, async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
@@ -3187,19 +3187,19 @@ bot.action('aamt:custom', async (ctx) => {
     const cur = st.currency ?? 'USD';
     const syms = { NGN: '₦', EUR: '€', GBP: '£', USD: '$' };
     const sym = syms[cur] ?? '$';
-    await ctx.editMessageText(` Enter your custom amount in ${cur} (e.g. ${sym}75):`, { reply_markup: { inline_keyboard: [[{ text: ' Cancel', callback_data: 'acancel' }]] } });
+    await ctx.editMessageText(`✦ Enter your custom amount in ${cur} (e.g. ${sym}75):`, { reply_markup: { inline_keyboard: [[{ text: '❌ Cancel', callback_data: 'acancel' }]] } });
 });
 function advanceToAssets(ctx, st) {
     st.step = 'assets';
     st.assets = [];
     autoWizSessions.set(ctx.chat.id, st);
-    ctx.editMessageText(' Pick *3 assets* for the bot to trade:', { parse_mode: 'Markdown', reply_markup: autoAssetKeyboard(st.assets) }).catch(() => { });
+    ctx.editMessageText('✦ Pick *3 assets* for the bot to trade:', { parse_mode: 'Markdown', reply_markup: autoAssetKeyboard(st.assets) }).catch(() => { });
 }
 async function advanceToAssetsMessage(ctx, st) {
     st.step = 'assets';
     st.assets = [];
     autoWizSessions.set(ctx.chat.id, st);
-    await ctx.reply(' Pick *3 assets* for the bot to trade:', { parse_mode: 'Markdown', reply_markup: autoAssetKeyboard(st.assets) });
+    await ctx.reply('✦ Pick *3 assets* for the bot to trade:', { parse_mode: 'Markdown', reply_markup: autoAssetKeyboard(st.assets) });
 }
 bot.action(/^aasset:(.+)$/, async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
@@ -3262,12 +3262,12 @@ bot.action(/^agale:(\d+)$/, async (ctx) => {
     autoWizSessions.set(ctx.chat.id, st);
     await ctx.editMessageText(buildAutoConfirmText(st), { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [
                 [{ text: '►️ Start Trading', callback_data: 'aconfirm' }],
-                [{ text: ' Cancel', callback_data: 'acancel' }],
+                [{ text: '❌ Cancel', callback_data: 'acancel' }],
             ] } });
 });
 function buildAutoConfirmText(st) {
     return [
-        ` *Autopilot Configuration*`, ``,
+        `✦ *Autopilot Configuration*`, ``,
         `Currency: ${st.currency}`,
         `Amount: ${st.amount} ${st.currency} per trade`,
         `Assets: ${st.assets.join(', ')}`,
@@ -3293,7 +3293,7 @@ bot.action('aconfirm', async (ctx) => {
     autoWizSessions.delete(ctx.chat.id);
     autoEngine.start(uid, st.mode);
     try {
-        await ctx.editMessageText(' Autopilot started! You\'ll get a live status card as trades run.');
+        await ctx.editMessageText('✦ Autopilot started! You\'ll get a live status card as trades run.');
     }
     catch { }
 });
@@ -3309,17 +3309,17 @@ bot.action('auto:god', async (ctx) => {
     const ssid = isAdmin ? getAdminSsid() : getSsidForUser(uid);
     if (!ssid) {
         await ctx.reply('⚠️ Connect your IQ Option account first.', {
-            reply_markup: { inline_keyboard: [[{ text: ' Connect Account', callback_data: 'ui:connect' }]] },
+            reply_markup: { inline_keyboard: [[{ text: '✦ Connect Account', callback_data: 'ui:connect' }]] },
         });
         return;
     }
-    const progress = await ctx.reply(' Analyzing your account…');
+    const progress = await ctx.reply('✦ Analyzing your account…');
     try {
         const sdk = isAdmin ? await createSdk(ssid) : await sdkPool.get(uid, ssid);
         const all = (await withTimeout(sdk.balances(), 15_000, 'balance')).getBalances();
         const real = all.find(b => b.type === BalanceType.Real) ?? all.find(b => b.type === undefined);
         if (!real) {
-            await ctx.telegram.editMessageText(ctx.chat.id, progress.message_id, undefined, ' No live balance found. Fund your account to use God Mode.').catch(() => { });
+            await ctx.telegram.editMessageText(ctx.chat.id, progress.message_id, undefined, '✦ No live balance found. Fund your account to use God Mode.').catch(() => { });
             return;
         }
         const currency = real.currency ?? 'USD';
@@ -3334,17 +3334,17 @@ bot.action('auto:god', async (ctx) => {
         const assets = godModePickWorstAssets(3);
         autoWizSessions.set(ctx.chat.id, { step: 'confirm', currency, amount: stakeNative, assets, timeframe, gale, mode: 'live' });
         const plan = [
-            ` *Auto God Mode — Your Trading Plan*`, ``,
-            ` Account: ${real.amount.toLocaleString()} ${currency}`,
+            `✦ *Auto God Mode — Your Trading Plan*`, ``,
+            `✦ Account: ${real.amount.toLocaleString()} ${currency}`,
             `◆ Recommended amount: ${stakeNative.toLocaleString()} ${currency}/trade (${(pct * 100).toFixed(1)}%)`,
-            ` Recommended assets: ${assets.join(', ')}`,
+            `✦ Recommended assets: ${assets.join(', ')}`,
             `··· Recommended timeframe: ${tfLabel(timeframe)}`,
             `↻ Smart Recovery: ${gale ? `${gale} rounds` : 'None'}`,
         ].join('\n');
         await ctx.telegram.deleteMessage(ctx.chat.id, progress.message_id).catch(() => { });
         await ctx.reply(plan, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [
                     [{ text: '✅ Approve & Start', callback_data: 'aconfirm' }],
-                    [{ text: ' Customize', callback_data: 'auto:start:live' }],
+                    [{ text: '✦ Customize', callback_data: 'auto:start:live' }],
                 ] } });
     }
     catch (err) {
@@ -3352,7 +3352,7 @@ bot.action('auto:god', async (ctx) => {
             await ctx.telegram.deleteMessage(ctx.chat.id, progress.message_id).catch(() => { });
         }
         else {
-            await ctx.telegram.editMessageText(ctx.chat.id, progress.message_id, undefined, friendlyError(err, ' Could not analyze your account. Try again.')).catch(() => { });
+            await ctx.telegram.editMessageText(ctx.chat.id, progress.message_id, undefined, friendlyError(err, '✦ Could not analyze your account. Try again.')).catch(() => { });
         }
     }
     finally {
@@ -3400,11 +3400,11 @@ bot.action('auto:perf', async (ctx) => {
 // ─── Swarm ──────────────────────────────────────────────────────────────────
 bot.action('ui:swarm', async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
-    await ctx.reply(' Swarm has been removed from the bot.', { reply_markup: backKeyboard() }).catch(() => { });
+    await ctx.reply('✦ Swarm has been removed from the bot.', { reply_markup: backKeyboard() }).catch(() => { });
 });
 bot.action('ui:marathon', async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
-    await ctx.reply(' Marathon has been removed from the bot.', { reply_markup: backKeyboard() }).catch(() => { });
+    await ctx.reply('✦ Marathon has been removed from the bot.', { reply_markup: backKeyboard() }).catch(() => { });
 });
 bot.action(/^swarm:cur:(.+)$/, async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
@@ -3424,11 +3424,11 @@ bot.action(/^swarm:cur:(.+)$/, async (ctx) => {
     const v25 = isNGN ? 10000 : 25;
     const v50 = isNGN ? 25000 : 50;
     const v100 = isNGN ? 50000 : 100;
-    await ctx.reply(` Currency: ${currency}\n\nSelect your starting capital:`, { reply_markup: { inline_keyboard: [
+    await ctx.reply(`✦ Currency: ${currency}\n\nSelect your starting capital:`, { reply_markup: { inline_keyboard: [
                 [{ text: amt10, callback_data: `swarm:amt:${v10}` }, { text: amt25, callback_data: `swarm:amt:${v25}` }],
                 [{ text: amt50, callback_data: `swarm:amt:${v50}` }, { text: amt100, callback_data: `swarm:amt:${v100}` }],
-                [{ text: ' Custom amount', callback_data: 'swarm:custom' }],
-                [{ text: ' Cancel', callback_data: 'wizard:cancel' }],
+                [{ text: '✦ Custom amount', callback_data: 'swarm:custom' }],
+                [{ text: '❌ Cancel', callback_data: 'wizard:cancel' }],
             ] } });
 });
 bot.action('swarm:custom', async (ctx) => {
@@ -3444,7 +3444,7 @@ bot.action('swarm:custom', async (ctx) => {
         return;
     }
     setup.step = 'custom_amount';
-    await ctx.reply(' Type your starting capital amount (numbers only):');
+    await ctx.reply('✦ Type your starting capital amount (numbers only):');
 });
 bot.action(/^swarm:amt:(.+)$/, async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
@@ -3464,13 +3464,13 @@ bot.action(/^swarm:amt:(.+)$/, async (ctx) => {
     const curSymbol = isNGN ? '₦' : '$';
     const fmtAmt = isNGN ? amount.toLocaleString() : amount.toString();
     swarmSetup.set(uid, { amount, step: 'gale', currency });
-    await ctx.reply(` Capital: ${curSymbol}${fmtAmt}\n\nSelect smart recovery level:`, { reply_markup: { inline_keyboard: [
+    await ctx.reply(`✦ Capital: ${curSymbol}${fmtAmt}\n\nSelect smart recovery level:`, { reply_markup: { inline_keyboard: [
                 [
                     { text: '0 (No recovery)', callback_data: 'swarm:gale:0' },
                     { text: '3 rounds', callback_data: 'swarm:gale:3' },
                     { text: '6 rounds', callback_data: 'swarm:gale:6' },
                 ],
-                [{ text: ' Cancel', callback_data: 'wizard:cancel' }],
+                [{ text: '❌ Cancel', callback_data: 'wizard:cancel' }],
             ] } });
 });
 bot.action(/^swarm:gale:(\d+)$/, async (ctx) => {
@@ -3497,7 +3497,7 @@ bot.action(/^swarm:gale:(\d+)$/, async (ctx) => {
                     { text: '45 min', callback_data: 'swarm:dur:45' },
                     { text: '60 min', callback_data: 'swarm:dur:60' },
                 ],
-                [{ text: ' Cancel', callback_data: 'wizard:cancel' }],
+                [{ text: '❌ Cancel', callback_data: 'wizard:cancel' }],
             ] } });
 });
 bot.action(/^swarm:dur:(\d+)$/, async (ctx) => {
@@ -3516,13 +3516,13 @@ bot.action(/^swarm:dur:(\d+)$/, async (ctx) => {
     const user = getUser(uid);
     const ssid = uid === getAdminId() ? getAdminSsid() : user?.ssid;
     if (!ssid) {
-        await ctx.reply(' No SSID. Connect your account first.');
+        await ctx.reply('❌ No SSID. Connect your account first.');
         return;
     }
     const result = await startSwarm(uid, setup.amount, setup.gale ?? 0, duration, setup.currency ?? 'USD');
     swarmSetup.delete(uid);
     if (!result.ok) {
-        await ctx.reply(` ${result.error}`);
+        await ctx.reply(`❌ ${result.error}`);
     }
 });
 const swarmSetup = new Map();
@@ -3546,18 +3546,18 @@ bot.action('ui:copy', async (ctx) => {
     if (!isPriv) {
         const fundedUsd = user?.funded_balance_usd ?? 0;
         if (fundedUsd < 1000) {
-            await ctx.reply(`◆ *Copy Trading*\n\nCopy Trading mirrors admin's trades directly to your account — automatically.\n\nWhen admin trades, you trade. Same pairs. Same direction. Same timing. Your capital, your profits.\n\n *Requires minimum balance: $1,000*\n\nYour balance: $${fundedUsd}\n\nFund your IQ Option account to unlock Copy Trading.`, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [
-                        [{ text: ' Fund Account', url: DEPOSIT_URL }],
-                        [{ text: ' Contact Admin', url: process.env.ADMIN_CONTACT_LINK ?? 'https://t.me/shiloh_is_10xing' }],
+            await ctx.reply(`◆ *Copy Trading*\n\nCopy Trading mirrors admin's trades directly to your account — automatically.\n\nWhen admin trades, you trade. Same pairs. Same direction. Same timing. Your capital, your profits.\n\n✦ *Requires minimum balance: $1,000*\n\nYour balance: $${fundedUsd}\n\nFund your IQ Option account to unlock Copy Trading.`, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [
+                        [{ text: '✦ Fund Account', url: DEPOSIT_URL }],
+                        [{ text: '✦ Contact Admin', url: process.env.ADMIN_CONTACT_LINK ?? 'https://t.me/shiloh_is_10xing' }],
                         [{ text: '⟵ Back', callback_data: 'ui:start' }],
                     ] } });
             return;
         }
     }
-    await ctx.reply(`◆ *Copy Trading*\n\nMirror admin's trades directly to your account — automatically.\n\nWhen admin opens a trade, your account opens the same trade. Same pair. Same direction. Same timing. Your capital stays yours, your profits stay yours.\n\nAdmin controls everything from the backend: which pairs, which timeframe, when to start and stop. You just set your amount and let it run.\n\n *Minimum copy amount: $50*\n\nSelect your trading currency:`, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [
+    await ctx.reply(`◆ *Copy Trading*\n\nMirror admin's trades directly to your account — automatically.\n\nWhen admin opens a trade, your account opens the same trade. Same pair. Same direction. Same timing. Your capital stays yours, your profits stay yours.\n\nAdmin controls everything from the backend: which pairs, which timeframe, when to start and stop. You just set your amount and let it run.\n\n✦ *Minimum copy amount: $50*\n\nSelect your trading currency:`, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [
                 [{ text: '₦ NGN', callback_data: 'copy:cur:NGN' }, { text: '$ USD', callback_data: 'copy:cur:USD' }],
                 [{ text: '€ EUR', callback_data: 'copy:cur:EUR' }, { text: '£ GBP', callback_data: 'copy:cur:GBP' }],
-                [{ text: ' Cancel', callback_data: 'wizard:cancel' }],
+                [{ text: '❌ Cancel', callback_data: 'wizard:cancel' }],
             ] } });
 });
 bot.action(/^copy:cur:(.+)$/, async (ctx) => {
@@ -3568,7 +3568,7 @@ bot.action(/^copy:cur:(.+)$/, async (ctx) => {
     catch { }
     const currency = ctx.match[1];
     const isNGN = currency === 'NGN';
-    await ctx.reply(` Currency: ${currency}\n\nSelect the amount you want to copy with:`, { reply_markup: { inline_keyboard: [
+    await ctx.reply(`✦ Currency: ${currency}\n\nSelect the amount you want to copy with:`, { reply_markup: { inline_keyboard: [
                 [
                     { text: isNGN ? '₦25,000' : '$50', callback_data: 'copy:amt:50' },
                     { text: isNGN ? '₦50,000' : '$100', callback_data: 'copy:amt:100' },
@@ -3578,7 +3578,7 @@ bot.action(/^copy:cur:(.+)$/, async (ctx) => {
                     { text: isNGN ? '₦250,000' : '$500', callback_data: 'copy:amt:500' },
                     { text: isNGN ? '₦500,000' : '$1000', callback_data: 'copy:amt:1000' },
                 ],
-                [{ text: ' Cancel', callback_data: 'wizard:cancel' }],
+                [{ text: '❌ Cancel', callback_data: 'wizard:cancel' }],
             ] } });
 });
 bot.action(/^copy:amt:(.+)$/, async (ctx) => {
@@ -3595,10 +3595,10 @@ bot.action(/^copy:amt:(.+)$/, async (ctx) => {
     const uid = ctx.from.id;
     const result = await startCopying(uid, amount);
     if (!result.ok) {
-        await ctx.reply(` ${result.error}`);
+        await ctx.reply(`❌ ${result.error}`);
     }
     else {
-        await ctx.reply(`◆ *Copy Trading Active!*\n\n Copy amount: $${amount}\n\nYou are now copying admin. When admin starts trading, you'll receive trade notifications automatically.\n\nYou can stop copying anytime.`, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [
+        await ctx.reply(`◆ *Copy Trading Active!*\n\n✦ Copy amount: $${amount}\n\nYou are now copying admin. When admin starts trading, you'll receive trade notifications automatically.\n\nYou can stop copying anytime.`, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [
                     [{ text: '■ Stop Copying', callback_data: 'copy:stop' }],
                     [{ text: '⟵️ Back', callback_data: 'ui:trade_menu' }],
                 ] } });
@@ -3629,16 +3629,16 @@ bot.action('ui:upgrade', async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
     connectSessions.delete(ctx.chat.id);
     const fundUrl = process.env.FUNDING_URL ?? 'https://iqoption.com/pwa/payments/deposit';
-    await ctx.reply(` *Product Access*\n\n` +
+    await ctx.reply(`✦ *Product Access*\n\n` +
         `· *Signals* — open to all. Manual signal alerts.\n` +
         `⟡ *Private Trader* — Semi-auto trading. Fund *$10+* into IQ Option.\n` +
-        ` *Autopilot* — Full auto trading. Fund *$50+* into IQ Option.\n\n` +
+        `✦ *Autopilot* — Full auto trading. Fund *$50+* into IQ Option.\n\n` +
         `Your access upgrades automatically once your balance hits the threshold.`, {
         parse_mode: 'Markdown',
         reply_markup: {
             inline_keyboard: [
-                [{ text: ' Fund Account', url: fundUrl }],
-                [{ text: ' Enter Token', callback_data: 'ui:upgrade_token' }],
+                [{ text: '✦ Fund Account', url: fundUrl }],
+                [{ text: '✦ Enter Token', callback_data: 'ui:upgrade_token' }],
                 [{ text: '⟵ Back', callback_data: 'ui:start' }],
             ],
         },
@@ -3647,8 +3647,8 @@ bot.action('ui:upgrade', async (ctx) => {
 bot.action('ui:upgrade_token', async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
     upgradeSessions.add(ctx.chat.id);
-    await ctx.reply(` *Upgrade with Token*\n\n` +
-        `Enter your upgrade token below to unlock product access\\. \n\n` +
+    await ctx.reply(`✦ *Upgrade with Token*\n\n` +
+        `Enter your upgrade token below to unlock product access\\. ✦\n\n` +
         `Don't have a token? Contact support\\.`, {
         parse_mode: 'Markdown',
         reply_markup: {
@@ -3661,7 +3661,7 @@ bot.action('ui:upgrade_token', async (ctx) => {
 });
 bot.action('ui:leaderboard', async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
-    await ctx.reply(' Leaderboard has been removed from the bot.', { reply_markup: backKeyboard() }).catch(() => { });
+    await ctx.reply('1. Leaderboard has been removed from the bot.', { reply_markup: backKeyboard() }).catch(() => { });
 });
 bot.action('ui:help', async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
@@ -3692,7 +3692,7 @@ bot.action('ui:giveaways', async (ctx) => {
     const canAct = true;
     const activeGiveaways = getActiveGiveaways();
     if (activeGiveaways.length === 0) {
-        await ctx.reply(' *Giveaways & Promos*\n\nNo active events right now. Check back soon!', { parse_mode: 'Markdown', reply_markup: backKeyboard() });
+        await ctx.reply('✦ *Giveaways & Promos*\n\nNo active events right now. Check back soon!', { parse_mode: 'Markdown', reply_markup: backKeyboard() });
         return;
     }
     for (const g of activeGiveaways) {
@@ -3707,13 +3707,13 @@ bot.action('ui:giveaways', async (ctx) => {
                 g.description ?? '',
                 g.max_winners != null ? `${g.max_winners} claims available` : '',
             ].filter(Boolean).join('\n');
-            btnText = ' Claim Code';
+            btnText = '✦ Claim Code';
             btnData = `promo:claim:${g.id}`;
         }
         else if (g.event_type === 'marathon') {
             const prizeText = g.prize_pool != null ? `Prize Pool: *$${g.prize_pool.toFixed(2)}*` : '';
             const endsText = g.ends_at ? `Ends: ${g.ends_at.split(' ')[0]}` : '';
-            header = ` *MARATHON*`;
+            header = `✦ *MARATHON*`;
             details = [
                 `*${escapeMdLegacy(g.title)}*`,
                 g.description ?? '',
@@ -3721,24 +3721,24 @@ bot.action('ui:giveaways', async (ctx) => {
                 `Top ${g.max_winners} traders win`,
                 endsText,
             ].filter(Boolean).join('\n');
-            btnText = ' Join Marathon';
+            btnText = '✦ Join Marathon';
             btnData = `giveaway:participate:${g.id}`;
         }
         else {
             const prizeText = g.prize_pool != null ? `Prize: *$${g.prize_pool.toFixed(2)}*` : '';
-            header = ` *GIVEAWAY*`;
+            header = `✦ *GIVEAWAY*`;
             details = [
                 `*${escapeMdLegacy(g.title)}*`,
                 g.description ?? '',
                 prizeText,
             ].filter(Boolean).join('\n');
-            btnText = ' Participate';
+            btnText = '✦ Participate';
             btnData = `giveaway:participate:${g.id}`;
         }
         const msg = `${header}\n\n${details}`;
         const markup = canAct
             ? { inline_keyboard: [[{ text: btnText, callback_data: btnData }], [{ text: '⟵ Back', callback_data: 'ui:start' }]] }
-            : { inline_keyboard: [[{ text: ' Upgrade Access', callback_data: 'ui:upgrade' }], [{ text: '⟵ Back', callback_data: 'ui:start' }]] };
+            : { inline_keyboard: [[{ text: '✦ Upgrade Access', callback_data: 'ui:upgrade' }], [{ text: '⟵ Back', callback_data: 'ui:start' }]] };
         await ctx.reply(msg, { parse_mode: 'Markdown', reply_markup: markup });
     }
 });
@@ -3752,18 +3752,18 @@ bot.command('trade', async (ctx) => {
     if (!hasValidSsid) {
         const isExpired = !!user?.ssid;
         const msg = isExpired
-            ? ' Your IQ Option session expired. Reconnect to continue trading '
+            ? '✦ Your IQ Option session expired. Reconnect to continue trading '
             : '⚠️ You need to connect your IQ Option account first.\nTap Connect below to get started ';
-        const btnText = isExpired ? ' Reconnect' : ' Connect Account';
+        const btnText = isExpired ? '✦ Reconnect' : '✦ Connect Account';
         await ctx.reply(msg, { reply_markup: { inline_keyboard: [[{ text: btnText, callback_data: 'ui:connect' }]] } });
         return;
     }
-    await ctx.reply('*Choose your trading mode:* ', {
+    await ctx.reply('*Choose your trading mode:* ✦', {
         parse_mode: 'Markdown',
         reply_markup: { inline_keyboard: [
-                [{ text: ' 10x Signals', callback_data: 'ui:signals' }],
+                [{ text: '✦ 10x Signals', callback_data: 'ui:signals' }],
                 [{ text: '⟡ Private Trader', callback_data: 'ui:trade' }],
-                [{ text: ' Autopilot', callback_data: 'ui:auto' }],
+                [{ text: '✦ Autopilot', callback_data: 'ui:auto' }],
                                 [{ text: '◆ Copy Trading', callback_data: 'ui:copy' }],
             ] }
     });
@@ -3773,7 +3773,7 @@ bot.action('admin:trade_connect', async (ctx) => {
     if (ctx.from.id !== getAdminId())
         return;
     connectSessions.set(ctx.chat.id, { step: 'admin_email' });
-    await ctx.reply(' *Admin Trading Account*\n\nEnter your IQ Option email:', { parse_mode: 'Markdown' });
+    await ctx.reply('✦ *Admin Trading Account*\n\nEnter your IQ Option email:', { parse_mode: 'Markdown' });
 });
 bot.command('history', async (ctx) => {
     const uid = ctx.from.id;
@@ -3782,7 +3782,7 @@ bot.command('history', async (ctx) => {
         return ctx.reply('No trades yet.', { reply_markup: backKeyboard() });
     let msg = '◆ *Recent Trades*\n\n';
     for (const t of trades) {
-        const emoji = t.status === 'WIN' ? '' : t.status === 'LOSS' ? '·' : t.status === 'TIE' ? '⚪' : '⚠️';
+        const emoji = t.status === 'WIN' ? '✦' : t.status === 'LOSS' ? '·' : t.status === 'TIE' ? '⚪' : '⚠️';
         const pnlStr = t.status === 'WIN' ? `+$${t.pnl.toFixed(2)}` : t.status === 'LOSS' ? `-$${(t.pnl < 0 ? Math.abs(t.pnl) : t.amount).toFixed(2)}` : '$0.00';
         msg += `${emoji} \`${t.pair}\` *${t.direction.toUpperCase()}* $${t.amount} → ${pnlStr}`;
         if (t.martingale_run)
@@ -3800,7 +3800,7 @@ bot.command('balance', async (ctx) => {
     const uid = ctx.from.id;
     const ssid = getSsidForUser(uid);
     if (!ssid) {
-        await ctx.reply(' Not connected. Use /connect first.', { reply_markup: backKeyboard() });
+        await ctx.reply('❌ Not connected. Use /connect first.', { reply_markup: backKeyboard() });
         return;
     }
     try {
@@ -3816,11 +3816,11 @@ bot.command('balance', async (ctx) => {
         if (real) {
             await syncAccessFromBalance(uid, real.amount, real.currency ?? 'USD', sdk);
         }
-        let msg = ' *Balances*\n\n';
+        let msg = '✦ *Balances*\n\n';
         if (demo)
-            msg += ` Practice: ${fmtBalance(demo)}\n`;
+            msg += `✦ Practice: ${fmtBalance(demo)}\n`;
         if (real)
-            msg += ` Live: ${fmtBalance(real)}\n`;
+            msg += `✦ Live: ${fmtBalance(real)}\n`;
         if (!demo && !real)
             msg += 'No balances found.';
         await ctx.reply(msg, { parse_mode: 'Markdown', reply_markup: backKeyboard() });
@@ -3850,7 +3850,7 @@ bot.command('balance', async (ctx) => {
         }
         else {
             const isTimeout = err instanceof Error && err.message.startsWith('SDK timeout');
-            await ctx.reply(isTimeout ? '⚠️ IQ Option is taking too long. Try again in a moment.' : friendlyError(err, ' Could not check your balance. Try again.'), { reply_markup: backKeyboard() });
+            await ctx.reply(isTimeout ? '⚠️ IQ Option is taking too long. Try again in a moment.' : friendlyError(err, '❌ Could not check your balance. Try again.'), { reply_markup: backKeyboard() });
         }
     }
     finally {
@@ -3865,7 +3865,7 @@ bot.command('status', async (ctx) => {
         return;
     }
     const accessLabel = getProductConfig(user.access_level).label;
-    const accessEmoji = getProduct(user.access_level) === 'auto_trading' ? '' : getProduct(user.access_level) === 'ai_trading' ? '⟡' : '·';
+    const accessEmoji = getProduct(user.access_level) === 'auto_trading' ? '✦' : getProduct(user.access_level) === 'ai_trading' ? '⟡' : '·';
     const ssid = getSsidForUser(uid);
     const stats = getTradeStats(uid);
     const ss = getUserSessionStats(uid);
@@ -3876,7 +3876,7 @@ bot.command('status', async (ctx) => {
         : 'Tap /balance to refresh';
     await ctx.reply(`🟢 *10x Bot Online*\n\n` +
         `Access: ${accessEmoji} ${accessLabel}\n` +
-        `IQ Option: ${ssid ? '✅ Connected' : ' Not connected'}\n` +
+        `IQ Option: ${ssid ? '✅ Connected' : '❌ Not connected'}\n` +
         `Balance: ${balLine}\n` +
         `Total Trades: ${stats.total} (${stats.wins}W / ${stats.losses}L)\n` +
         `Session PnL: ${ssPnlSign}$${Math.abs(ss.pnl).toFixed(2)}`, { parse_mode: 'Markdown', reply_markup: backKeyboard() });
@@ -3917,7 +3917,7 @@ bot.command('admin', async (ctx) => {
     const sub = args[0];
     if (!sub) {
         const stats = getApprovalStats();
-        await ctx.reply(`️ *Admin Panel*\n\n ${stats.total} users | ✅ ${stats.approved} approved | ··· ${stats.pending} pending |  ${stats.rejected} rejected`, { parse_mode: 'Markdown', reply_markup: adminKeyboard(getConfig("admin_analysis_all") === "true") });
+        await ctx.reply(`✦️ *Admin Panel*\n\n✦ ${stats.total} users | ✅ ${stats.approved} approved | ··· ${stats.pending} pending | ❌ ${stats.rejected} rejected`, { parse_mode: 'Markdown', reply_markup: adminKeyboard(getConfig("admin_analysis_all") === "true") });
         return;
     }
     if (sub === 'users') {
@@ -3926,9 +3926,9 @@ bot.command('admin', async (ctx) => {
             await ctx.reply('No users yet.');
             return;
         }
-        let msg = ` *All Users* (${users.length})\n\n`;
+        let msg = `✦ *All Users* (${users.length})\n\n`;
         for (const u of users) {
-            const e = u.approval_status === 'approved' ? '✅' : u.approval_status === 'rejected' ? '' : '···';
+            const e = u.approval_status === 'approved' ? '✅' : u.approval_status === 'rejected' ? '❌' : '···';
             msg += `${e} \`${u.telegram_id}\`${u.iq_user_id ? ` · IQ: \`${u.iq_user_id}\`` : ''} — ${u.approval_status}\n`;
         }
         await ctx.reply(msg, { parse_mode: 'Markdown' });
@@ -3955,9 +3955,9 @@ bot.command('admin', async (ctx) => {
             return;
         }
         rejectUser(tid);
-        await ctx.reply(` User \`${tid}\` rejected.`, { parse_mode: 'Markdown' });
+        await ctx.reply(`❌ User \`${tid}\` rejected.`, { parse_mode: 'Markdown' });
         try {
-            await bot.telegram.sendMessage(tid, ' Your access request has been rejected.');
+            await bot.telegram.sendMessage(tid, '❌ Your access request has been rejected.');
         }
         catch { }
         return;
@@ -3966,7 +3966,7 @@ bot.command('admin', async (ctx) => {
         const ts = getTradeStats();
         const as_ = getApprovalStats();
         const pnlSign = ts.totalPnl >= 0 ? '+' : '';
-        await ctx.reply(`◆ *Admin Stats*\n\n*Users:*\n✅ Approved: ${as_.approved}\n··· Pending: ${as_.pending}\n Rejected: ${as_.rejected}\n\n` +
+        await ctx.reply(`◆ *Admin Stats*\n\n*Users:*\n✅ Approved: ${as_.approved}\n··· Pending: ${as_.pending}\n❌ Rejected: ${as_.rejected}\n\n` +
             `*Trades:*\n${ts.total} total | ${ts.wins}W / ${ts.losses}L / ${ts.ties}T | PnL: ${pnlSign}$${ts.totalPnl.toFixed(2)}`, { parse_mode: 'Markdown' });
         return;
     }
@@ -3986,8 +3986,8 @@ bot.action('admin:back', async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
     adminSessions.delete(ctx.chat.id);
     const stats = getApprovalStats();
-    await ctx.reply(`️ *Admin Dashboard*\n\n` +
-        ` Users: ${stats.total} | ✅ ${stats.approved} | ··· ${stats.pending} |  ${stats.rejected}`, { parse_mode: 'Markdown', reply_markup: adminKeyboard(getConfig("admin_analysis_all") === "true") });
+    await ctx.reply(`✦️ *Admin Dashboard*\n\n` +
+        `✦ Users: ${stats.total} | ✅ ${stats.approved} | ··· ${stats.pending} | ❌ ${stats.rejected}`, { parse_mode: 'Markdown', reply_markup: adminKeyboard(getConfig("admin_analysis_all") === "true") });
 });
 // ─── Module 1: Today ─────────────────────────────────────────────────────────
 bot.action('admin:today', async (ctx) => {
@@ -4009,7 +4009,7 @@ bot.action('admin:activations', async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
     const pending = getPendingManualUsers();
     const recent = getRecentApprovals(24);
-    let msg = ' *Activations*\n\n';
+    let msg = '✦ *Activations*\n\n';
     if (pending.length > 0) {
         msg += `··· *Pending Manual Approval (${pending.length}):*\n`;
         for (const u of pending) {
@@ -4056,7 +4056,7 @@ bot.action(/^activation:reject:(\d+)$/, async (ctx) => {
     const uid = parseInt(ctx.match[1], 10);
     rejectUser(uid);
     try {
-        await ctx.editMessageText(` User ${maskUserId(uid)} rejected.`);
+        await ctx.editMessageText(`❌ User ${maskUserId(uid)} rejected.`);
     }
     catch { }
 });
@@ -4064,13 +4064,13 @@ bot.action(/^activation:reject:(\d+)$/, async (ctx) => {
 bot.action('admin:find_users', async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
     adminSessions.set(ctx.chat.id, { step: 'find_users' });
-    await ctx.reply(' Enter a Telegram User ID (number) or username to search:');
+    await ctx.reply('✦ Enter a Telegram User ID (number) or username to search:');
 });
 // ─── Module 4: Tokens ─────────────────────────────────────────────────────────
 bot.action('admin:tokens', async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
     const tokens = getTokens();
-    let msg = ' *Token Manager*\n\n';
+    let msg = '✦ *Token Manager*\n\n';
     if (tokens.length === 0) {
         msg += 'No tokens generated yet.\n';
     }
@@ -4078,7 +4078,7 @@ bot.action('admin:tokens', async (ctx) => {
         const now = new Date();
         for (const t of tokens.slice(0, 15)) {
             const expired = new Date(t.expires_at) < now;
-            const status = t.used_by ? '✅ Used' : expired ? ' Expired' : '··· Unused';
+            const status = t.used_by ? '✅ Used' : expired ? '❌ Expired' : '··· Unused';
             const hoursLeft = expired ? 0 : Math.round((new Date(t.expires_at).getTime() - now.getTime()) / 3_600_000);
             msg += `• \`${t.token}\` — ${escapeMdLegacy(t.tier)} — ${status}${!t.used_by && !expired ? ` (${hoursLeft}h left)` : ''}\n`;
         }
@@ -4092,7 +4092,7 @@ bot.command('token', async (ctx) => {
         return;
     }
     const tokens = getTokens();
-    let msg = ' *Token Manager*\n\n';
+    let msg = '✦ *Token Manager*\n\n';
     if (tokens.length === 0) {
         msg += 'No tokens generated yet.\n';
     }
@@ -4100,7 +4100,7 @@ bot.command('token', async (ctx) => {
         const now = new Date();
         for (const t of tokens.slice(0, 15)) {
             const expired = new Date(t.expires_at) < now;
-            const status = t.used_by ? '✅ Used' : expired ? ' Expired' : '··· Unused';
+            const status = t.used_by ? '✅ Used' : expired ? '❌ Expired' : '··· Unused';
             const hoursLeft = expired ? 0 : Math.round((new Date(t.expires_at).getTime() - now.getTime()) / 3_600_000);
             msg += `• \`${t.token}\` — ${escapeMdLegacy(t.tier)} — ${status}${!t.used_by && !expired ? ` (${hoursLeft}h left)` : ''}\n`;
         }
@@ -4109,7 +4109,7 @@ bot.command('token', async (ctx) => {
 });
 bot.action('admin:generate_token', async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
-    await ctx.reply(' Select product for new token:', { reply_markup: tokenTierKeyboard() });
+    await ctx.reply('✦ Select product for new token:', { reply_markup: tokenTierKeyboard() });
 });
 bot.action(/^token_tier:(AI_TRADING|AUTO_TRADING)$/, async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
@@ -4127,11 +4127,11 @@ bot.action('admin:system', async (ctx) => {
     const mem = (process.memoryUsage().rss / 1_048_576).toFixed(1);
     const as_ = getApprovalStats();
     const ts = getTradeStats();
-    await ctx.reply(`️ *System Status*\n\n` +
-        ` Bot: ✅ Online (uptime: ${h}h ${m}m)\n` +
+    await ctx.reply(`✦️ *System Status*\n\n` +
+        `✦ Bot: ✅ Online (uptime: ${h}h ${m}m)\n` +
         `· Memory: ${mem} MB\n\n` +
-        ` Total users: ${as_.total}\n` +
-        `✅ Approved: ${as_.approved} | ··· Pending: ${as_.pending} |  Rejected: ${as_.rejected}\n\n` +
+        `✦ Total users: ${as_.total}\n` +
+        `✅ Approved: ${as_.approved} | ··· Pending: ${as_.pending} | ❌ Rejected: ${as_.rejected}\n\n` +
         `◆ Total trades: ${ts.total}\n` +
         `· Database: ✅ OK`, { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
 });
@@ -4170,17 +4170,17 @@ bot.action(/^broadcast:(all|funded|nonfunded|nonactivated|testuser)$/, async (ct
         nonactivated: 'Non-Activated users',
         testuser: 'test user (Shara)',
     };
-    await ctx.reply(` Send your broadcast message for *${labelMap[target] ?? target}*:`, { parse_mode: 'Markdown' });
+    await ctx.reply(`✦ Send your broadcast message for *${labelMap[target] ?? target}*:`, { parse_mode: 'Markdown' });
 });
 // Button type selection
 bot.action('broadcast_btn:url', async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
     adminSessions.set(ctx.chat.id, { step: 'broadcast_link_url' });
-    await ctx.reply(' Enter the link URL (e.g. https://example.com):');
+    await ctx.reply('✦ Enter the link URL (e.g. https://example.com):');
 });
 bot.action('broadcast_btn:action', async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
-    await ctx.reply(' Select action for the button:', { reply_markup: broadcastActionKeyboard() });
+    await ctx.reply('✦ Select action for the button:', { reply_markup: broadcastActionKeyboard() });
 });
 bot.action('broadcast_btn:none', async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
@@ -4188,11 +4188,11 @@ bot.action('broadcast_btn:none', async (ctx) => {
 });
 // Action button selection
 const ACTION_MAP = {
-    trade: { text: ' Trade Now', value: 'ui:trade' },
+    trade: { text: '✦ Trade Now', value: 'ui:trade' },
     stats: { text: '◆ Stats', value: 'ui:stats' },
     menu: { text: '◆ Menu', value: 'ui:start' },
-    upgrade: { text: ' Upgrade Access', value: 'ui:upgrade' },
-    help: { text: ' Help & FAQ', value: 'ui:help' },
+    upgrade: { text: '✦ Upgrade Access', value: 'ui:upgrade' },
+    help: { text: '❖ Help & FAQ', value: 'ui:help' },
 };
 const CONTACT_URL = 'https://t.me/shiloh_is_10xing';
 const FUND_URL = process.env.FUNDING_URL ?? 'https://iqoption.com/pwa/payments/deposit';
@@ -4202,21 +4202,21 @@ bot.action(/^broadcast_action:(trade|stats|history|leaderboard|menu|start|upgrad
     const key = ctx.match[1];
     const pending = pendingBroadcasts.get(ctx.chat.id);
     if (!pending) {
-        await ctx.reply(' Session expired.', { reply_markup: adminBackKeyboard() });
+        await ctx.reply('❌ Session expired.', { reply_markup: adminBackKeyboard() });
         return;
     }
     if (key === 'start') {
         const botUsername = process.env.BOT_USERNAME ?? 'Shiloh10xbot';
-        pendingBroadcasts.set(ctx.chat.id, { ...pending, button: { text: ' Start Bot', type: 'url', value: `https://t.me/${botUsername}?start=` } });
-        await ctx.reply(`✅ Button set: * Start Bot*\n\n··· Auto-delete after?`, { parse_mode: 'Markdown', reply_markup: broadcastTimerKeyboard() });
+        pendingBroadcasts.set(ctx.chat.id, { ...pending, button: { text: '✦ Start Bot', type: 'url', value: `https://t.me/${botUsername}?start=` } });
+        await ctx.reply(`✅ Button set: *✦ Start Bot*\n\n··· Auto-delete after?`, { parse_mode: 'Markdown', reply_markup: broadcastTimerKeyboard() });
     }
     else if (key === 'contact') {
-        pendingBroadcasts.set(ctx.chat.id, { ...pending, button: { text: ' Contact Admin', type: 'url', value: CONTACT_URL } });
-        await ctx.reply(`✅ Button set: * Contact Admin*\n\n··· Auto-delete after?`, { parse_mode: 'Markdown', reply_markup: broadcastTimerKeyboard() });
+        pendingBroadcasts.set(ctx.chat.id, { ...pending, button: { text: '✆ Contact Admin', type: 'url', value: CONTACT_URL } });
+        await ctx.reply(`✅ Button set: *✆ Contact Admin*\n\n··· Auto-delete after?`, { parse_mode: 'Markdown', reply_markup: broadcastTimerKeyboard() });
     }
     else if (key === 'fund') {
-        pendingBroadcasts.set(ctx.chat.id, { ...pending, button: { text: ' Fund Account', type: 'url', value: FUND_URL } });
-        await ctx.reply(`✅ Button set: * Fund Account*\n\n··· Auto-delete after?`, { parse_mode: 'Markdown', reply_markup: broadcastTimerKeyboard() });
+        pendingBroadcasts.set(ctx.chat.id, { ...pending, button: { text: '✦ Fund Account', type: 'url', value: FUND_URL } });
+        await ctx.reply(`✅ Button set: *✦ Fund Account*\n\n··· Auto-delete after?`, { parse_mode: 'Markdown', reply_markup: broadcastTimerKeyboard() });
     }
     else if (key === 'yacht') {
         pendingBroadcasts.set(ctx.chat.id, { ...pending, button: { text: '⟢ Yacht Club', type: 'url', value: YACHT_URL } });
@@ -4225,7 +4225,7 @@ bot.action(/^broadcast_action:(trade|stats|history|leaderboard|menu|start|upgrad
     else {
         const action = ACTION_MAP[key];
         if (!action) {
-            await ctx.reply(' Session expired.', { reply_markup: adminBackKeyboard() });
+            await ctx.reply('❌ Session expired.', { reply_markup: adminBackKeyboard() });
             return;
         }
         pendingBroadcasts.set(ctx.chat.id, { ...pending, button: { text: action.text, type: 'callback', value: action.value } });
@@ -4236,7 +4236,7 @@ bot.action(/^broadcast_action:(trade|stats|history|leaderboard|menu|start|upgrad
 bot.action('broadcast:custom_timer', async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
     if (!pendingBroadcasts.has(ctx.chat.id)) {
-        await ctx.reply(' Session expired.', { reply_markup: adminBackKeyboard() });
+        await ctx.reply('❌ Session expired.', { reply_markup: adminBackKeyboard() });
         return;
     }
     adminSessions.set(ctx.chat.id, { step: 'broadcast_custom_timer' });
@@ -4249,7 +4249,7 @@ bot.action(/^bcast_timer:(\d+)$/, async (ctx) => {
     const deleteAfterMs = parseInt(ctx.match[1], 10);
     const pending = pendingBroadcasts.get(chatId);
     if (!pending) {
-        await ctx.reply(' Session expired.', { reply_markup: adminBackKeyboard() });
+        await ctx.reply('❌ Session expired.', { reply_markup: adminBackKeyboard() });
         return;
     }
     pendingBroadcasts.set(chatId, { ...pending, deleteAfterMs });
@@ -4260,7 +4260,7 @@ bot.action('broadcast:send_now', async (ctx) => {
     const chatId = ctx.chat.id;
     const pending = pendingBroadcasts.get(chatId);
     if (!pending) {
-        await ctx.reply(' Session expired.', { reply_markup: adminBackKeyboard() });
+        await ctx.reply('❌ Session expired.', { reply_markup: adminBackKeyboard() });
         return;
     }
     await executeBroadcast(chatId, pending.deleteAfterMs ?? 0, ctx);
@@ -4268,7 +4268,7 @@ bot.action('broadcast:send_now', async (ctx) => {
 bot.action('broadcast:schedule', async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
     if (!pendingBroadcasts.has(ctx.chat.id)) {
-        await ctx.reply(' Session expired.', { reply_markup: adminBackKeyboard() });
+        await ctx.reply('❌ Session expired.', { reply_markup: adminBackKeyboard() });
         return;
     }
     await ctx.reply('· When to send?', { reply_markup: broadcastDelayKeyboard() });
@@ -4279,12 +4279,12 @@ bot.action(/^bcast_delay:(\d+)$/, async (ctx) => {
     const delayMs = parseInt(ctx.match[1], 10);
     const pending = pendingBroadcasts.get(chatId);
     if (!pending) {
-        await ctx.reply(' Session expired.', { reply_markup: adminBackKeyboard() });
+        await ctx.reply('❌ Session expired.', { reply_markup: adminBackKeyboard() });
         return;
     }
     const activeCount = scheduledBroadcasts.filter(s => !s.sent).length;
     if (activeCount >= 5) {
-        await ctx.reply(' Max 5 scheduled broadcasts. Cancel one first.', { reply_markup: adminBackKeyboard() });
+        await ctx.reply('❌ Max 5 scheduled broadcasts. Cancel one first.', { reply_markup: adminBackKeyboard() });
         return;
     }
     pendingBroadcasts.delete(chatId);
@@ -4303,7 +4303,7 @@ bot.action(/^bcast_delay:(\d+)$/, async (ctx) => {
 bot.action('broadcast:custom_schedule', async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
     if (!pendingBroadcasts.has(ctx.chat.id)) {
-        await ctx.reply(' Session expired.', { reply_markup: adminBackKeyboard() });
+        await ctx.reply('❌ Session expired.', { reply_markup: adminBackKeyboard() });
         return;
     }
     adminSessions.set(ctx.chat.id, { step: 'broadcast_schedule_custom' });
@@ -4333,7 +4333,7 @@ bot.action(/^bcast_cancel:(\d+)$/, async (ctx) => {
     const id = parseInt(ctx.match[1], 10);
     const idx = scheduledBroadcasts.findIndex(s => s.id === id && !s.sent);
     if (idx === -1) {
-        await ctx.reply(' Broadcast not found or already sent.', { reply_markup: adminBackKeyboard() });
+        await ctx.reply('❌ Broadcast not found or already sent.', { reply_markup: adminBackKeyboard() });
         return;
     }
     const s = scheduledBroadcasts[idx];
@@ -4352,16 +4352,16 @@ bot.action(/^bcast_cancel:(\d+)$/, async (ctx) => {
 bot.action('admin:top_traders', async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
     const detailed = getLeaderboardDetailed();
-    let msg = ' *Today\'s Leaderboard*\n\n';
+    let msg = '1. *Today\'s Leaderboard*\n\n';
     if (detailed.length === 0) {
         msg += 'No entries yet today.';
     }
     else {
-        const medals = ['', '', ''];
+        const medals = ['2.', '3.', '4.'];
         detailed.forEach((e, i) => {
             const profit = e.manual_profit ?? e.auto_profit;
             const isManual = e.manual_profit !== null;
-            msg += `${medals[i] ?? `${i + 1}.`} ${maskUserId(e.telegram_id)} — +$${profit.toFixed(2)}${isManual ? ' ' : ''}\n`;
+            msg += `${medals[i] ?? `${i + 1}.`} ${maskUserId(e.telegram_id)} — +$${profit.toFixed(2)}${isManual ? ' ✦' : ''}\n`;
         });
     }
     const editableEntries = detailed
@@ -4394,8 +4394,8 @@ bot.action('admin:funnel', async (ctx) => {
         `*◆ Today*`,
         `·️ Page Views: ${p.page_views_today}`,
         `· Channel Joins: ${p.channel_joins_today}`,
-        ` Connects: ${p.connects_today}`,
-        ` Funded: ${p.funded_today}`,
+        `✦ Connects: ${p.connects_today}`,
+        `✦ Funded: ${p.funded_today}`,
         ``,
         `*◆ Conversion Rates*`,
         `Views → Joins: ${pct(p.channel_joins_today, p.page_views_today)}%`,
@@ -4405,8 +4405,8 @@ bot.action('admin:funnel', async (ctx) => {
         `*· This Week*`,
         `·️ Views: ${p.page_views_this_week}`,
         `· Joins: ${p.channel_joins_this_week}`,
-        ` Connects: ${p.connects_this_week}`,
-        ` Funded: ${p.funded_this_week}`,
+        `✦ Connects: ${p.connects_this_week}`,
+        `✦ Funded: ${p.funded_this_week}`,
         ``,
         `*· Recent Activity*`,
         recentLines || '— none yet',
@@ -4425,7 +4425,7 @@ bot.action('admin:audits', async (ctx) => {
     const pnlSign = r.totalPnl >= 0 ? '+' : '';
     const winPct = r.totalTrades > 0 ? ((r.wins / r.totalTrades) * 100).toFixed(1) : '0.0';
     let msg = `◆ *Audit Report (Last 24h)*\n\n` +
-        ` New Users: ${r.newUsers}\n` +
+        `✦ New Users: ${r.newUsers}\n` +
         `✅ Auto-Approved: ${r.autoApproved}\n` +
         `··· Manual Pending: ${r.manualPending}\n\n` +
         `◆ *Trading Activity:*\n` +
@@ -4438,7 +4438,7 @@ bot.action('admin:audits', async (ctx) => {
         `   - Recovered: ${r.martingaleRecovered}\n` +
         `   - Failed: ${r.martingaleRuns - r.martingaleRecovered}`;
     if (r.topPerformerId) {
-        msg += `\n\n Top Performer: ${maskUserId(r.topPerformerId)} (+$${(r.topPerformerProfit ?? 0).toFixed(2)})`;
+        msg += `\n\n1. Top Performer: ${maskUserId(r.topPerformerId)} (+$${(r.topPerformerProfit ?? 0).toFixed(2)})`;
     }
     await ctx.reply(msg, { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
 });
@@ -4447,8 +4447,8 @@ bot.action('admin:admin', async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
     const as_ = getApprovalStats();
     const paused = getAllUsers().filter(u => u.approval_status === 'paused').length;
-    await ctx.reply(`️ *Member Management*\n\n` +
-        ` Total: ${as_.total} | ✅ Active: ${as_.approved} | ️ Paused: ${paused} |  Rejected: ${as_.rejected}`, { parse_mode: 'Markdown', reply_markup: memberManagementKeyboard() });
+    await ctx.reply(`✦️ *Member Management*\n\n` +
+        `✦ Total: ${as_.total} | ✅ Active: ${as_.approved} | ❚❚️ Paused: ${paused} | ❌ Rejected: ${as_.rejected}`, { parse_mode: 'Markdown', reply_markup: memberManagementKeyboard() });
 });
 bot.action('member:view', async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
@@ -4457,9 +4457,9 @@ bot.action('member:view', async (ctx) => {
         await ctx.reply('No members yet.', { reply_markup: adminBackKeyboard() });
         return;
     }
-    let msg = ` *All Members* (${users.length})\n\n`;
+    let msg = `✦ *All Members* (${users.length})\n\n`;
     for (const u of users.slice(0, 30)) {
-        const e = u.approval_status === 'approved' ? '✅' : u.approval_status === 'paused' ? '️' : u.approval_status === 'rejected' ? '' : '···';
+        const e = u.approval_status === 'approved' ? '✅' : u.approval_status === 'paused' ? '❚❚️' : u.approval_status === 'rejected' ? '❌' : '···';
         const name = u.username ? `@${u.username}` : maskUserId(u.telegram_id);
         msg += `${e} ${name} — ${getProductConfig(u.access_level).label}\n`;
     }
@@ -4470,7 +4470,7 @@ bot.action('member:view', async (ctx) => {
 bot.action('member:pause', async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
     adminSessions.set(ctx.chat.id, { step: 'member_pause' });
-    await ctx.reply('️ Enter Telegram User ID to pause:');
+    await ctx.reply('❚❚️ Enter Telegram User ID to pause:');
 });
 bot.action('member:resume', async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
@@ -4480,12 +4480,12 @@ bot.action('member:resume', async (ctx) => {
 bot.action('member:remove', async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
     adminSessions.set(ctx.chat.id, { step: 'member_remove' });
-    await ctx.reply('️ Enter Telegram User ID to remove:');
+    await ctx.reply('✕️ Enter Telegram User ID to remove:');
 });
 bot.action('member:message', async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
     adminSessions.set(ctx.chat.id, { step: 'member_message_id' });
-    await ctx.reply('️ Enter Telegram User ID to message:');
+    await ctx.reply('✆️ Enter Telegram User ID to message:');
 });
 bot.action('member:add', async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
@@ -4496,7 +4496,7 @@ bot.action('member:add', async (ctx) => {
 bot.action('admin:giveaway', async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
     adminSessions.set(ctx.chat.id, { step: 'giveaway_winners' });
-    await ctx.reply(' *Giveaway Setup*\n\nHow many winners? (e.g. 3):', { parse_mode: 'Markdown' });
+    await ctx.reply('✦ *Giveaway Setup*\n\nHow many winners? (e.g. 3):', { parse_mode: 'Markdown' });
 });
 bot.action(/^giveaway:(all|24h)$/, async (ctx) => {
     await ctx.answerCbQuery('··· Generating…').catch(() => { });
@@ -4504,7 +4504,7 @@ bot.action(/^giveaway:(all|24h)$/, async (ctx) => {
     const chatId = ctx.chat.id;
     const as = adminSessions.get(chatId);
     if (!as || as.step !== 'giveaway_prize' || !as.giveawayWinners) {
-        await ctx.reply(' Session expired.', { reply_markup: adminBackKeyboard() });
+        await ctx.reply('❌ Session expired.', { reply_markup: adminBackKeyboard() });
         return;
     }
     adminSessions.delete(chatId);
@@ -4513,7 +4513,7 @@ bot.action(/^giveaway:(all|24h)$/, async (ctx) => {
     const prizeEach = prizePool / numWinners;
     const targetIds = getGiveawayTargetIds(target);
     if (targetIds.length === 0) {
-        await ctx.reply(' No eligible users found for this target.', { reply_markup: adminBackKeyboard() });
+        await ctx.reply('❌ No eligible users found for this target.', { reply_markup: adminBackKeyboard() });
         return;
     }
     const runId = `giveaway_${Date.now()}`;
@@ -4540,14 +4540,14 @@ bot.action(/^giveaway:(all|24h)$/, async (ctx) => {
         generatedIds.push(gid);
     }
     const winnerLines = generatedIds
-        .map((id, idx) => ` Winner ${idx + 1}: \`${id}\` — *$${prizeEach.toFixed(2)}*`)
+        .map((id, idx) => `1. Winner ${idx + 1}: \`${id}\` — *$${prizeEach.toFixed(2)}*`)
         .join('\n');
     const broadcastMsg = [
-        ` *CONGRATULATIONS to our ${numWinners} lucky winner${numWinners !== 1 ? 's' : ''}!*`,
+        `✦ *CONGRATULATIONS to our ${numWinners} lucky winner${numWinners !== 1 ? 's' : ''}!*`,
         '',
         winnerLines,
         '',
-        ` *Total Prize Pool: $${prizePool.toFixed(2)}*`,
+        `✦ *Total Prize Pool: $${prizePool.toFixed(2)}*`,
         '',
         `If your IQ Option User ID matches one of the winning IDs above, contact the admin to claim your prize!`,
     ].join('\n');
@@ -4565,18 +4565,18 @@ bot.action(/^giveaway:(all|24h)$/, async (ctx) => {
         await new Promise(r => setTimeout(r, 35));
     }
     await ctx.reply(`✅ Giveaway broadcast complete!\n\n` +
-        `· Sent: ${sent} |  Failed: ${failed}\n\n` +
+        `· Sent: ${sent} | ❌ Failed: ${failed}\n\n` +
         `*Generated Winner IDs:*\n${generatedIds.map(id => `\`${id}\``).join('\n')}`, { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
 });
 // ─── Module 11b: Giveaway V2 ─────────────────────────────────────────────────
 bot.action('admin:giveaways', async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
     const stats = getGiveawayStats();
-    await ctx.reply(` *Giveaway Manager*\n\nActive: ${stats.active} | Scheduled: ${stats.scheduled} | Completed: ${stats.completed}`, { parse_mode: 'Markdown', reply_markup: giveawayManagerKeyboard(stats) });
+    await ctx.reply(`✦ *Giveaway Manager*\n\nActive: ${stats.active} | Scheduled: ${stats.scheduled} | Completed: ${stats.completed}`, { parse_mode: 'Markdown', reply_markup: giveawayManagerKeyboard(stats) });
 });
 bot.action('giveaway_v2:create', async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
-    await ctx.reply(' *New Giveaway — Step 1*\n\nSelect the giveaway type:', {
+    await ctx.reply('✦ *New Giveaway — Step 1*\n\nSelect the giveaway type:', {
         parse_mode: 'Markdown',
         reply_markup: giveawayTypeKeyboard(),
     });
@@ -4627,7 +4627,7 @@ bot.action('giveaway_v2:pick_winners', async (ctx) => {
         await ctx.reply('◆ No active giveaways to pick winners from.', { reply_markup: adminBackKeyboard() });
         return;
     }
-    await ctx.reply(' *Pick Winners — Select a giveaway:*', {
+    await ctx.reply('1. *Pick Winners — Select a giveaway:*', {
         parse_mode: 'Markdown',
         reply_markup: activeGiveawaysKeyboard(giveaways, 'winners'),
     });
@@ -4637,7 +4637,7 @@ bot.action(/^giveaway_winners:(\d+)$/, async (ctx) => {
     const giveawayId = parseInt(ctx.match[1], 10);
     const event = getGiveawayEvent(giveawayId);
     if (!event) {
-        await ctx.reply(' Giveaway not found.', { reply_markup: adminBackKeyboard() });
+        await ctx.reply('❌ Giveaway not found.', { reply_markup: adminBackKeyboard() });
         return;
     }
     const { real, fabricated } = event.event_type === 'giveaway'
@@ -4645,10 +4645,10 @@ bot.action(/^giveaway_winners:(\d+)$/, async (ctx) => {
         : { real: getGiveawayParticipantCount(giveawayId), fabricated: 0 };
     const participantCount = event.event_type === 'giveaway' ? real + fabricated : real;
     if (participantCount === 0) {
-        await ctx.reply(' No eligible participants found.', { reply_markup: giveawayViewKeyboard(event) });
+        await ctx.reply('❌ No eligible participants found.', { reply_markup: giveawayViewKeyboard(event) });
         return;
     }
-    await ctx.reply(` *Pick Winners?*\n\n` +
+    await ctx.reply(`1. *Pick Winners?*\n\n` +
         `Giveaway: *${escapeMd(event.title)}*\n` +
         `Max winners: ${event.max_winners}\n` +
         `Participants: ${participantCount}\n\n` +
@@ -4663,18 +4663,18 @@ bot.action(/^giveaway_winners:(\d+)$/, async (ctx) => {
     });
 });
 bot.action(/^giveaway_winners_confirm:(\d+)$/, async (ctx) => {
-    await ctx.answerCbQuery(' Selecting winners…').catch(() => { });
+    await ctx.answerCbQuery('1. Selecting winners…').catch(() => { });
     const giveawayId = parseInt(ctx.match[1], 10);
     const event = getGiveawayEvent(giveawayId);
     if (event && event.status === 'completed') {
         await ctx.answerCbQuery('This giveaway already has winners.').catch(() => { });
-        await ctx.reply(' This giveaway already has winners selected.', { reply_markup: adminBackKeyboard() });
+        await ctx.reply('❌ This giveaway already has winners selected.', { reply_markup: adminBackKeyboard() });
         return;
     }
     ctx.telegram.sendChatAction(ctx.chat.id, 'typing').catch(() => { });
     const winners = giveawaySelectWinners(giveawayId);
     if (winners.length === 0) {
-        await ctx.reply(' No eligible participants found.', { reply_markup: adminBackKeyboard() });
+        await ctx.reply('❌ No eligible participants found.', { reply_markup: adminBackKeyboard() });
         return;
     }
     await ctx.reply(`✅ *${winners.length} winner${winners.length !== 1 ? 's' : ''} selected* for *${escapeMd(event?.title ?? 'giveaway')}*\\!\n\nWinner notifications queued\\. They will be notified shortly\\.`, { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
@@ -4686,7 +4686,7 @@ bot.action(/^giveaway_end:(\d+)$/, async (ctx) => {
     await ctx.reply(`✅ Giveaway #${giveawayId} ended.`, { reply_markup: adminBackKeyboard() });
 });
 bot.action(/^giveaway_delete:(\d+)$/, async (ctx) => {
-    await ctx.answerCbQuery('️ Deleting…').catch(() => { });
+    await ctx.answerCbQuery('✕️ Deleting…').catch(() => { });
     const giveawayId = parseInt(ctx.match[1], 10);
     deleteGiveaway(giveawayId);
     await ctx.reply(`✅ Giveaway #${giveawayId} deleted.`, { reply_markup: adminBackKeyboard() });
@@ -4699,12 +4699,12 @@ bot.action(/^giveaway_participants:(\d+)$/, async (ctx) => {
         await ctx.reply('· No participants yet.', { reply_markup: adminBackKeyboard() });
         return;
     }
-    const lines = participants.map((p, i) => `${i + 1}. ${p.fabricated ? '' : '·'} ${p.telegram_id} — ${p.winner ? ' Winner' : p.eligible ? '✅ Eligible' : ' Disqualified'}`);
+    const lines = participants.map((p, i) => `${i + 1}. ${p.fabricated ? '✦' : '·'} ${p.telegram_id} — ${p.winner ? '1. Winner' : p.eligible ? '✅ Eligible' : '❌ Disqualified'}`);
     const chunks = [];
     for (let i = 0; i < lines.length; i += 50)
         chunks.push(lines.slice(i, i + 50));
     for (let c = 0; c < chunks.length; c++) {
-        const header = c === 0 ? ` *Participants (${participants.length})*\n\n` : '';
+        const header = c === 0 ? `✦ *Participants (${participants.length})*\n\n` : '';
         await ctx.reply(header + chunks[c].join('\n'), {
             parse_mode: 'Markdown',
             reply_markup: c === chunks.length - 1 ? adminBackKeyboard() : undefined,
@@ -4716,14 +4716,14 @@ bot.action(/^giveaway_view:(\d+)$/, async (ctx) => {
     const giveawayId = parseInt(ctx.match[1], 10);
     const event = getGiveawayEvent(giveawayId);
     if (!event) {
-        await ctx.reply(' Giveaway not found.', { reply_markup: adminBackKeyboard() });
+        await ctx.reply('❌ Giveaway not found.', { reply_markup: adminBackKeyboard() });
         return;
     }
     const { real, fabricated } = event.event_type === 'giveaway'
         ? getRealAndFabricatedCounts(giveawayId)
         : { real: getGiveawayParticipantCount(giveawayId), fabricated: 0 };
     const info = [
-        ` *${escapeMd(event.title)}*`,
+        `✦ *${escapeMd(event.title)}*`,
         event.description ? escapeMd(event.description) : '',
         `Type: ${escapeMd(event.event_type)}`,
         `Status: ${escapeMd(event.status)}`,
@@ -4741,7 +4741,7 @@ bot.action(/^giveaway_criteria:(none|new_user|min_balance|top_traders)$/, async 
     const chatId = ctx.chat.id;
     const as = adminSessions.get(chatId);
     if (!as || !as.giveawayV2Title) {
-        await ctx.reply(' Session expired. Start over.', { reply_markup: adminBackKeyboard() });
+        await ctx.reply('❌ Session expired. Start over.', { reply_markup: adminBackKeyboard() });
         return;
     }
     const criteria = ctx.match[1];
@@ -4760,7 +4760,7 @@ bot.action(/^giveaway_schedule:(now|\d+)$/, async (ctx) => {
     const chatId = ctx.chat.id;
     const as = adminSessions.get(chatId);
     if (!as || !as.giveawayV2Type || !as.giveawayV2Title || !as.giveawayV2MaxWinners) {
-        await ctx.reply(' Session expired. Start over.', { reply_markup: adminBackKeyboard() });
+        await ctx.reply('❌ Session expired. Start over.', { reply_markup: adminBackKeyboard() });
         return;
     }
     adminSessions.delete(chatId);
@@ -4807,11 +4807,11 @@ bot.action(/^giveaway_activate:(\d+)$/, async (ctx) => {
     const giveawayId = parseInt(ctx.match[1], 10);
     const event = getGiveawayEvent(giveawayId);
     if (!event) {
-        await ctx.reply(' Giveaway not found.', { reply_markup: adminBackKeyboard() });
+        await ctx.reply('❌ Giveaway not found.', { reply_markup: adminBackKeyboard() });
         return;
     }
     if (event.status !== 'pending') {
-        await ctx.reply(' This giveaway is not in pending status.', { reply_markup: adminBackKeyboard() });
+        await ctx.reply('❌ This giveaway is not in pending status.', { reply_markup: adminBackKeyboard() });
         return;
     }
     if (event.event_type === 'giveaway')
@@ -4828,7 +4828,7 @@ bot.action(/^promo_schedule:(now|\d+)$/, async (ctx) => {
     const chatId = ctx.chat.id;
     const as = adminSessions.get(chatId);
     if (!as || !as.promoV2Title || !as.promoV2Code) {
-        await ctx.reply(' Session expired. Start over.', { reply_markup: adminBackKeyboard() });
+        await ctx.reply('❌ Session expired. Start over.', { reply_markup: adminBackKeyboard() });
         return;
     }
     adminSessions.delete(chatId);
@@ -4859,7 +4859,7 @@ bot.action(/^marathon_duration:(\d+)$/, async (ctx) => {
     const chatId = ctx.chat.id;
     const as = adminSessions.get(chatId);
     if (!as || !as.marathonV2Title) {
-        await ctx.reply(' Session expired. Start over.', { reply_markup: adminBackKeyboard() });
+        await ctx.reply('❌ Session expired. Start over.', { reply_markup: adminBackKeyboard() });
         return;
     }
     const durationSec = parseInt(ctx.match[1], 10);
@@ -4877,7 +4877,7 @@ bot.action(/^marathon_schedule:(now|\d+)$/, async (ctx) => {
     const chatId = ctx.chat.id;
     const as = adminSessions.get(chatId);
     if (!as || !as.marathonV2Title || !as.marathonV2Winners || !as.marathonV2DurationSec) {
-        await ctx.reply(' Session expired. Start over.', { reply_markup: adminBackKeyboard() });
+        await ctx.reply('❌ Session expired. Start over.', { reply_markup: adminBackKeyboard() });
         return;
     }
     adminSessions.delete(chatId);
@@ -4924,15 +4924,15 @@ bot.action(/^marathon:leaderboard:(\d+)$/, async (ctx) => {
     const giveawayId = parseInt(ctx.match[1], 10);
     const event = getGiveawayEvent(giveawayId);
     if (!event) {
-        await ctx.reply(' Marathon not found.');
+        await ctx.reply('❌ Marathon not found.');
         return;
     }
     const board = getMarathonLeaderboard(giveawayId);
     if (board.length === 0) {
-        await ctx.reply(` *${escapeMdLegacy(event.title)}*\n\nNo participants yet. Be the first to trade!`, { parse_mode: 'Markdown' });
+        await ctx.reply(`✦ *${escapeMdLegacy(event.title)}*\n\nNo participants yet. Be the first to trade!`, { parse_mode: 'Markdown' });
         return;
     }
-    const medals = ['', '', ''];
+    const medals = ['2.', '3.', '4.'];
     const lines = board.slice(0, 10).map(e => {
         const medal = medals[e.rank - 1] ?? `${e.rank}.`;
         const trades = `${e.trade_count} trade${e.trade_count !== 1 ? 's' : ''}`;
@@ -4947,12 +4947,12 @@ bot.action(/^marathon:leaderboard:(\d+)$/, async (ctx) => {
         return `${medal} ${name} — ${trades}`;
     });
     const userRank = board.find(e => e.telegram_id === telegramId);
-    let msg = ` *${escapeMdLegacy(event.title)} — Leaderboard*\n\n${lines.join('\n')}`;
+    let msg = `✦ *${escapeMdLegacy(event.title)} — Leaderboard*\n\n${lines.join('\n')}`;
     if (userRank && userRank.rank > 10) {
         msg += `\n\n· *Your rank: #${userRank.rank}* (${userRank.trade_count} trades)`;
     }
     if (!userRank) {
-        msg += `\n\n Join the marathon to compete!`;
+        msg += `\n\n✦ Join the marathon to compete!`;
     }
     if (event.ends_at) {
         const remaining = new Date(event.ends_at).getTime() - Date.now();
@@ -5017,10 +5017,10 @@ bot.action('admin:diary', async (ctx) => {
         parse_mode: 'Markdown',
         reply_markup: {
             inline_keyboard: [
-                [{ text: ' Giveaway', callback_data: 'diary:giveaway' }],
-                [{ text: ' Review', callback_data: 'diary:review' }],
-                [{ text: ' Post', callback_data: 'diary:post' }],
-                [{ text: '️ Live Topics', callback_data: 'diary:live_topics' }],
+                [{ text: '✦ Giveaway', callback_data: 'diary:giveaway' }],
+                [{ text: '✦ Review', callback_data: 'diary:review' }],
+                [{ text: '✦ Post', callback_data: 'diary:post' }],
+                [{ text: '✦️ Live Topics', callback_data: 'diary:live_topics' }],
                 [{ text: '◆ Market Pulse', callback_data: 'diary:market_pulse' }],
                 [{ text: '⟵ Back', callback_data: 'admin:back' }],
             ],
@@ -5035,10 +5035,10 @@ bot.action('diary:giveaway', async (ctx) => {
     try {
         const result = await generateDiaryEntry('giveaway');
         await ctx.telegram.deleteMessage(ctx.chat.id, loading.message_id).catch(() => { });
-        await ctx.reply(` *Giveaway Idea*\n\n${result.content}`, { parse_mode: 'Markdown' });
+        await ctx.reply(`✦ *Giveaway Idea*\n\n${result.content}`, { parse_mode: 'Markdown' });
     }
     catch (err) {
-        await ctx.reply(` ${err instanceof Error ? err.message : 'Generation failed'}`);
+        await ctx.reply(`❌ ${err instanceof Error ? err.message : 'Generation failed'}`);
     }
 });
 bot.action('diary:review', async (ctx) => {
@@ -5049,10 +5049,10 @@ bot.action('diary:review', async (ctx) => {
     try {
         const result = await generateDiaryEntry('review');
         await ctx.telegram.deleteMessage(ctx.chat.id, loading.message_id).catch(() => { });
-        await ctx.reply(` *Client Review*\n\n${result.content}`, { parse_mode: 'Markdown' });
+        await ctx.reply(`✦ *Client Review*\n\n${result.content}`, { parse_mode: 'Markdown' });
     }
     catch (err) {
-        await ctx.reply(` ${err instanceof Error ? err.message : 'Generation failed'}`);
+        await ctx.reply(`❌ ${err instanceof Error ? err.message : 'Generation failed'}`);
     }
 });
 bot.action('diary:post', async (ctx) => {
@@ -5063,10 +5063,10 @@ bot.action('diary:post', async (ctx) => {
     try {
         const result = await generateDiaryEntry('post');
         await ctx.telegram.deleteMessage(ctx.chat.id, loading.message_id).catch(() => { });
-        await ctx.reply(` *Post Idea*\n\n${result.content}`, { parse_mode: 'Markdown' });
+        await ctx.reply(`✦ *Post Idea*\n\n${result.content}`, { parse_mode: 'Markdown' });
     }
     catch (err) {
-        await ctx.reply(` ${err instanceof Error ? err.message : 'Generation failed'}`);
+        await ctx.reply(`❌ ${err instanceof Error ? err.message : 'Generation failed'}`);
     }
 });
 bot.action('diary:live_topics', async (ctx) => {
@@ -5077,10 +5077,10 @@ bot.action('diary:live_topics', async (ctx) => {
     try {
         const result = await generateDiaryEntry('live_topics');
         await ctx.telegram.deleteMessage(ctx.chat.id, loading.message_id).catch(() => { });
-        await ctx.reply(`️ *Live Topics*\n\n${result.content}`, { parse_mode: 'Markdown' });
+        await ctx.reply(`✦️ *Live Topics*\n\n${result.content}`, { parse_mode: 'Markdown' });
     }
     catch (err) {
-        await ctx.reply(` ${err instanceof Error ? err.message : 'Generation failed'}`);
+        await ctx.reply(`❌ ${err instanceof Error ? err.message : 'Generation failed'}`);
     }
 });
 bot.action('diary:market_pulse', async (ctx) => {
@@ -5095,7 +5095,7 @@ bot.action('diary:market_pulse', async (ctx) => {
         await ctx.reply(`◆ *Market Pulse*\n\n${result.content}`, { parse_mode: 'Markdown' });
     }
     catch (err) {
-        await ctx.reply(` ${err instanceof Error ? err.message : 'Generation failed'}`);
+        await ctx.reply(`❌ ${err instanceof Error ? err.message : 'Generation failed'}`);
     }
 });
 // ─── Reviews Generator ─────────────────────────────────────────────────────────
@@ -5103,7 +5103,7 @@ bot.action('admin:reviews', async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
     if (ctx.from?.id !== getAdminId())
         return;
-    await ctx.reply(' Review Generator\n\nPick a preset or write your own scenario.\n\n Custom: describe your event, audience, and vibe — the AI adapts.', { reply_markup: reviewsKeyboard() });
+    await ctx.reply('✦ Review Generator\n\nPick a preset or write your own scenario.\n\n✦ Custom: describe your event, audience, and vibe — the AI adapts.', { reply_markup: reviewsKeyboard() });
 });
 bot.action('reviews:preset_marathon', async (ctx) => {
     await ctx.answerCbQuery('Generating...').catch(() => { });
@@ -5147,7 +5147,7 @@ bot.action('reviews:custom', async (ctx) => {
     if (ctx.from?.id !== getAdminId())
         return;
     customScenarioPending.add(ctx.from.id);
-    await ctx.reply(' Send your scenario description.\n\nDescribe the event, audience, vibe, and any specifics:\n• "Weekend trading marathon, 5 winners, naira and dollars, excited tone"\n• "New users who just joined and made first profit, humble and grateful"\n\nYou can also specify count, language mix, and style.', { reply_markup: { inline_keyboard: [[{ text: ' Cancel', callback_data: 'admin:reviews' }]] } });
+    await ctx.reply('✦ Send your scenario description.\n\nDescribe the event, audience, vibe, and any specifics:\n• "Weekend trading marathon, 5 winners, naira and dollars, excited tone"\n• "New users who just joined and made first profit, humble and grateful"\n\nYou can also specify count, language mix, and style.', { reply_markup: { inline_keyboard: [[{ text: '❌ Cancel', callback_data: 'admin:reviews' }]] } });
 });
 const customScenarioPending = new Set();
 // Capture custom scenario text from admin
@@ -5166,11 +5166,11 @@ const pendingCustomScenario = new Map();
 function lengthSelectKeyboard() {
     return {
         inline_keyboard: [
-            [{ text: ' Short', callback_data: 'reviews:length:short' },
+            [{ text: '✦ Short', callback_data: 'reviews:length:short' },
                 { text: '· Medium', callback_data: 'reviews:length:medium' },
                 { text: '◆ Long', callback_data: 'reviews:length:long' }],
-            [{ text: ' Mixed', callback_data: 'reviews:length:mixed' }],
-            [{ text: ' Cancel', callback_data: 'admin:reviews' }],
+            [{ text: '✦ Mixed', callback_data: 'reviews:length:mixed' }],
+            [{ text: '❌ Cancel', callback_data: 'admin:reviews' }],
         ],
     };
 }
@@ -5208,7 +5208,7 @@ async function generateAndShow(ctx, scenario) {
     }
     catch (err) {
         await ctx.telegram.deleteMessage(ctx.chat.id, loading.message_id).catch(() => { });
-        await ctx.reply(` ${err instanceof Error ? err.message : 'Generation failed'}`, { reply_markup: reviewsKeyboard() });
+        await ctx.reply(`❌ ${err instanceof Error ? err.message : 'Generation failed'}`, { reply_markup: reviewsKeyboard() });
     }
 }
 const lastReviewScenario = new Map();
@@ -5235,7 +5235,7 @@ bot.action('admin:analysis_toggle', async (ctx) => {
             inline_keyboard: [
                 [
                     { text: '✅ Yes, ' + action, callback_data: `admin:analysis_confirm:${newState}` },
-                    { text: ' Cancel', callback_data: 'admin:dashboard' },
+                    { text: '❌ Cancel', callback_data: 'admin:dashboard' },
                 ],
             ],
         },
@@ -5257,7 +5257,7 @@ bot.action('admin:dashboard', async (ctx) => {
     if (ctx.from?.id !== getAdminId())
         return;
     const adminAnalysisAll = getConfig('admin_analysis_all') === 'true';
-    await ctx.editMessageText('️ *Admin Dashboard*\n\nSelect an option:', { parse_mode: 'Markdown', reply_markup: adminKeyboard(adminAnalysisAll) });
+    await ctx.editMessageText('✦️ *Admin Dashboard*\n\nSelect an option:', { parse_mode: 'Markdown', reply_markup: adminKeyboard(adminAnalysisAll) });
 });
 bot.action('admin:copy', async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
@@ -5287,7 +5287,7 @@ bot.action('admin:copy', async (ctx) => {
                     { text: '◆ Assets', callback_data: 'admin:copy:assets' },
                 ],
                 [
-                    { text: ' View Copiers', callback_data: 'admin:copy:copiers' },
+                    { text: '✦ View Copiers', callback_data: 'admin:copy:copiers' },
                 ],
                 [{ text: '⟵ Admin Menu', callback_data: 'admin:back' }],
             ] } });
@@ -5352,10 +5352,10 @@ bot.action('admin:copy:copiers', async (ctx) => {
         return;
     const copiers = db.prepare('SELECT telegram_id, copy_amount, started_at FROM copy_trading WHERE status = ?').all('active');
     if (copiers.length === 0) {
-        await ctx.reply(' No active copiers right now.', { reply_markup: { inline_keyboard: [[{ text: '⟵ Back', callback_data: 'admin:copy' }]] } });
+        await ctx.reply('✦ No active copiers right now.', { reply_markup: { inline_keyboard: [[{ text: '⟵ Back', callback_data: 'admin:copy' }]] } });
         return;
     }
-    let msg = ` *Active Copiers (${copiers.length}):*\n\n`;
+    let msg = `✦ *Active Copiers (${copiers.length}):*\n\n`;
     for (const c of copiers) {
         const user = getUser(c.telegram_id);
         const name = user?.username ? `@${user.username}` : `${c.telegram_id}`;
@@ -5367,17 +5367,17 @@ bot.action('admin:golive', async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
     if (ctx.from?.id !== getAdminId())
         return;
-    const LIVE_MSG_APPROVED = ` *10x Shiloh is LIVE right now!*\n\n` +
-        `I'm trading live with 10x AI \n\n` +
+    const LIVE_MSG_APPROVED = `✦ *10x Shiloh is LIVE right now!*\n\n` +
+        `I'm trading live with 10x AI ✦\n\n` +
         ` Tap below to join`;
-    const LIVE_MSG_PENDING = ` *10x Shiloh is LIVE right now!*\n\nI'm trading live with 10x AI \n\n` +
+    const LIVE_MSG_PENDING = `✦ *10x Shiloh is LIVE right now!*\n\nI'm trading live with 10x AI ✦\n\n` +
         `··· Your account is still being reviewed — but you can still watch the live session!\n\n Tap below to join`;
     const LIVE_BTN = { inline_keyboard: [[{ text: '🔴 Join Live', url: 'https://t.me/+rPvBi_BnG5s5Zjg0' }]] };
     // Test mode: send only to test user
     const testUserId = getTestUserId();
     if (testUserId) {
         await bot.telegram.sendMessage(testUserId, LIVE_MSG_APPROVED, { parse_mode: 'Markdown', reply_markup: LIVE_BTN }).catch(() => { });
-        await ctx.reply(' Test mode: sent to test user only.', { reply_markup: adminBackKeyboard() });
+        await ctx.reply('✦ Test mode: sent to test user only.', { reply_markup: adminBackKeyboard() });
         return;
     }
     const users = getAllUsers();
@@ -5407,7 +5407,7 @@ bot.action('admin:golive', async (ctx) => {
         if (sent % 30 === 0)
             await new Promise(r => setTimeout(r, 1_000));
     }
-    await ctx.reply(`🟢 Go Live broadcast sent.\n✅ Sent: ${sent} |  Failed: ${failed}`, { reply_markup: adminBackKeyboard() });
+    await ctx.reply(`🟢 Go Live broadcast sent.\n✅ Sent: ${sent} | ❌ Failed: ${failed}`, { reply_markup: adminBackKeyboard() });
 });
 // ─── Module 14: SSID Health ───────────────────────────────────────────────────
 bot.action('admin:ssid_health', async (ctx) => {
@@ -5416,10 +5416,10 @@ bot.action('admin:ssid_health', async (ctx) => {
     const valid = all.filter(u => u.ssid_valid === 1).length;
     const expired = all.filter(u => u.ssid_valid === 0).length;
     const unknown = all.length - valid - expired;
-    await ctx.reply(` *SSID Health*\n\n` +
+    await ctx.reply(`✦ *SSID Health*\n\n` +
         `Total with SSID: ${all.length}\n` +
         `✅ Valid: ${valid}\n` +
-        ` Expired/Invalid: ${expired}\n` +
+        `❌ Expired/Invalid: ${expired}\n` +
         `··· Unknown: ${unknown}\n\n` +
         `Tap below to re-prompt expired users.`, {
         parse_mode: 'Markdown',
@@ -5445,7 +5445,7 @@ bot.action('admin:ssid_expired', async (ctx) => {
                 }
                 catch { }
             }
-            const m = await bot.telegram.sendMessage(user.telegram_id, ' Your session expired.\n\nReconnect in 3 steps:\n1. Tap the  Reconnect button below\n2. Enter your IQ Option email and password\n3. Get back to trading immediately', { reply_markup: { inline_keyboard: [[{ text: ' Reconnect', callback_data: 'ui:connect' }]] } });
+            const m = await bot.telegram.sendMessage(user.telegram_id, '✦ Your session expired.\n\nReconnect in 3 steps:\n1. Tap the ✦ Reconnect button below\n2. Enter your IQ Option email and password\n3. Get back to trading immediately', { reply_markup: { inline_keyboard: [[{ text: '✦ Reconnect', callback_data: 'ui:connect' }]] } });
             setReconnectPrompt(user.telegram_id, m.message_id);
             sent++;
         }
@@ -5478,7 +5478,7 @@ bot.action('admin:llm_templates', async (ctx) => {
         await ctx.reply('No LLM templates seeded yet.', { reply_markup: adminBackKeyboard() });
         return;
     }
-    await ctx.reply(' *LLM Templates* — pick a category:', { parse_mode: 'Markdown', reply_markup: llmCategoryKeyboard(cats) });
+    await ctx.reply('✦ *LLM Templates* — pick a category:', { parse_mode: 'Markdown', reply_markup: llmCategoryKeyboard(cats) });
 });
 bot.action(/^llm:cat:(.+)$/, async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
@@ -5488,7 +5488,7 @@ bot.action(/^llm:cat:(.+)$/, async (ctx) => {
         await ctx.reply(`No templates for category *${category}*.`, { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
         return;
     }
-    let msg = ` *${category}* — ${templates.length} template(s)\n\n`;
+    let msg = `✦ *${category}* — ${templates.length} template(s)\n\n`;
     for (const t of templates.slice(0, 10)) {
         msg += `• \`${t.key}\`\n  ${t.message.slice(0, 80)}…\n\n`;
     }
@@ -5539,9 +5539,9 @@ bot.action(/^member:filter:(all|signals|ai_trading|auto_trading)$/, async (ctx) 
         await ctx.reply(`No ${filterLabel} members found.`, { reply_markup: adminBackKeyboard() });
         return;
     }
-    let msg = ` *Members — ${filterLabel}* (${filtered.length})\n\n`;
+    let msg = `✦ *Members — ${filterLabel}* (${filtered.length})\n\n`;
     for (const u of filtered.slice(0, 20)) {
-        const e = u.approval_status === 'approved' ? '✅' : u.approval_status === 'paused' ? '️' : '';
+        const e = u.approval_status === 'approved' ? '✅' : u.approval_status === 'paused' ? '❚❚️' : '❌';
         const name = u.username ? `@${u.username}` : maskUserId(u.telegram_id);
         msg += `${e} ${name} — ${getProductConfig(u.access_level).label}\n`;
     }
@@ -5559,7 +5559,7 @@ bot.action(/^user_detail:(\d+)$/, async (ctx) => {
     }
     const ts = getTradeStats(uid);
     const winRate = ts.total > 0 ? ((ts.wins / ts.total) * 100).toFixed(0) : '0';
-    const ssidStatus = u.ssid_valid === 1 ? '✅' : u.ssid_valid === 0 ? '' : '···';
+    const ssidStatus = u.ssid_valid === 1 ? '✅' : u.ssid_valid === 0 ? '❌' : '···';
     let msg = `· *User Detail*\n\n`;
     msg += `Telegram: ${u.username ? `@${u.username}` : `\`${maskUserId(uid)}\``}\n`;
     if (u.iq_user_id)
@@ -5585,9 +5585,9 @@ bot.action(/^user_action:(approve|pause|reset_ssid|trades|message):(\d+)$/, asyn
     }
     else if (action === 'pause') {
         pauseUser(uid);
-        await ctx.reply(`️ User \`${maskUserId(uid)}\` paused.`, { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
+        await ctx.reply(`❚❚️ User \`${maskUserId(uid)}\` paused.`, { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
         try {
-            await bot.telegram.sendMessage(uid, '️ Your account has been temporarily paused.');
+            await bot.telegram.sendMessage(uid, '❚❚️ Your account has been temporarily paused.');
         }
         catch { }
     }
@@ -5607,7 +5607,7 @@ bot.action(/^user_action:(approve|pause|reset_ssid|trades|message):(\d+)$/, asyn
     }
     else if (action === 'message') {
         adminSessions.set(ctx.chat.id, { step: 'member_message_text', memberMessageUserId: uid });
-        await ctx.reply(`️ Enter message to send to user \`${maskUserId(uid)}\`:`, { parse_mode: 'Markdown' });
+        await ctx.reply(`✆️ Enter message to send to user \`${maskUserId(uid)}\`:`, { parse_mode: 'Markdown' });
     }
 });
 // ─── /connect & /disconnect ───────────────────────────────────────────────────
@@ -5617,11 +5617,11 @@ bot.command('connect', async (ctx) => {
     setOnboardingState(ctx.from.id, null); // prevent onboarding state machine from hijacking /connect flow
     if (ctx.from.id === getAdminId()) {
         connectSessions.set(ctx.chat.id, { step: 'admin_email' });
-        await ctx.reply(' *Admin Trading Account*\n\nEnter your IQ Option email:', { parse_mode: 'Markdown' });
+        await ctx.reply('✦ *Admin Trading Account*\n\nEnter your IQ Option email:', { parse_mode: 'Markdown' });
         return;
     }
     connectSessions.set(ctx.chat.id, { step: 'email' });
-    await ctx.reply(' Enter your IQ Option email:');
+    await ctx.reply('✦ Enter your IQ Option email:');
 });
 bot.command('confirmed', async (ctx) => {
     const chatId = ctx.chat.id;
@@ -5659,7 +5659,7 @@ bot.command('pairs', async (ctx) => {
     const uid = ctx.from.id;
     const ssid = getSsidForUser(uid);
     if (!ssid) {
-        await ctx.reply(' Not connected. Use /connect first.');
+        await ctx.reply('❌ Not connected. Use /connect first.');
         return;
     }
     try {
@@ -5676,7 +5676,7 @@ bot.command('pairs', async (ctx) => {
     }
     catch (err) {
         const isTimeout = err instanceof Error && err.message.startsWith('SDK timeout');
-        await ctx.reply(isTimeout ? '⚠️ IQ Option is taking too long. Try again in a moment.' : ` Failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
+        await ctx.reply(isTimeout ? '⚠️ IQ Option is taking too long. Try again in a moment.' : `❌ Failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
     }
     finally {
         sdkPool.release(uid);
@@ -5687,12 +5687,12 @@ bot.command('ping', ctx => ctx.reply('pong'));
 bot.command('checkmate', async (ctx) => {
     const adminId = getAdminId();
     if (ctx.from.id !== adminId) {
-        await ctx.reply(' Admin only command.').catch(() => { });
+        await ctx.reply('✕ Admin only command.').catch(() => { });
         return;
     }
     const ssid = getAdminSsid();
     if (!ssid) {
-        await ctx.reply(' No admin SSID configured. Use /admin to set one.');
+        await ctx.reply('❌ No admin SSID configured. Use /admin to set one.');
         return;
     }
     // Parse args: /checkmate [TF] [THRESHOLD]  or  /checkmate [THRESHOLD]
@@ -5724,7 +5724,7 @@ bot.command('checkmate', async (ctx) => {
         }
     }
     const tfLabel = timeframe >= 60 ? `${timeframe / 60}M` : `${timeframe}S`;
-    await ctx.reply(` Scanning all pairs at ${tfLabel} with PRO analysis (≥${threshold}% confidence)...`);
+    await ctx.reply(`✦ Scanning all pairs at ${tfLabel} with PRO analysis (≥${threshold}% confidence)...`);
     try {
         const sdk = await sdkPool.get(adminId, ssid);
         const candlesFacade = await sdk.candles();
@@ -5768,13 +5768,13 @@ bot.command('checkmate', async (ctx) => {
         }
         sdkPool.release(adminId);
         if (results.length === 0) {
-            await ctx.reply(`◆ *CHECKMATE SCAN COMPLETE (${tfLabel})*\\n\\nNo pairs above ${threshold}% confidence right now.\\n\\nThe market is choppy — wait for a clearer setup. `, { parse_mode: 'Markdown' });
+            await ctx.reply(`◆ *CHECKMATE SCAN COMPLETE (${tfLabel})*\\n\\nNo pairs above ${threshold}% confidence right now.\\n\\nThe market is choppy — wait for a clearer setup. ✦`, { parse_mode: 'Markdown' });
             return;
         }
         // Sort by confidence descending, take top 5
         results.sort((a, b) => b.confidence - a.confidence);
         const top5 = results.slice(0, 5);
-        let msg = ` *CHECKMATE SCAN (${tfLabel})*\\n\\n`;
+        let msg = `✦ *CHECKMATE SCAN (${tfLabel})*\\n\\n`;
         msg += `◆ ${results.length} pair(s) above ${threshold}% confidence:\\n\\n`;
         for (let i = 0; i < top5.length; i++) {
             const r = top5[i];
@@ -5785,12 +5785,12 @@ bot.command('checkmate', async (ctx) => {
         if (results.length > 5) {
             msg += `+ ${results.length - 5} more pair(s) above threshold\n\n`;
         }
-        msg += ` Pick your finest setup and trade.`;
+        msg += `✦ Pick your finest setup and trade.`;
         await ctx.reply(msg, { parse_mode: 'Markdown' });
     }
     catch (err) {
         logger.error('bot', `/checkmate error: ${err instanceof Error ? err.message : err}`);
-        await ctx.reply(' Scan failed — check admin SSID or try again.');
+        await ctx.reply('❌ Scan failed — check admin SSID or try again.');
     }
 });
 bot.command('pidgin', async (ctx) => {
@@ -5801,14 +5801,14 @@ bot.command('pidgin', async (ctx) => {
     const next = !user.pidgin_enabled;
     setUserPidginEnabled(uid, next);
     await ctx.reply(next
-        ? ' Pidgin mode on! Messages go come for Pidgin English.'
+        ? '🇳🇬 Pidgin mode on! Messages go come for Pidgin English.'
         : '· Pidgin mode off. Back to standard English.');
 });
 bot.command('giveaway', async (ctx) => {
     if (ctx.from?.id !== getAdminId())
         return;
     adminSessions.set(ctx.chat.id, { step: 'giveaway_winners' });
-    await ctx.reply(' *Giveaway Setup*\n\nHow many winners? (e.g. 3):', { parse_mode: 'Markdown' });
+    await ctx.reply('✦ *Giveaway Setup*\n\nHow many winners? (e.g. 3):', { parse_mode: 'Markdown' });
 });
 bot.command('refresh', async (ctx) => {
     const chatId = ctx.chat.id;
@@ -5835,7 +5835,7 @@ bot.on('photo', async (ctx) => {
     const photo = ctx.message.photo.at(-1);
     if (as.step === 'compose_image' && as.composeContent) {
         adminSessions.delete(chatId);
-        await ctx.reply(' Compose Post has been removed. Use the manual broadcast instead.');
+        await ctx.reply('⟡ Compose Post has been removed. Use the manual broadcast instead.');
         return;
     }
     if (as.step === 'media_upload' && as.mediaLibraryKey) {
@@ -5848,7 +5848,7 @@ bot.on('photo', async (ctx) => {
         return;
     const pending = pendingBroadcasts.get(chatId);
     if (!pending) {
-        await ctx.reply(' Session expired.');
+        await ctx.reply('❌ Session expired.');
         return;
     }
     const existingMedia = pending.media ?? [];
@@ -5879,7 +5879,7 @@ bot.on('video', async (ctx) => {
         return;
     const pending = pendingBroadcasts.get(chatId);
     if (!pending) {
-        await ctx.reply(' Session expired.');
+        await ctx.reply('❌ Session expired.');
         return;
     }
     const existingMedia = pending.media ?? [];
@@ -5890,7 +5890,7 @@ bot.on('video', async (ctx) => {
     pendingBroadcasts.set(chatId, { ...pending, media: existingMedia });
     adminSessions.set(chatId, { ...as, step: 'broadcast_media' }); // stay in step
     const count = existingMedia.length;
-    await ctx.reply(` Video ${count} attached${count > 1 ? ` (${count} total)` : ''}.\n` +
+    await ctx.reply(`✦ Video ${count} attached${count > 1 ? ` (${count} total)` : ''}.\n` +
         `Send more images/videos, type *done* to continue, or *skip* for no media.`, { parse_mode: 'Markdown' });
 });
 // Video note handler (round/circle videos, forwarded or recorded)
@@ -5911,7 +5911,7 @@ bot.on('video_note', async (ctx) => {
         return;
     const pending = pendingBroadcasts.get(chatId);
     if (!pending) {
-        await ctx.reply(' Session expired.');
+        await ctx.reply('❌ Session expired.');
         return;
     }
     const existingMedia = pending.media ?? [];
@@ -5922,7 +5922,7 @@ bot.on('video_note', async (ctx) => {
     pendingBroadcasts.set(chatId, { ...pending, media: existingMedia });
     adminSessions.set(chatId, { ...as, step: 'broadcast_media' });
     const count = existingMedia.length;
-    await ctx.reply(` Video note ${count} attached${count > 1 ? ` (${count} total)` : ''}.\n` +
+    await ctx.reply(`✦ Video note ${count} attached${count > 1 ? ` (${count} total)` : ''}.\n` +
         `Send more images/videos/voice, type *done* to continue, or *skip* for no media.`, { parse_mode: 'Markdown' });
 });
 // Voice note handler (for broadcast voice messages)
@@ -5937,7 +5937,7 @@ bot.on('voice', async (ctx) => {
         return;
     const pending = pendingBroadcasts.get(chatId);
     if (!pending) {
-        await ctx.reply(' Session expired.');
+        await ctx.reply('❌ Session expired.');
         return;
     }
     const existingMedia = pending.media ?? [];
@@ -5948,7 +5948,7 @@ bot.on('voice', async (ctx) => {
     pendingBroadcasts.set(chatId, { ...pending, media: existingMedia });
     adminSessions.set(chatId, { ...as, step: 'broadcast_media' });
     const count = existingMedia.length;
-    await ctx.reply(` Voice note ${count} attached${count > 1 ? ` (${count} total)` : ''}.\n` +
+    await ctx.reply(`✦ Voice note ${count} attached${count > 1 ? ` (${count} total)` : ''}.\n` +
         `Send more images/videos/voice, type *done* to continue, or *skip* for no media.`, { parse_mode: 'Markdown' });
 });
 // ─── User ID brain route (repeated failures) ──────────────────────────────────
@@ -5974,10 +5974,10 @@ async function handleUserIdBrainRoute(ctx, telegramId, lastInput, failCount) {
             await ctx.reply(replyText, { reply_markup: replyMarkup });
         }
         else {
-            await ctx.reply("Still having trouble with your User ID? Let's get you sorted \n\n You can:", {
+            await ctx.reply("Still having trouble with your User ID? Let's get you sorted ✦\n\n You can:", {
                 reply_markup: {
                     inline_keyboard: [
-                        [{ text: ' Create a new account', url: AFFILIATE_LINK }],
+                        [{ text: '✦ Create a new account', url: AFFILIATE_LINK }],
                         [{ text: '· Contact Admin', url: ADMIN_CONTACT_LINK }],
                         [{ text: '↻ Try again', callback_data: 'ui:connect' }],
                     ],
@@ -5986,7 +5986,7 @@ async function handleUserIdBrainRoute(ctx, telegramId, lastInput, failCount) {
         }
     }
     catch {
-        await ctx.reply('Having trouble connecting? Contact admin for help ', { reply_markup: { inline_keyboard: [[{ text: '· Contact Admin', url: ADMIN_CONTACT_LINK }]] } });
+        await ctx.reply('Having trouble connecting? Contact admin for help ✦', { reply_markup: { inline_keyboard: [[{ text: '· Contact Admin', url: ADMIN_CONTACT_LINK }]] } });
     }
     setOnboardingState(telegramId, 'awaiting_user_id');
 }
@@ -6026,12 +6026,12 @@ bot.on('text', async (ctx) => {
                         found = findUsersByUsername(cleanText);
                     }
                     if (found.length === 0) {
-                        await ctx.reply(' No user found.', { reply_markup: adminBackKeyboard() });
+                        await ctx.reply('✦ No user found.', { reply_markup: adminBackKeyboard() });
                     }
                     else {
-                        let msg = ` *Found ${found.length} user(s):*\n\n`;
+                        let msg = `✦ *Found ${found.length} user(s):*\n\n`;
                         for (const u of found) {
-                            const statusEmoji = u.approval_status === 'approved' ? '✅' : u.approval_status === 'paused' ? '️' : u.approval_status === 'rejected' ? '' : '···';
+                            const statusEmoji = u.approval_status === 'approved' ? '✅' : u.approval_status === 'paused' ? '❚❚️' : u.approval_status === 'rejected' ? '❌' : '···';
                             const ts = getTradeStats(u.telegram_id);
                             const winRate = ts.total > 0 ? ((ts.wins / ts.total) * 100).toFixed(0) : '0';
                             msg += `Telegram: ${u.username ? `@${u.username}` : 'no username'} (\`${maskUserId(u.telegram_id)}\`)\n`;
@@ -6076,7 +6076,7 @@ bot.on('text', async (ctx) => {
                     }
                     catch (err) {
                         console.error('[broadcast] broadcast_message error:', err);
-                        await ctx.reply(' Broadcast setup failed. Check server logs.', { reply_markup: adminBackKeyboard() });
+                        await ctx.reply('❌ Broadcast setup failed. Check server logs.', { reply_markup: adminBackKeyboard() });
                     }
                     return;
                 }
@@ -6091,35 +6091,35 @@ bot.on('text', async (ctx) => {
                     }
                     else {
                         adminSessions.set(chatId, as); // restore for retry
-                        await ctx.reply(' Please send an image/video/voice file, or type "done" to finish, or "skip" for no media.');
+                        await ctx.reply('❌ Please send an image/video/voice file, or type "done" to finish, or "skip" for no media.');
                     }
                     return;
                 }
                 if (as.step === 'broadcast_link_url') {
                     adminSessions.set(chatId, { ...as, step: 'broadcast_link_label', broadcastLinkUrl: text });
-                    await ctx.reply(' Enter the button label (e.g. "Open App"):');
+                    await ctx.reply('✦ Enter the button label (e.g. "Open App"):');
                     return;
                 }
                 if (as.step === 'broadcast_link_label') {
                     const pending = pendingBroadcasts.get(chatId);
                     if (!pending) {
-                        await ctx.reply(' Session expired.', { reply_markup: adminBackKeyboard() });
+                        await ctx.reply('❌ Session expired.', { reply_markup: adminBackKeyboard() });
                         return;
                     }
                     pendingBroadcasts.set(chatId, { ...pending, button: { text, type: 'url', value: as.broadcastLinkUrl } });
-                    await ctx.reply(` Button set: *${text}* → ${as.broadcastLinkUrl}\n\nAuto-delete after?`, { parse_mode: 'Markdown', reply_markup: broadcastTimerKeyboard() });
+                    await ctx.reply(`✦ Button set: *${text}* → ${as.broadcastLinkUrl}\n\nAuto-delete after?`, { parse_mode: 'Markdown', reply_markup: broadcastTimerKeyboard() });
                     return;
                 }
                 if (as.step === 'broadcast_custom_timer') {
                     const ms = parseDuration(text);
                     if (ms === null) {
                         adminSessions.set(chatId, as); // restore for retry
-                        await ctx.reply(' Invalid format. Use e.g. 30m, 2h, 45s:');
+                        await ctx.reply('❌ Invalid format. Use e.g. 30m, 2h, 45s:');
                         return;
                     }
                     const pending = pendingBroadcasts.get(chatId);
                     if (!pending) {
-                        await ctx.reply(' Session expired.', { reply_markup: adminBackKeyboard() });
+                        await ctx.reply('❌ Session expired.', { reply_markup: adminBackKeyboard() });
                         return;
                     }
                     pendingBroadcasts.set(chatId, { ...pending, deleteAfterMs: ms });
@@ -6130,17 +6130,17 @@ bot.on('text', async (ctx) => {
                     const delayMs = parseDuration(text);
                     if (delayMs === null) {
                         adminSessions.set(chatId, as); // restore for retry
-                        await ctx.reply(' Invalid format. Use e.g. 45m, 3h, 90m:');
+                        await ctx.reply('❌ Invalid format. Use e.g. 45m, 3h, 90m:');
                         return;
                     }
                     const pending = pendingBroadcasts.get(chatId);
                     if (!pending) {
-                        await ctx.reply(' Session expired.', { reply_markup: adminBackKeyboard() });
+                        await ctx.reply('❌ Session expired.', { reply_markup: adminBackKeyboard() });
                         return;
                     }
                     const activeCount = scheduledBroadcasts.filter(s => !s.sent).length;
                     if (activeCount >= 5) {
-                        await ctx.reply(' Max 5 scheduled broadcasts. Cancel one first.', { reply_markup: adminBackKeyboard() });
+                        await ctx.reply('❌ Max 5 scheduled broadcasts. Cancel one first.', { reply_markup: adminBackKeyboard() });
                         return;
                     }
                     pendingBroadcasts.delete(chatId);
@@ -6160,7 +6160,7 @@ bot.on('text', async (ctx) => {
                 if (as.step === 'manual_add_id') {
                     const uid = parseInt(text, 10);
                     if (isNaN(uid)) {
-                        await ctx.reply(' Invalid user ID.', { reply_markup: adminBackKeyboard() });
+                        await ctx.reply('❌ Invalid user ID.', { reply_markup: adminBackKeyboard() });
                         return;
                     }
                     adminSessions.set(chatId, { step: 'manual_add_profit', manualAddUserId: uid });
@@ -6170,23 +6170,23 @@ bot.on('text', async (ctx) => {
                 if (as.step === 'manual_add_profit' && as.manualAddUserId) {
                     const profit = parseFloat(text);
                     if (isNaN(profit) || profit <= 0) {
-                        await ctx.reply(' Invalid amount.', { reply_markup: adminBackKeyboard() });
+                        await ctx.reply('❌ Invalid amount.', { reply_markup: adminBackKeyboard() });
                         return;
                     }
                     const added = addLeaderboardManual(as.manualAddUserId, profit);
-                    await ctx.reply(added ? `✅ Added \`${maskUserId(as.manualAddUserId)}\` — +$${profit.toFixed(2)} to leaderboard.` : ' Leaderboard is full (max 10 entries).', { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
+                    await ctx.reply(added ? `✅ Added \`${maskUserId(as.manualAddUserId)}\` — +$${profit.toFixed(2)} to leaderboard.` : '❌ Leaderboard is full (max 10 entries).', { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
                     return;
                 }
                 if (as.step === 'edit_trader_profit' && as.editTraderTelegramId) {
                     const profit = parseFloat(text);
                     if (isNaN(profit) || profit <= 0) {
-                        await ctx.reply(' Invalid amount.', { reply_markup: adminBackKeyboard() });
+                        await ctx.reply('❌ Invalid amount.', { reply_markup: adminBackKeyboard() });
                         return;
                     }
                     const updated = updateLeaderboardManual(as.editTraderTelegramId, profit);
                     await ctx.reply(updated
                         ? `✅ Updated \`${maskUserId(as.editTraderTelegramId)}\` — +$${profit.toFixed(2)}.`
-                        : ' Entry not found or not a manual entry.', { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
+                        : '❌ Entry not found or not a manual entry.', { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
                     return;
                 }
                 if (as.step === 'funnel_url') {
@@ -6197,13 +6197,13 @@ bot.on('text', async (ctx) => {
                 if (as.step === 'member_pause') {
                     const uid = parseInt(text, 10);
                     if (isNaN(uid)) {
-                        await ctx.reply(' Invalid ID.', { reply_markup: adminBackKeyboard() });
+                        await ctx.reply('❌ Invalid ID.', { reply_markup: adminBackKeyboard() });
                         return;
                     }
                     pauseUser(uid);
-                    await ctx.reply(`️ User \`${uid}\` paused.`, { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
+                    await ctx.reply(`❚❚️ User \`${uid}\` paused.`, { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
                     try {
-                        await bot.telegram.sendMessage(uid, '️ Your account has been temporarily paused. Contact the admin.');
+                        await bot.telegram.sendMessage(uid, '❚❚️ Your account has been temporarily paused. Contact the admin.');
                     }
                     catch { }
                     return;
@@ -6211,7 +6211,7 @@ bot.on('text', async (ctx) => {
                 if (as.step === 'member_resume') {
                     const uid = parseInt(text, 10);
                     if (isNaN(uid)) {
-                        await ctx.reply(' Invalid ID.', { reply_markup: adminBackKeyboard() });
+                        await ctx.reply('❌ Invalid ID.', { reply_markup: adminBackKeyboard() });
                         return;
                     }
                     resumeUser(uid);
@@ -6225,21 +6225,21 @@ bot.on('text', async (ctx) => {
                 if (as.step === 'member_remove') {
                     const uid = parseInt(text, 10);
                     if (isNaN(uid)) {
-                        await ctx.reply(' Invalid ID.', { reply_markup: adminBackKeyboard() });
+                        await ctx.reply('❌ Invalid ID.', { reply_markup: adminBackKeyboard() });
                         return;
                     }
                     deleteUser(uid);
-                    await ctx.reply(`️ User \`${uid}\` removed.`, { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
+                    await ctx.reply(`✕️ User \`${uid}\` removed.`, { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
                     return;
                 }
                 if (as.step === 'member_message_id') {
                     const uid = parseInt(text, 10);
                     if (isNaN(uid)) {
-                        await ctx.reply(' Invalid ID.', { reply_markup: adminBackKeyboard() });
+                        await ctx.reply('❌ Invalid ID.', { reply_markup: adminBackKeyboard() });
                         return;
                     }
                     adminSessions.set(chatId, { step: 'member_message_text', memberMessageUserId: uid });
-                    await ctx.reply(`️ Enter message to send to user \`${uid}\`:`, { parse_mode: 'Markdown' });
+                    await ctx.reply(`✆️ Enter message to send to user \`${uid}\`:`, { parse_mode: 'Markdown' });
                     return;
                 }
                 if (as.step === 'member_message_text' && as.memberMessageUserId) {
@@ -6248,14 +6248,14 @@ bot.on('text', async (ctx) => {
                         await ctx.reply(`✅ Message sent to \`${as.memberMessageUserId}\`.`, { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
                     }
                     catch {
-                        await ctx.reply(' Failed to send message. User may have blocked the bot.', { reply_markup: adminBackKeyboard() });
+                        await ctx.reply('❌ Failed to send message. User may have blocked the bot.', { reply_markup: adminBackKeyboard() });
                     }
                     return;
                 }
                 if (as.step === 'member_add') {
                     const uid = parseInt(text, 10);
                     if (isNaN(uid)) {
-                        await ctx.reply(' Invalid ID.', { reply_markup: adminBackKeyboard() });
+                        await ctx.reply('❌ Invalid ID.', { reply_markup: adminBackKeyboard() });
                         return;
                     }
                     approveUser(uid);
@@ -6270,18 +6270,18 @@ bot.on('text', async (ctx) => {
                     const n = parseInt(text, 10);
                     if (isNaN(n) || n < 1 || n > 50) {
                         adminSessions.set(chatId, as);
-                        await ctx.reply(' Enter a number between 1 and 50:');
+                        await ctx.reply('❌ Enter a number between 1 and 50:');
                         return;
                     }
                     adminSessions.set(chatId, { ...as, step: 'giveaway_prize', giveawayWinners: n });
-                    await ctx.reply(`✅ ${n} winner${n !== 1 ? 's' : ''}.\n\n Enter the total prize pool amount in USD (e.g. 500):`);
+                    await ctx.reply(`✅ ${n} winner${n !== 1 ? 's' : ''}.\n\n✦ Enter the total prize pool amount in USD (e.g. 500):`);
                     return;
                 }
                 if (as.step === 'giveaway_prize' && as.giveawayWinners) {
                     const prize = parseFloat(text);
                     if (isNaN(prize) || prize <= 0) {
                         adminSessions.set(chatId, as);
-                        await ctx.reply(' Enter a valid positive amount (e.g. 500):');
+                        await ctx.reply('❌ Enter a valid positive amount (e.g. 500):');
                         return;
                     }
                     adminSessions.set(chatId, { ...as, giveawayPrize: prize });
@@ -6292,7 +6292,7 @@ bot.on('text', async (ctx) => {
                 // ── Promo Code wizard text steps ─────────────────────────────────
                 if (as.step === 'promo_v2_title') {
                     if (!text.trim()) {
-                        await ctx.reply(' Please enter a title:');
+                        await ctx.reply('❌ Please enter a title:');
                         return;
                     }
                     adminSessions.set(chatId, { ...as, step: 'promo_v2_desc', promoV2Title: text.trim() });
@@ -6307,7 +6307,7 @@ bot.on('text', async (ctx) => {
                 }
                 if (as.step === 'promo_v2_code') {
                     if (!text.trim()) {
-                        await ctx.reply(' Please enter the code:');
+                        await ctx.reply('❌ Please enter the code:');
                         return;
                     }
                     adminSessions.set(chatId, { ...as, step: 'promo_v2_max_claims', promoV2Code: text.trim() });
@@ -6318,7 +6318,7 @@ bot.on('text', async (ctx) => {
                     const isUnlimited = text.trim().toLowerCase() === 'unlimited';
                     const n = isUnlimited ? undefined : parseInt(text.trim(), 10);
                     if (!isUnlimited && (isNaN(n) || n < 1)) {
-                        await ctx.reply(' Enter a number (e.g. 50) or type unlimited:');
+                        await ctx.reply('❌ Enter a number (e.g. 50) or type unlimited:');
                         return;
                     }
                     adminSessions.set(chatId, { ...as, promoV2MaxClaims: n });
@@ -6329,7 +6329,7 @@ bot.on('text', async (ctx) => {
                 // ── Marathon wizard text steps ────────────────────────────────────
                 if (as.step === 'marathon_v2_title') {
                     if (!text.trim()) {
-                        await ctx.reply(' Please enter a title:');
+                        await ctx.reply('❌ Please enter a title:');
                         return;
                     }
                     adminSessions.set(chatId, { ...as, step: 'marathon_v2_desc', marathonV2Title: text.trim() });
@@ -6348,7 +6348,7 @@ bot.on('text', async (ctx) => {
                 if (as.step === 'marathon_v2_winners') {
                     const n = parseInt(text.trim(), 10);
                     if (isNaN(n) || n < 1 || n > 100) {
-                        await ctx.reply(' Enter a number between 1 and 100:');
+                        await ctx.reply('❌ Enter a number between 1 and 100:');
                         return;
                     }
                     adminSessions.set(chatId, { ...as, step: 'marathon_v2_prize', marathonV2Winners: n });
@@ -6358,7 +6358,7 @@ bot.on('text', async (ctx) => {
                 if (as.step === 'marathon_v2_prize' && as.marathonV2Winners) {
                     const prize = parseFloat(text.trim());
                     if (isNaN(prize) || prize < 0) {
-                        await ctx.reply(' Enter a valid amount (e.g. 500) or 0:');
+                        await ctx.reply('❌ Enter a valid amount (e.g. 500) or 0:');
                         return;
                     }
                     const prizeVal = prize > 0 ? prize : undefined;
@@ -6370,7 +6370,7 @@ bot.on('text', async (ctx) => {
                 // ── Giveaway V2 wizard text steps ────────────────────────────────
                 if (as.step === 'giveaway_v2_title') {
                     if (!text.trim()) {
-                        await ctx.reply(' Please enter a title:');
+                        await ctx.reply('❌ Please enter a title:');
                         return;
                     }
                     adminSessions.set(chatId, { ...as, step: 'giveaway_v2_desc', giveawayV2Title: text.trim() });
@@ -6388,7 +6388,7 @@ bot.on('text', async (ctx) => {
                 }
                 if (as.step === 'giveaway_v2_criteria_value') {
                     if (!text.trim()) {
-                        await ctx.reply(' Enter a value:');
+                        await ctx.reply('❌ Enter a value:');
                         return;
                     }
                     adminSessions.set(chatId, { ...as, step: 'giveaway_v2_max_winners', giveawayV2CriteriaValue: text.trim() });
@@ -6398,7 +6398,7 @@ bot.on('text', async (ctx) => {
                 if (as.step === 'giveaway_v2_max_winners') {
                     const n = parseInt(text, 10);
                     if (isNaN(n) || n < 1 || n > 100) {
-                        await ctx.reply(' Enter a number between 1 and 100:');
+                        await ctx.reply('❌ Enter a number between 1 and 100:');
                         return;
                     }
                     adminSessions.set(chatId, { ...as, step: 'giveaway_v2_prize', giveawayV2MaxWinners: n });
@@ -6408,7 +6408,7 @@ bot.on('text', async (ctx) => {
                 if (as.step === 'giveaway_v2_prize' && as.giveawayV2MaxWinners) {
                     const prize = parseFloat(text);
                     if (isNaN(prize) || prize < 0) {
-                        await ctx.reply(' Enter a valid amount (e.g. 500) or 0:');
+                        await ctx.reply('❌ Enter a valid amount (e.g. 500) or 0:');
                         return;
                     }
                     const prizeVal = prize > 0 ? prize : undefined;
@@ -6420,14 +6420,14 @@ bot.on('text', async (ctx) => {
                 // ── Compose post wizard — REMOVED 2026-08-07 ─────────────────────
                 if (as.step?.startsWith('compose') || as.composeTopic || as.composeContent || as.composeDescription) {
                     adminSessions.delete(chatId);
-                    await ctx.reply(' Compose Post has been removed. Use the manual broadcast instead.');
+                    await ctx.reply('⟡ Compose Post has been removed. Use the manual broadcast instead.');
                     return;
                 }
                 return;
             }
             catch (err) {
                 console.error('[admin-wizard] unhandled error in step', as.step, ':', err);
-                await ctx.reply(' An error occurred. Check server logs.', { reply_markup: adminBackKeyboard() });
+                await ctx.reply('❌ An error occurred. Check server logs.', { reply_markup: adminBackKeyboard() });
             }
         }
     }
@@ -6437,7 +6437,7 @@ bot.on('text', async (ctx) => {
         const tokenInput = text.toUpperCase().trim();
         const result = validateToken(tokenInput);
         if (!result.valid) {
-            await ctx.reply(` ${result.error}. Contact support to get a valid token.`);
+            await ctx.reply(`❌ ${result.error}. Contact support to get a valid token.`);
             return;
         }
         if (useToken(tokenInput, ctx.from.id)) {
@@ -6446,10 +6446,10 @@ bot.on('text', async (ctx) => {
             setUserAccessLevel(ctx.from.id, access, expiresAt);
             const expiryDate = new Date(Date.now() + TOKEN_ACCESS_DURATION_MS).toLocaleDateString('en-GB');
             const label = getProductConfig(access).label;
-            await ctx.reply(`✅ Token accepted! *${label}* is now unlocked until ${expiryDate}. `, { parse_mode: 'Markdown', reply_markup: startKeyboard(access) });
+            await ctx.reply(`✅ Token accepted! *${label}* is now unlocked until ${expiryDate}. ✦`, { parse_mode: 'Markdown', reply_markup: startKeyboard(access) });
         }
         else {
-            await ctx.reply(' Token could not be applied. It may have already been used or expired.');
+            await ctx.reply('❌ Token could not be applied. It may have already been used or expired.');
         }
         return;
     }
@@ -6500,7 +6500,7 @@ bot.on('text', async (ctx) => {
                     notifyAdmin(`⚠️ *User ID verification failed*\n\nUser: ${ctx.from.id} (@${ctx.from.username ?? 'no username'})\nAttempt: ${failCount}\nLast input: \`${text}\``);
                 }
                 if (failCount >= 3) {
-                    await ctx.reply(' *Couldn\'t verify your User ID*.\n\nContact admin for manual verification \nThey\'ll help you get set up.', { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [[{ text: '· Contact Admin', url: ADMIN_CONTACT_LINK }]] } });
+                    await ctx.reply('❌ *Couldn\'t verify your User ID*.\n\nContact admin for manual verification \nThey\'ll help you get set up.', { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [[{ text: '· Contact Admin', url: ADMIN_CONTACT_LINK }]] } });
                 }
                 else {
                     await handleUserIdFailed(ctx, ctx.from.id, failCount);
@@ -6515,7 +6515,7 @@ bot.on('text', async (ctx) => {
                 notifyAdmin(`⚠️ *User ID verification failed*\n\nUser: ${ctx.from.id} (@${ctx.from.username ?? 'no username'})\nAttempt: ${failCount}\nLast input: \`${text}\``);
             }
             if (failCount >= 3) {
-                await ctx.reply(' *Couldn\'t verify your User ID*.\n\nContact admin for manual verification \nThey\'ll help you get set up.', { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [[{ text: '· Contact Admin', url: ADMIN_CONTACT_LINK }]] } });
+                await ctx.reply('❌ *Couldn\'t verify your User ID*.\n\nContact admin for manual verification \nThey\'ll help you get set up.', { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [[{ text: '· Contact Admin', url: ADMIN_CONTACT_LINK }]] } });
             }
             else {
                 await handleUserIdFailed(ctx, ctx.from.id, failCount);
@@ -6535,12 +6535,12 @@ bot.on('text', async (ctx) => {
             return;
         }
         if (!/^\d{4,8}$/.test(code)) {
-            await ctx.reply(' Please enter the 6-digit code:', {
+            await ctx.reply('❌ Please enter the 6-digit code:', {
                 reply_markup: { inline_keyboard: [[{ text: '↻ Resend code', callback_data: 'verify:resend' }]] },
             });
             return;
         }
-        await ctx.reply(' Verifying...');
+        await ctx.reply('✦ Verifying...');
         try {
             const { ssid } = await verify2FA(code, vs.verifyToken, vs.verifyMethod ?? 'email', vs.verifyUseProxy ?? false);
             const credB64 = Buffer.from(`${vs.email}:${vs.password}`).toString('base64');
@@ -6569,9 +6569,9 @@ bot.on('text', async (ctx) => {
                     saveUserCurrency(ctx.from.id, demo.currency);
                 const parts = [];
                 if (demo)
-                    parts.push(` Practice: ${fmtBalance(demo)}`);
+                    parts.push(`✦ Practice: ${fmtBalance(demo)}`);
                 if (real)
-                    parts.push(` Live: ${fmtBalance(real)}`);
+                    parts.push(`✦ Live: ${fmtBalance(real)}`);
                 if (parts.length)
                     balanceText = parts.join('\n');
             }
@@ -6587,14 +6587,14 @@ bot.on('text', async (ctx) => {
             const msg = err instanceof Error ? err.message : 'Verification failed';
             // Invalid code → let them retry or resend; token-expired/other → restart.
             if (/invalid verification code/i.test(msg)) {
-                await ctx.reply(` ${msg}`, {
+                await ctx.reply(`❌ ${msg}`, {
                     reply_markup: { inline_keyboard: [[{ text: '↻ Resend code', callback_data: 'verify:resend' }]] },
                 });
             }
             else {
                 setOnboardingState(ctx.from.id, 'awaiting_email');
                 onboardSessions.delete(chatId);
-                await ctx.reply(` ${msg}\n\nEnter /connect to try again.`);
+                await ctx.reply(`❌ ${msg}\n\nEnter /connect to try again.`);
             }
         }
         return;
@@ -6632,14 +6632,14 @@ bot.on('text', async (ctx) => {
             const email = emailSession?.email ?? telegramUser?.email;
             if (!email) {
                 setOnboardingState(ctx.from.id, 'awaiting_email');
-                await ctx.reply(' Please enter your IQ Option email first:');
+                await ctx.reply('✦ Please enter your IQ Option email first:');
                 return;
             }
             try {
                 await ctx.deleteMessage();
             }
             catch { }
-            await ctx.reply(' Logging in...');
+            await ctx.reply('✦ Logging in...');
             try {
                 const { ssid, sdk } = await loginAndCaptureSsid(email, text);
                 saveUser({ telegram_id: ctx.from.id, ssid });
@@ -6657,9 +6657,9 @@ bot.on('text', async (ctx) => {
                         saveUserCurrency(ctx.from.id, demo.currency);
                     const parts = [];
                     if (demo)
-                        parts.push(` Practice: ${fmtBalance(demo)}`);
+                        parts.push(`✦ Practice: ${fmtBalance(demo)}`);
                     if (real)
-                        parts.push(` Live: ${fmtBalance(real)}`);
+                        parts.push(`✦ Live: ${fmtBalance(real)}`);
                     if (parts.length)
                         balanceText = parts.join('\n');
                 }
@@ -6685,11 +6685,11 @@ bot.on('text', async (ctx) => {
                         const markup3 = vf3.button_text && vf3.button_url
                             ? { reply_markup: { inline_keyboard: [[{ text: vf3.button_text, url: vf3.button_url }]] } }
                             : undefined;
-                        const vf3Msg = resolveUsernameTemplate(vf3.message || 'Having trouble connecting? Contact admin for help ', ctx.from?.first_name ?? ctx.from?.username ?? 'there');
+                        const vf3Msg = resolveUsernameTemplate(vf3.message || 'Having trouble connecting? Contact admin for help ✦', ctx.from?.first_name ?? ctx.from?.username ?? 'there');
                         await ctx.reply(vf3Msg, markup3);
                     }
                     else {
-                        await ctx.reply('Having trouble connecting? Contact admin for help ', { reply_markup: { inline_keyboard: [[{ text: ' Contact admin', url: ADMIN_CONTACT_LINK }]] } });
+                        await ctx.reply('Having trouble connecting? Contact admin for help ✦', { reply_markup: { inline_keyboard: [[{ text: '✦ Contact admin', url: ADMIN_CONTACT_LINK }]] } });
                     }
                 }
                 else {
@@ -6703,7 +6703,7 @@ bot.on('text', async (ctx) => {
                         console.error(`[connect] setSsidValid failed for ${ctx.from.id}:`, e instanceof Error ? e.message : e);
                     }
                     const errMsg = err instanceof Error ? err.message : 'Login failed';
-                    await ctx.reply(` ${errMsg}\n\n Enter your IQ Option email again:`);
+                    await ctx.reply(`❌ ${errMsg}\n\n✦ Enter your IQ Option email again:`);
                 }
             }
             return;
@@ -6758,7 +6758,7 @@ bot.on('text', async (ctx) => {
             const email = conn.email;
             connectSessions.delete(chatId);
             console.log(`[confirmed] user ${ctx.from.id} attempting login`);
-            await ctx.reply(' Logging in...');
+            await ctx.reply('✦ Logging in...');
             try {
                 const { ssid, sdk } = await loginAndCaptureSsid(email, text);
                 saveUser({ telegram_id: ctx.from.id, ssid });
@@ -6776,9 +6776,9 @@ bot.on('text', async (ctx) => {
                     else if (demo?.currency)
                         saveUserCurrency(ctx.from.id, demo.currency);
                     if (demo)
-                        msg += ` Practice: ${fmtBalance(demo)}\n`;
+                        msg += `✦ Practice: ${fmtBalance(demo)}\n`;
                     if (real)
-                        msg += ` Live: ${fmtBalance(real)}\n`;
+                        msg += `✦ Live: ${fmtBalance(real)}\n`;
                 }
                 finally {
                     sdk.shutdown().catch(() => { });
@@ -6795,7 +6795,7 @@ bot.on('text', async (ctx) => {
                 const isTimeout = err instanceof Error && err.message.startsWith('SDK timeout');
                 await ctx.reply(isTimeout
                     ? '⚠️ IQ Option is taking too long. Please try again.'
-                    : ` Connection failed: ${errMsg}`);
+                    : `❌ Connection failed: ${errMsg}`);
             }
             return;
         }
@@ -6804,7 +6804,7 @@ bot.on('text', async (ctx) => {
             conn.email = text.trim();
             conn.step = 'admin_password';
             connectSessions.set(chatId, conn);
-            await ctx.reply(' Enter your IQ Option password:');
+            await ctx.reply('✦ Enter your IQ Option password:');
             return;
         }
         if (conn.step === 'admin_password' && conn.email) {
@@ -6825,9 +6825,9 @@ bot.on('text', async (ctx) => {
                     const real = all.find(b => b.type === BalanceType.Real);
                     const demo = all.find(b => b.type === BalanceType.Demo);
                     if (real)
-                        msg += ` Live: ${fmtBalance(real)}\n`;
+                        msg += `✦ Live: ${fmtBalance(real)}\n`;
                     if (demo)
-                        msg += ` Practice: ${fmtBalance(demo)}\n`;
+                        msg += `✦ Practice: ${fmtBalance(demo)}\n`;
                 }
                 finally {
                     sdk.shutdown().catch(() => { });
@@ -6840,7 +6840,7 @@ bot.on('text', async (ctx) => {
                     await routeToVerification(ctx, chatId, conn.email, text.trim(), err, 'admin');
                     return;
                 }
-                await ctx.reply(` Login failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
+                await ctx.reply(`❌ Login failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
             }
             return;
         }
@@ -6849,7 +6849,7 @@ bot.on('text', async (ctx) => {
             conn.email = text;
             conn.step = 'password';
             connectSessions.set(chatId, conn);
-            await ctx.reply(' Enter your password:');
+            await ctx.reply('✦ Enter your password:');
         }
         else if (conn.step === 'password' && conn.email) {
             const email = conn.email;
@@ -6858,7 +6858,7 @@ bot.on('text', async (ctx) => {
                 await ctx.deleteMessage();
             }
             catch { }
-            await ctx.reply(' Logging in...');
+            await ctx.reply('✦ Logging in...');
             try {
                 const { ssid, sdk } = await loginAndCaptureSsid(email, text);
                 saveUser({ telegram_id: ctx.from.id, ssid });
@@ -6875,9 +6875,9 @@ bot.on('text', async (ctx) => {
                     else if (demo?.currency)
                         saveUserCurrency(ctx.from.id, demo.currency);
                     if (demo)
-                        msg += ` Practice: ${fmtBalance(demo)}\n`;
+                        msg += `✦ Practice: ${fmtBalance(demo)}\n`;
                     if (real)
-                        msg += ` Live: ${fmtBalance(real)}\n`;
+                        msg += `✦ Live: ${fmtBalance(real)}\n`;
                 }
                 finally {
                     sdk.shutdown().catch(() => { });
@@ -6892,7 +6892,7 @@ bot.on('text', async (ctx) => {
                 const isTimeout = err instanceof Error && err.message.startsWith('SDK timeout');
                 await ctx.reply(isTimeout
                     ? '⚠️ IQ Option is taking too long. Please try again.'
-                    : ` Connection failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
+                    : `❌ Connection failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
             }
         }
         return;
@@ -6918,7 +6918,7 @@ bot.on('text', async (ctx) => {
         if (count > MAX_NON_ACTIVATED_RESPONSES) {
             // Tell them once why replies stopped instead of going dark mid-conversation
             if (count === MAX_NON_ACTIVATED_RESPONSES + 1) {
-                await ctx.reply("I'll pause here until your account is connected — tap below and we'll pick this right up. ", { reply_markup: { inline_keyboard: [[{ text: ' Connect Account', callback_data: 'ui:connect' }]] } }).catch(() => { });
+                await ctx.reply("I'll pause here until your account is connected — tap below and we'll pick this right up. ✦", { reply_markup: { inline_keyboard: [[{ text: '✦ Connect Account', callback_data: 'ui:connect' }]] } }).catch(() => { });
             }
             return;
         }
@@ -6954,13 +6954,13 @@ bot.on('text', async (ctx) => {
             swarmWiz.amount = amt;
             swarmWiz.step = 'gale';
             swarmSetup.set(ctx.from.id, swarmWiz);
-            await ctx.reply(` Capital: ${curSymbol}${fmtAmt}\n\nSelect smart recovery level:`, { reply_markup: { inline_keyboard: [
+            await ctx.reply(`✦ Capital: ${curSymbol}${fmtAmt}\n\nSelect smart recovery level:`, { reply_markup: { inline_keyboard: [
                         [
                             { text: '0 (No recovery)', callback_data: 'swarm:gale:0' },
                             { text: '3 rounds', callback_data: 'swarm:gale:3' },
                             { text: '6 rounds', callback_data: 'swarm:gale:6' },
                         ],
-                        [{ text: ' Cancel', callback_data: 'wizard:cancel' }],
+                        [{ text: '❌ Cancel', callback_data: 'wizard:cancel' }],
                     ] } });
             return;
         }
@@ -6979,10 +6979,10 @@ bot.on('text', async (ctx) => {
             return;
         if (brainResult.shouldReply && brainResult.flow) {
             if (!isActivated && !['link_account', 'verify_user_id', 'create_account'].includes(brainResult.flow)) {
-                await ctx.reply("You're almost there! Let's get your account connected so you can start trading \n\n Tap below:", {
+                await ctx.reply("You're almost there! Let's get your account connected so you can start trading ✦\n\n Tap below:", {
                     reply_markup: {
                         inline_keyboard: [
-                            [{ text: ' Connect Account', callback_data: 'ui:connect' }],
+                            [{ text: '✦ Connect Account', callback_data: 'ui:connect' }],
                         ],
                     },
                 });
@@ -7007,7 +7007,7 @@ bot.on('text', async (ctx) => {
     if (brainWiz.mode === 'demo') {
         const maxAmt = brainWiz.currency === 'NGN' ? 20000 : 20;
         if (amount > maxAmt) {
-            await ctx.reply(` Demo max is ${brainWiz.currency === 'NGN' ? '₦20,000' : '$20'} or equivalent. Please enter a smaller amount.`);
+            await ctx.reply(`❌ Demo max is ${brainWiz.currency === 'NGN' ? '₦20,000' : '$20'} or equivalent. Please enter a smaller amount.`);
             return;
         }
     }
@@ -7041,7 +7041,7 @@ bot.catch((err, ctx) => {
     console.error(`[bot.catch] Update: ${ctx.updateType}, ChatID: ${ctx.chat?.id}, UserID: ${ctx.from?.id}, Callback: ${cbData}, Message: ${msg}`);
     if (ctx.callbackQuery && msg.includes('query is too old')) {
         ctx.answerCbQuery('··· This button expired. Send /start to get a fresh menu.').catch(() => { });
-        ctx.editMessageText('··· This session expired.\n\nSend /start to continue.', { reply_markup: { inline_keyboard: [[{ text: ' Start Over', callback_data: 'ui:start' }]] } }).catch(() => { });
+        ctx.editMessageText('··· This session expired.\n\nSend /start to continue.', { reply_markup: { inline_keyboard: [[{ text: '✦ Start Over', callback_data: 'ui:start' }]] } }).catch(() => { });
         return;
     }
     if (ctx.callbackQuery && (msg.includes('Forbidden: bot can\'t initiate conversation') || msg.includes('403'))) {
@@ -7049,7 +7049,7 @@ bot.catch((err, ctx) => {
     }
     if (ctx.callbackQuery && msg.includes('timed out')) {
         ctx.answerCbQuery('··· Request timed out. Please try again.').catch(() => { });
-        ctx.reply('··· *Request timed out*\n\nThis can happen under heavy load. Please try again.\n\nSend /start to restart.', { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [[{ text: ' Start Over', callback_data: 'ui:start' }]] } }).catch(() => { });
+        ctx.reply('··· *Request timed out*\n\nThis can happen under heavy load. Please try again.\n\nSend /start to restart.', { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [[{ text: '✦ Start Over', callback_data: 'ui:start' }]] } }).catch(() => { });
         if (ctx.from?.id) {
             wizardSessions.delete(ctx.chat.id);
             const prev = activeTradeSessions.get(ctx.from.id) ?? 0;
@@ -7071,12 +7071,12 @@ bot.catch((err, ctx) => {
             cancelPrepCountdown(fromId);
             activeTradeSessions.delete(fromId);
         }
-        ctx.answerCbQuery(' Try again — formatting glitch.').catch(() => { });
-        ctx.reply('Something went wrong with the display. Tap below to continue.', { reply_markup: { inline_keyboard: [[{ text: ' Start Over', callback_data: 'ui:start' }]] } }).catch(() => { });
+        ctx.answerCbQuery('✦ Try again — formatting glitch.').catch(() => { });
+        ctx.reply('Something went wrong with the display. Tap below to continue.', { reply_markup: { inline_keyboard: [[{ text: '✦ Start Over', callback_data: 'ui:start' }]] } }).catch(() => { });
         return;
     }
     if (ctx.callbackQuery) {
-        ctx.answerCbQuery(' Something went wrong. Please try again or send /start.').catch(() => { });
+        ctx.answerCbQuery('❌ Something went wrong. Please try again or send /start.').catch(() => { });
         return;
     }
     ctx.reply('⚠️ Something went wrong. Please try again.').catch(() => { });
@@ -7158,7 +7158,7 @@ async function fireFundingCycle(bot) {
             const firstName = await resolveUsernameForId(bot, telegram_id);
             const msg = resolveUsernameTemplate(template.message ?? '', firstName)
                 .replace(/10xfirst|10xsecond/g, promo);
-            const btnMarkup = { inline_keyboard: [[{ text: template.button_text ?? ' Fund now', url: template.button_url ?? 'https://iqoption.com/pwa/payments/deposit' }]] };
+            const btnMarkup = { inline_keyboard: [[{ text: template.button_text ?? '✦ Fund now', url: template.button_url ?? 'https://iqoption.com/pwa/payments/deposit' }]] };
             const fundMedia = getSequenceMedia(templateKey);
             if (cycle?.last_msg_id) {
                 bot.telegram.deleteMessage(telegram_id, cycle.last_msg_id).catch(() => { });
@@ -7207,28 +7207,28 @@ function getReconnectMessage(state) {
     switch (state) {
         case 'ssid_expired':
             return {
-                text: ' *Your session expired*\n\nNo panic. Just reconnect.\n\n1. Tap  Reconnect below\n2. Enter your email and password\n3. Back to winning ',
-                button: { text: ' Reconnect', callback_data: 'ui:connect' },
+                text: '✦ *Your session expired*\n\nNo panic. Just reconnect.\n\n1. Tap ✦ Reconnect below\n2. Enter your email and password\n3. Back to winning ✦',
+                button: { text: '✦ Reconnect', callback_data: 'ui:connect' },
             };
         case 'user_id_rejected':
             return {
-                text: ' *We couldn\'t verify that User ID*\n\n✅ Make sure it\'s the number under your profile name in IQ Option\n✅ Copy and paste it — no spaces, no dashes\n\nTry again ',
-                button: { text: ' Send User ID', callback_data: 'ui:start' },
+                text: '✦ *We couldn\'t verify that User ID*\n\n✅ Make sure it\'s the number under your profile name in IQ Option\n✅ Copy and paste it — no spaces, no dashes\n\nTry again ',
+                button: { text: '✦ Send User ID', callback_data: 'ui:start' },
             };
         case 'login_failed':
             return {
-                text: ' *Login didn\'t go through*\n\nYour IQ Option email or password was incorrect.\n\n✅ Check for typos, caps lock, or extra spaces\n✅ Make sure you\'re using your IQ Option login (not Google/Apple)\n\n1. Tap  Connect below\n2. Enter the correct email and password\n3. Back to winning ',
-                button: { text: ' Connect', callback_data: 'ui:connect' },
+                text: '✦ *Login didn\'t go through*\n\nYour IQ Option email or password was incorrect.\n\n✅ Check for typos, caps lock, or extra spaces\n✅ Make sure you\'re using your IQ Option login (not Google/Apple)\n\n1. Tap ✦ Connect below\n2. Enter the correct email and password\n3. Back to winning ✦',
+                button: { text: '✦ Connect', callback_data: 'ui:connect' },
             };
         case 'onboarding_abandoned':
             return {
-                text: ' *You didn\'t finish setting up*\n\nYour account is waiting. Takes 60 seconds.\n\n1. Tap ►️ Continue below\n2. Pick up where you stopped',
+                text: '✦ *You didn\'t finish setting up*\n\nYour account is waiting. Takes 60 seconds.\n\n1. Tap ►️ Continue below\n2. Pick up where you stopped',
                 button: { text: '►️ Continue', callback_data: 'ui:start' },
             };
         case 'never_connected':
             return {
-                text: ' *You\'re approved but not connected*\n\nLink your IQ Option account to start trading with 10x Bot \n\n1. Tap  Connect below\n2. Enter your IQ Option email and password\n3. Let the bot work',
-                button: { text: ' Connect', callback_data: 'ui:connect' },
+                text: '✦ *You\'re approved but not connected*\n\nLink your IQ Option account to start trading with 10x Bot ✦\n\n1. Tap ✦ Connect below\n2. Enter your IQ Option email and password\n3. Let the bot work',
+                button: { text: '✦ Connect', callback_data: 'ui:connect' },
             };
         default:
             return null;
@@ -7305,9 +7305,9 @@ function startReconnectLoop(bot) {
 // ─── Pending-prompt 1h loop (awaiting_user_id re-engagement) ─────────────────
 const PENDING_PROMPTS = [
     ' *Still want to trade with 10x AI?*\\n\\nJust send your IQ Option User ID — it\'s the number under your name in the app. Takes 10 seconds.',
-    ' *One step away from AI trading*\\n\\nYour User ID is all I need. Open IQ Option → tap Profile → copy the number under your name.',
-    ' *Markets are moving — don\'t get left behind*\\n\\nSend your IQ Option User ID and I\'ll get you trading immediately. 10x AI does the rest.',
-    ' *Your bot is waiting for you*\\n\\nSend your User ID now: Open IQ Option → Profile → copy the number. That\'s it.',
+    '✦ *One step away from AI trading*\\n\\nYour User ID is all I need. Open IQ Option → tap Profile → copy the number under your name.',
+    '✦ *Markets are moving — don\'t get left behind*\\n\\nSend your IQ Option User ID and I\'ll get you trading immediately. 10x AI does the rest.',
+    '✦ *Your bot is waiting for you*\\n\\nSend your User ID now: Open IQ Option → Profile → copy the number. That\'s it.',
 ];
 async function firePendingPromptCycle(bot) {
     if (getConfig('features_paused') === '1')
@@ -7329,7 +7329,7 @@ async function firePendingPromptCycle(bot) {
             const text = PENDING_PROMPTS[nextVariant];
             const buttons = [
                 { text: '· Send User ID', callback_data: 'ui:start' },
-                { text: ' Create Account', url: AFFILIATE_LINK },
+                { text: '✦ Create Account', url: AFFILIATE_LINK },
             ];
             const sent = await bot.telegram.sendMessage(telegram_id, text, {
                 reply_markup: { inline_keyboard: [buttons] },
@@ -7489,7 +7489,7 @@ setCopyNotifier({
 initCheckinDb();
 setCheckinLiveRefresher(refreshFundedBalanceFromLive);
 startCheckinScheduler(bot);
-// KILLED 2026-08-07: all automatic broadcast flows removed per Master.
+// ✕ KILLED 2026-08-07: all automatic broadcast flows removed per Master.
 // startAutoBroadcast(bot);
 // seedFundingCycle();
 // startFundingLoop(bot);
@@ -7810,8 +7810,8 @@ backgroundIntervals.push(setInterval(async () => {
                         logger.warn('signal-track', `signal #${sig.id}: no completed candle for ${sig.pair} — marking as finished (no recovery)`);
                         // Send a neutral message — no "re-enter" or "double your amount"
                         const nFlags = {
-                            EUR: '', USD: '', GBP: '', JPY: '', AUD: '',
-                            NZD: '', CAD: '', CHF: '',
+                            EUR: '🇪🇺', USD: '🇺🇸', GBP: '🇬🇧', JPY: '🇯🇵', AUD: '🇦🇺',
+                            NZD: '🇳🇿', CAD: '🇨🇦', CHF: '🇨🇭',
                         };
                         const npf = (p) => {
                             const m = p.match(/^(\w{3})(\w{3})/);
@@ -7903,8 +7903,8 @@ backgroundIntervals.push(setInterval(async () => {
                     const maxAttempts = sig.max_rounds + 1;
                     // Pair flags for display
                     const cFlags = {
-                        EUR: '', USD: '', GBP: '', JPY: '', AUD: '',
-                        NZD: '', CAD: '', CHF: '',
+                        EUR: '🇪🇺', USD: '🇺🇸', GBP: '🇬🇧', JPY: '🇯🇵', AUD: '🇦🇺',
+                        NZD: '🇳🇿', CAD: '🇨🇦', CHF: '🇨🇭',
                     };
                     const pFlags = (p) => {
                         const m = p.match(/^(\w{3})(\w{3})/);

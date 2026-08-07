@@ -20,7 +20,7 @@ export function currencyKeyboard(): IKMarkup {
                 { text: '€ EUR', callback_data: 'cur:EUR' },
                 { text: '£ GBP', callback_data: 'cur:GBP' },
             ],
-            [{ text: ' Cancel', callback_data: 'wizard:cancel' }],
+            [{ text: '❌ Cancel', callback_data: 'wizard:cancel' }],
         ],
     };
 }
@@ -42,8 +42,8 @@ export function amountKeyboard(currency = 'USD'): IKMarkup {
         inline_keyboard: [
             row,
             [
-                { text: ' Custom', callback_data: 'amt:custom' },
-                { text: ' Cancel', callback_data: 'wizard:cancel' },
+                { text: '✦ Custom', callback_data: 'amt:custom' },
+                { text: '❌ Cancel', callback_data: 'wizard:cancel' },
             ],
         ],
     };
@@ -64,7 +64,7 @@ export function timeframeKeyboard(_tier?: string): IKMarkup {
     return {
         inline_keyboard: [
             row,
-            [{ text: ' Cancel', callback_data: 'wizard:cancel' }],
+            [{ text: '❌ Cancel', callback_data: 'wizard:cancel' }],
         ],
     };
 }
@@ -79,7 +79,7 @@ const PAIR_DISPLAY: Record<string, string> = {
     'USDCAD-OTC': 'USD/CAD',
     'EURGBP-OTC': 'EUR/GBP',
     'USDCHF-OTC': 'USD/CHF',
-    'XAUUSD-OTC': ' Gold',
+    'XAUUSD-OTC': '2. Gold',
     'BTCUSD-OTC-op': '₿ Bitcoin',
 };
 
@@ -106,7 +106,7 @@ export function pairKeyboard(page = 0, _tier?: string): IKMarkup {
     if (start + PAGE_SIZE < ALL_PAIRS.length) navRow.push({ text: 'More →️', callback_data: `page:${page + 1}` });
     if (navRow.length) rows.push(navRow);
 
-    rows.push([{ text: ' Cancel', callback_data: 'wizard:cancel' }]);
+    rows.push([{ text: '❌ Cancel', callback_data: 'wizard:cancel' }]);
     return { inline_keyboard: rows };
 }
 
@@ -130,7 +130,7 @@ export function signalPairKeyboard(page = 0): IKMarkup {
     if (start + PAGE_SIZE < ALL_PAIRS.length) navRow.push({ text: 'More →️', callback_data: `spage:${page + 1}` });
     if (navRow.length) rows.push(navRow);
 
-    rows.push([{ text: ' Cancel', callback_data: 'signals:cancel' }]);
+    rows.push([{ text: '❌ Cancel', callback_data: 'signals:cancel' }]);
     return { inline_keyboard: rows };
 }
 
@@ -142,7 +142,7 @@ export function signalTimeframeKeyboard(pair: string): IKMarkup {
         inline_keyboard: [
             row,
             [{ text: '⟵️ Back to assets', callback_data: 'ui:signals' }],
-            [{ text: ' Cancel', callback_data: 'signals:cancel' }],
+            [{ text: '❌ Cancel', callback_data: 'signals:cancel' }],
         ],
     };
 }
@@ -173,8 +173,8 @@ export function affiliateFailKeyboard(): IKMarkup {
     const adminLink = process.env.ADMIN_CONTACT_LINK ?? 'https://t.me/shiloh_is_10xing';
     return {
         inline_keyboard: [
-            [{ text: ' Create free account (takes 2 min)', url: affiliateLink }],
-            [{ text: ' Contact admin', url: adminLink }],
+            [{ text: '✦ Create free account (takes 2 min)', url: affiliateLink }],
+            [{ text: '✦ Contact admin', url: adminLink }],
         ],
     };
 }

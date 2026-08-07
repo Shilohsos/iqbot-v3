@@ -306,9 +306,9 @@ function getDailyStats(): string {
     const winRate = trades.total > 0 ? ((trades.wins / trades.total) * 100).toFixed(0) : '0';
 
     return [
-        `◆ *10x AI Daily Report*`,
+        `◆ *10x Bot Daily Report*`,
         ``,
-        ` *Users:* ${users.total} total | ✅ ${users.approved} approved | ··· ${users.pending} pending`,
+        `✦ *Users:* ${users.total} total | ✅ ${users.approved} approved | ··· ${users.pending} pending`,
         ``,
         `◆ *Today's Trades:* ${trades.total} total`,
         `• Wins: ${trades.wins} (${winRate}%)`,

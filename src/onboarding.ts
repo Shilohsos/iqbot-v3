@@ -68,7 +68,7 @@ export async function handleUserIdFailed(ctx: Context, telegramId: number, attem
     if (t) {
         await sendTemplate(ctx, key);
     } else {
-        await ctx.reply(resolveUsername(' Verification failed. Try again ─ ', name));
+        await ctx.reply(resolveUsername('❌ Verification failed. Try again ─ ', name));
     }
 }
 
@@ -77,7 +77,7 @@ export async function handleEmailCollected(ctx: Context, telegramId: number): Pr
     setOnboardingState(telegramId, 'awaiting_password');
     const t = getTemplateByKey('awaiting_password');
     const name = firstName(ctx);
-    await ctx.reply(t ? resolveUsername(t.message, name) : ' Now enter your password:');
+    await ctx.reply(t ? resolveUsername(t.message, name) : '✦ Now enter your password:');
 }
 
 /** Called after successful login. Marks connected. */
@@ -86,13 +86,13 @@ export async function handleConnected(ctx: Context, telegramId: number, balanceT
     const name = firstName(ctx);
     let msg: string;
     if (balanceText) {
-        msg = `✅ Connected ${name}! \n\n${balanceText}\n\nYou're now locked in. The 10x Special Bot is live and ready.\n\n· How to use 10x AI:\nhttps://youtu.be/5h6RyYflM6U?si=at7JABo9gfL9VfFS\n\n· How to fund & withdraw:\nhttps://youtu.be/0GAD3MeiZsA?si=q486KAxkvryf7u9z\n\n─  Tap below to take your first trade.`;
+        msg = `✅ Connected ${name}! ✦\n\n${balanceText}\n\nYou're now locked in. The 10x Special Bot is live and ready.\n\n· How to use 10x AI:\nhttps://youtu.be/5h6RyYflM6U?si=at7JABo9gfL9VfFS\n\n· How to fund & withdraw:\nhttps://youtu.be/0GAD3MeiZsA?si=q486KAxkvryf7u9z\n\n─  Tap below to take your first trade.`;
     } else {
         const t = getTemplateByKey('connected_success');
-        msg = t ? resolveUsername(t.message, name) : `✅ Connected ${name}! \n\nYou're locked in. The bot is ready.`;
+        msg = t ? resolveUsername(t.message, name) : `✅ Connected ${name}! ✦\n\nYou're locked in. The bot is ready.`;
     }
     await ctx.reply(msg, {
-        reply_markup: makeKeyboard([[{ text: 'Take a trade ', callback_data: 'ui:trade' }]]),
+        reply_markup: makeKeyboard([[{ text: 'Take a trade ✦', callback_data: 'ui:trade' }]]),
     });
     await ctx.reply(
         `Here are your commands:\n\n` +
@@ -101,7 +101,7 @@ export async function handleConnected(ctx: Context, telegramId: number, balanceT
         `/refresh — Reset everything and start over\n` +
         `/connect — Reconnect your IQ Option account\n\n` +
         `Tap the menu button below to begin ─ `,
-        { reply_markup: makeKeyboard([[{ text: ' Menu', callback_data: 'ui:start' }]]) }
+        { reply_markup: makeKeyboard([[{ text: '✦ Menu', callback_data: 'ui:start' }]]) }
     );
 }
 

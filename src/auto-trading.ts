@@ -191,9 +191,9 @@ class AutoRunner {
         const pnlFormatted = `${sign}${s.pnl.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${s.currency}`;
         const asset = this.assets[s.current_asset_index % this.assets.length];
         const statusEmoji = s.status === 'running' ? '🟢 Live' : s.status === 'paused' ? '🟡 Paused' : '⚪ Stopped';
-        const modeLabel = this.mode === 'demo' ? ' Demo' : ' Live';
+        const modeLabel = this.mode === 'demo' ? '✦ Demo' : '✦ Live';
         const text = [
-            ` *Autopilot* · ${statusEmoji} · ${modeLabel}`,
+            `✦ *Autopilot* · ${statusEmoji} · ${modeLabel}`,
             ``,
             `${asset} (${idx}/${this.assets.length}) · ${tfLabel(s.timeframe)} · ${s.gale_rounds}-round recovery`,
             `Trades: ${s.trades_done}   Scanned: ${s.evaluations}   P&L: ${pnlFormatted}`,
@@ -202,7 +202,7 @@ class AutoRunner {
         const extra = {
             parse_mode: 'Markdown',
             reply_markup: { inline_keyboard: [[
-                        { text: ' Pause', callback_data: 'auto:pause' },
+                        { text: '❚❚ Pause', callback_data: 'auto:pause' },
                         { text: '■ Stop', callback_data: 'auto:stop' },
                     ]] },
         };
@@ -250,7 +250,7 @@ class AutoRunner {
             return true;
         this.lastWsNotify = now;
         this.wsNotifiedPending = true;
-        await this.notify(' Autopilot —  Temporary connection issue with IQ Option.\n' +
+        await this.notify('✦ Autopilot — ✦ Temporary connection issue with IQ Option.\n' +
             'Your account is safe. Reconnecting in the background…');
         return true;
     }
@@ -282,7 +282,7 @@ class AutoRunner {
         setAutoSessionStatus(this.chatId, 'paused', 'demo_limit');
         stopDemoTimer(this.chatId);
         await this.notify(`· You've used your ${PRODUCT_LIMITS.auto_trading.dailyCap} minutes of demo Autopilot for today.\n\n` +
-            `Fund $${PRODUCT_LIMITS.auto_trading.unlockBalance}+ for limitless live trading. `, false);
+            `Fund $${PRODUCT_LIMITS.auto_trading.unlockBalance}+ for limitless live trading. ✦`, false);
     }
     // ── Analysis routing ──────────────────────────────────────────────────
     async analyzeAsset(asset, timeframeSec) {
@@ -318,7 +318,7 @@ class AutoRunner {
         catch (err) {
             logger.error('auto', `connect failed for ${this.chatId}: ${err instanceof Error ? err.message : err}`);
             setAutoSessionStatus(this.chatId, 'paused', 'connect_failed');
-            await this.notify(' Autopilot could not connect to your account. Reconnect and resume.', true);
+            await this.notify('✦ Autopilot could not connect to your account. Reconnect and resume.', true);
             engineUnregister(this.chatId);
             return;
         }
@@ -386,14 +386,14 @@ class AutoRunner {
                 catch (err) {
                     if (!(await this.reconnect(this.ssid))) {
                         setAutoSessionStatus(this.chatId, 'paused', 'reconnect_failed');
-                        await this.notify(' Autopilot paused — lost connection to your account. Resume when ready.', true);
+                        await this.notify('✦ Autopilot paused — lost connection to your account. Resume when ready.', true);
                         break;
                     }
                     continue;
                 }
                 if (balance < s.amount) {
                     setAutoSessionStatus(this.chatId, 'paused', 'insufficient_balance');
-                    await this.notify(` Autopilot paused — balance ${balance.toFixed(2)} ${s.currency} is below your ${s.amount} ${s.currency} stake. Fund and resume.`, true);
+                    await this.notify(`✦ Autopilot paused — balance ${balance.toFixed(2)} ${s.currency} is below your ${s.amount} ${s.currency} stake. Fund and resume.`, true);
                     break;
                 }
                 // Skip an asset that already has an open position (the 1-position
@@ -476,7 +476,7 @@ class AutoRunner {
                     const msg = err instanceof Error ? err.message : String(err);
                     if (/auth|ssid|unauthor|401/i.test(msg) && !(await this.reconnect(this.ssid))) {
                         setAutoSessionStatus(this.chatId, 'paused', 'reconnect_failed');
-                        await this.notify(' Autopilot paused — your session expired. Reconnect and resume.', true);
+                        await this.notify('✦ Autopilot paused — your session expired. Reconnect and resume.', true);
                         break;
                     }
                     if (await this.maybeNotifyWsError(msg)) {
@@ -541,7 +541,7 @@ class AutoRunner {
                     const isConnErr = /auth|ssid|unauthor|401|websocket|is closing|not open|timeout/i.test(msg);
                     if (isConnErr && !(await this.reconnect(this.ssid))) {
                         setAutoSessionStatus(this.chatId, 'paused', 'reconnect_failed');
-                        await this.notify(' Autopilot paused — lost connection to your account. Resume when ready.', true);
+                        await this.notify('✦ Autopilot paused — lost connection to your account. Resume when ready.', true);
                         break;
                     }
                     // Rotate off the failing asset and bound consecutive failures so a
@@ -550,7 +550,7 @@ class AutoRunner {
                     consecutiveErrors++;
                     if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
                         setAutoSessionStatus(this.chatId, 'paused', 'repeated_errors');
-                        await this.notify(' Autopilot paused — repeated errors (likely a temporary connection issue). Tap Resume to try again.', true);
+                        await this.notify('✦ Autopilot paused — repeated errors (likely a temporary connection issue). Tap Resume to try again.', true);
                         break;
                     }
                     await new Promise(r => setTimeout(r, 3000));
@@ -569,7 +569,7 @@ class AutoRunner {
                     logger.warn('auto', `trade ${outcome.status} for ${this.chatId} — consecutive=${consecutiveErrors}`);
                     if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
                         setAutoSessionStatus(this.chatId, 'paused', 'repeated_timeouts');
-                        await this.notify(' Autopilot paused — trades kept timing out (likely a temporary connection issue). Tap Resume to try again.', true);
+                        await this.notify('✦ Autopilot paused — trades kept timing out (likely a temporary connection issue). Tap Resume to try again.', true);
                         break;
                     }
                 }

@@ -606,7 +606,7 @@ db.exec(`
     if (!tmplCols.includes('button_callback'))
         db.exec('ALTER TABLE templates ADD COLUMN button_callback TEXT');
 }
-//  KILLED 2026-08-07: auto-broadcast seed removed per Master — no automatic broadcasts.
+// ✕ KILLED 2026-08-07: auto-broadcast seed removed per Master — no automatic broadcasts.
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS channel_approvals (
@@ -693,11 +693,11 @@ db.exec(`
         const templates: [string, string][] = [
             ['persuasion', "Giveaway is still on — you still have a chance to win *${prize_per_winner}*. Don't sit this one out ─ "],
             ['urgency',    "··· Winners will be selected soon. You can still participate and claim your share of *${prize_pool}*."],
-            ['social_proof', " *${count}* traders already joined this giveaway. Every second you wait = less chance to win."],
+            ['social_proof', "✦ *${count}* traders already joined this giveaway. Every second you wait = less chance to win."],
             ['persuasion', "Someone's going to win *${prize_per_winner}*. Why not you? Join now ─ "],
             ['urgency',    "⚠️ Last chance! Winners picked in *${time_left}*. Tap Participate now."],
-            ['social_proof', " *${recent_winner}* just claimed a prize last giveaway. This could be you next."],
-            ['persuasion', "Trade more, win more. The *${title}* giveaway rewards the most active traders "],
+            ['social_proof', "✦ *${recent_winner}* just claimed a prize last giveaway. This could be you next."],
+            ['persuasion', "Trade more, win more. The *${title}* giveaway rewards the most active traders 1."],
             ['urgency',    "Not in yet? *${spots_left}* winners will split *${prize_pool}*. Your move ─ "],
         ];
         const ins = db.prepare('INSERT INTO motivational_messages (category, content) VALUES (?, ?)');

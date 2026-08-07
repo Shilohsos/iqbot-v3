@@ -68,7 +68,7 @@ export async function recoverMissedTradeResults(bot, runMartingaleFn) {
                     const galeRow = db.prepare("SELECT id, log_msg_id, current_round, effective_rounds, current_amount, base_amount, direction, balance_type, currency, timeframe_sec, total_pnl FROM gale_sessions WHERE telegram_id=? AND pair=? AND status IN ('active','resuming') ORDER BY id DESC LIMIT 1").get(row.telegram_id, row.pair);
                     if (galeRow && galeRow.log_msg_id) {
                         const emoji = dbStatus === 'WIN' ? '🟢' : dbStatus === 'LOSS' ? '🔴' : '⚪';
-                        const cardText = ` Trade session\n Trade ${galeRow.current_round}|${emoji} ${row.amount.toFixed(2)} ${currency} → ${dbStatus} ${pnlStr}\n_Recovered_`;
+                        const cardText = `✦ Trade session\n✦ Trade ${galeRow.current_round}|${emoji} ${row.amount.toFixed(2)} ${currency} → ${dbStatus} ${pnlStr}\n_Recovered_`;
                         await bot.telegram.editMessageText(row.telegram_id, galeRow.log_msg_id, undefined, cardText).catch(() => {});
                     }
                 } catch { /* */ }
@@ -165,7 +165,7 @@ export async function recoverMissedTradeResults(bot, runMartingaleFn) {
                                 } else {
                                     db.prepare("UPDATE gale_sessions SET status='completed' WHERE id=?").run(galeRow.id);
                                     await bot.telegram.sendMessage(row.telegram_id, '⚠️ Session expired. Reconnect ─ ',
-                                        { reply_markup: { inline_keyboard: [[{ text: ' Reconnect', callback_data: 'ui:connect' }]] } });
+                                        { reply_markup: { inline_keyboard: [[{ text: '✦ Reconnect', callback_data: 'ui:connect' }]] } });
                                 }
                             }
                         }

@@ -5,15 +5,15 @@
 export function startKeyboard(_accessLevel?: string) {
     const supportUrl = process.env.ADMIN_CONTACT_LINK ?? 'https://t.me/shiloh_is_10xing';
     const aiBtn = { text: '⟡ Private Trader', callback_data: 'ui:trade' };
-    const autoBtn = { text: ' Autopilot', callback_data: 'ui:auto' };
+    const autoBtn = { text: '✦ Autopilot', callback_data: 'ui:auto' };
     const rows = [
         [{ text: '· Signals', callback_data: 'ui:signals' }, aiBtn],
         [autoBtn],
         [{ text: '◆ Copy Trading', callback_data: 'ui:copy' }],
         [{ text: '⟢ 10x Yacht Club', callback_data: 'ui:yacht' }],
         [
-            { text: ' Help & FAQ', callback_data: 'ui:help' },
-            { text: ' Support', url: supportUrl },
+            { text: '❖ Help & FAQ', callback_data: 'ui:help' },
+            { text: '✆ Support', url: supportUrl },
         ],
     ];
     return { inline_keyboard: rows };

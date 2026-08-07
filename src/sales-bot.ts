@@ -41,10 +41,10 @@ function isSunday(): boolean {
 
 function maskedNotice(kpi: { ftd: number; redep: number }, contest: { prize: number; description: string }): string {
     return (
-        ` *Stats hidden until Sunday*\n\n` +
-        ` KPI Target: ${kpi.ftd || '—'} FTDs / $${kpi.redep || '—'} Redep Volume\n` +
-        (contest.prize ? ` Contest Prize: ₦${contest.prize.toLocaleString()}\n` : '') +
-        `\nTeam statistics are revealed every Sunday. Keep closing! `
+        `✦ *Stats hidden until Sunday*\n\n` +
+        `✦ KPI Target: ${kpi.ftd || '—'} FTDs / $${kpi.redep || '—'} Redep Volume\n` +
+        (contest.prize ? `1. Contest Prize: ₦${contest.prize.toLocaleString()}\n` : '') +
+        `\nTeam statistics are revealed every Sunday. Keep closing! ✦`
     );
 }
 
@@ -88,17 +88,17 @@ export function createSalesBot(token: string): Telegraf {
         const contest = getContestConfig();
 
         ctx.reply(
-            ` *Admin Panel*\n━━━━━━━━━━━━━━━━━\n\n` +
-            ` KPI Targets: ${kpi.ftd || '—'} FTDs / $${kpi.redep || '—'} Redep Volume\n` +
-            ` Contest Prize: ${contest.prize ? `₦${contest.prize.toLocaleString()}` : 'Not set'}\n\n` +
+            `✦ *Admin Panel*\n━━━━━━━━━━━━━━━━━\n\n` +
+            `✦ KPI Targets: ${kpi.ftd || '—'} FTDs / $${kpi.redep || '—'} Redep Volume\n` +
+            `1. Contest Prize: ${contest.prize ? `₦${contest.prize.toLocaleString()}` : 'Not set'}\n\n` +
             `Select an action:`,
             {
                 parse_mode: 'Markdown',
                 reply_markup: {
                     inline_keyboard: [
                         [{ text: '◆ View Progress', callback_data: 'admin:progress' }],
-                        [{ text: ' Set KPI Targets', callback_data: 'admin:setkpi' }],
-                        [{ text: ' Set Contest Prize', callback_data: 'admin:setcontest' }],
+                        [{ text: '✦ Set KPI Targets', callback_data: 'admin:setkpi' }],
+                        [{ text: '1. Set Contest Prize', callback_data: 'admin:setcontest' }],
                         [{ text: '◆ Weekly Report', callback_data: 'admin:weekly' }],
                         [{ text: '◆ Leaderboard', callback_data: 'admin:leaderboard' }],
                     ],
@@ -125,7 +125,7 @@ export function createSalesBot(token: string): Telegraf {
     // ─── Weekly Report (admin only — always real for admin) ──────────────────
     bot.command('weekly', (ctx) => {
         if (!isAdmin(ctx)) {
-            ctx.reply(' Admin only.');
+            ctx.reply('✕ Admin only.');
             return;
         }
 
@@ -140,7 +140,7 @@ export function createSalesBot(token: string): Telegraf {
 
         for (let i = 0; i < report.reps.length; i++) {
             const r = report.reps[i];
-            const medal = i === 0 ? '' : i === 1 ? '' : i === 2 ? '' : '';
+            const medal = i === 0 ? '2.' : i === 1 ? '3.' : i === 2 ? '4.' : '';
             text += `${medal} *${r.name}* — ${r.ftd_count} FTDs · Redep Volume $${r.redep_volume.toFixed(2)}\n\n`;
         }
 
@@ -163,22 +163,22 @@ export function createSalesBot(token: string): Telegraf {
         const report = getWeeklyReport();
 
         if (report.total_ftds === 0 && report.total_redeps === 0) {
-            ctx.reply(` *Weekly Contest — Deposit Volume*\n\n_No deposits logged yet this week._`, { parse_mode: 'Markdown' });
+            ctx.reply(`1. *Weekly Contest — Deposit Volume*\n\n_No deposits logged yet this week._`, { parse_mode: 'Markdown' });
             return;
         }
 
         const contest = getContestConfig();
-        let text = ` *Weekly Contest — FTD Events* — ranked by most FTDs\n`;
+        let text = `1. *Weekly Contest — FTD Events* — ranked by most FTDs\n`;
         if (contest.prize > 0) {
-            text += ` Prize: ₦${contest.prize.toLocaleString()}\n`;
+            text += `✦ Prize: ₦${contest.prize.toLocaleString()}\n`;
         }
         text += `\n`;
         for (let i = 0; i < report.reps.length; i++) {
             const r = report.reps[i];
-            const medal = i === 0 ? '' : i === 1 ? '' : '';
+            const medal = i === 0 ? '2.' : i === 1 ? '3.' : '4.';
             text += `${medal} *${r.name}* — ${r.ftd_count} FTDs · Redep Volume $${r.redep_volume.toFixed(2)}\n`;
         }
-        text += `\n Total redep volume this week: $${report.reps.reduce((s, r) => s + r.redep_volume, 0).toFixed(2)}\n`;
+        text += `\n✦ Total redep volume this week: $${report.reps.reduce((s, r) => s + r.redep_volume, 0).toFixed(2)}\n`;
         text += `· Week ending: ${report.week_end}`;
 
         ctx.reply(text, { parse_mode: 'Markdown' });
@@ -215,7 +215,7 @@ export function createSalesBot(token: string): Telegraf {
     // ─── Recent (admin) ──────────────────────────────────────────────────────
     bot.command('recent', (ctx) => {
         if (!isAdmin(ctx)) {
-            ctx.reply(' Admin only.');
+            ctx.reply('✕ Admin only.');
             return;
         }
 
@@ -255,7 +255,7 @@ export function createSalesBot(token: string): Telegraf {
 
         if (events.length === 0) {
             ctx.reply(
-                ` No unclaimed funding events found for User ID *${iqUserId}*.\n\n` +
+                `❌ No unclaimed funding events found for User ID *${iqUserId}*.\n\n` +
                 `They may not have funded yet, or the event was already claimed.`,
                 { parse_mode: 'Markdown', reply_parameters: { message_id: ctx.message.message_id } }
             );
@@ -326,7 +326,7 @@ export function createSalesBot(token: string): Telegraf {
                 reply_markup: {
                     inline_keyboard: [[
                         { text: '✅ Confirm', callback_data: `confirm:${eventId}:${repName}` },
-                        { text: ' Cancel', callback_data: `cancel:${eventId}` },
+                        { text: '❌ Cancel', callback_data: `cancel:${eventId}` },
                     ]],
                 },
             }
@@ -383,7 +383,7 @@ export function createSalesBot(token: string): Telegraf {
         const key = `${ctx.chat?.id}:${eventId}`;
         pendingConfirmations.delete(key);
 
-        await ctx.editMessageText(' Cancelled. Lead was *not* logged.', { parse_mode: 'Markdown' });
+        await ctx.editMessageText('❌ Cancelled. Lead was *not* logged.', { parse_mode: 'Markdown' });
         await ctx.answerCbQuery();
     });
 
@@ -391,7 +391,7 @@ export function createSalesBot(token: string): Telegraf {
 
     // Admin: View Progress (always real for admin)
     bot.action('admin:progress', async (ctx) => {
-        if (!isAdmin(ctx)) { await ctx.answerCbQuery(' Admin only.'); return; }
+        if (!isAdmin(ctx)) { await ctx.answerCbQuery('✕ Admin only.'); return; }
 
         const kpi = getKpiTargets();
         const contest = getContestConfig();
@@ -416,17 +416,17 @@ export function createSalesBot(token: string): Telegraf {
 
     // Admin: Set KPI — step 1: ask for FTD target
     bot.action('admin:setkpi', async (ctx) => {
-        if (!isAdmin(ctx)) { await ctx.answerCbQuery(' Admin only.'); return; }
+        if (!isAdmin(ctx)) { await ctx.answerCbQuery('✕ Admin only.'); return; }
         const kpi = getKpiTargets();
         adminState.set(ctx.chat!.id!, { action: 'setkpi', step: 1 });
 
         await ctx.editMessageText(
-            ` *Set Weekly KPI Targets*\n\n` +
+            `✦ *Set Weekly KPI Targets*\n\n` +
             `Current: ${kpi.ftd || '—'} FTDs / $${kpi.redep || '—'} Redep Volume\n\n` +
             `Send the *FTD target* (number only):`,
             {
                 parse_mode: 'Markdown',
-                reply_markup: { inline_keyboard: [[{ text: ' Cancel', callback_data: 'admin:menu' }]] },
+                reply_markup: { inline_keyboard: [[{ text: '❌ Cancel', callback_data: 'admin:menu' }]] },
             }
         );
         await ctx.answerCbQuery();
@@ -434,18 +434,18 @@ export function createSalesBot(token: string): Telegraf {
 
     // Admin: Set Contest — step 1: ask for prize amount
     bot.action('admin:setcontest', async (ctx) => {
-        if (!isAdmin(ctx)) { await ctx.answerCbQuery(' Admin only.'); return; }
+        if (!isAdmin(ctx)) { await ctx.answerCbQuery('✕ Admin only.'); return; }
         const contest = getContestConfig();
         adminState.set(ctx.chat!.id!, { action: 'setcontest', step: 1 });
 
         await ctx.editMessageText(
-            ` *Set Weekly Contest Prize*\n\n` +
+            `1. *Set Weekly Contest Prize*\n\n` +
             `Current: ${contest.prize ? `₦${contest.prize.toLocaleString()}` : 'Not set'}\n` +
             (contest.description ? `Description: ${contest.description}\n` : '') +
             `\nSend the *prize amount* in Naira (number only):`,
             {
                 parse_mode: 'Markdown',
-                reply_markup: { inline_keyboard: [[{ text: ' Cancel', callback_data: 'admin:menu' }]] },
+                reply_markup: { inline_keyboard: [[{ text: '❌ Cancel', callback_data: 'admin:menu' }]] },
             }
         );
         await ctx.answerCbQuery();
@@ -453,7 +453,7 @@ export function createSalesBot(token: string): Telegraf {
 
     // Admin: Weekly Report (always real for admin)
     bot.action('admin:weekly', async (ctx) => {
-        if (!isAdmin(ctx)) { await ctx.answerCbQuery(' Admin only.'); return; }
+        if (!isAdmin(ctx)) { await ctx.answerCbQuery('✕ Admin only.'); return; }
 
         const report = getWeeklyReport();
 
@@ -464,7 +464,7 @@ export function createSalesBot(token: string): Telegraf {
             text = `◆ *Weekly KPI Report*\n${report.week_start} → ${report.week_end}\n\n`;
             for (let i = 0; i < report.reps.length; i++) {
                 const r = report.reps[i];
-                const medal = i === 0 ? '' : i === 1 ? '' : '';
+                const medal = i === 0 ? '2.' : i === 1 ? '3.' : '4.';
                 text += `${medal} *${r.name}* — ${r.ftd_count} FTDs · Redep Volume $${r.redep_volume.toFixed(2)}\n`;
             }
             const totalRedepVol = report.reps.reduce((s, r) => s + r.redep_volume, 0);
@@ -480,16 +480,16 @@ export function createSalesBot(token: string): Telegraf {
 
     // Admin: Leaderboard (always real for admin)
     bot.action('admin:leaderboard', async (ctx) => {
-        if (!isAdmin(ctx)) { await ctx.answerCbQuery(' Admin only.'); return; }
+        if (!isAdmin(ctx)) { await ctx.answerCbQuery('✕ Admin only.'); return; }
 
         const report = getWeeklyReport();
-        let text = ` *Weekly Contest — FTD Events*\n\n`;
+        let text = `1. *Weekly Contest — FTD Events*\n\n`;
         if (report.total_ftds === 0 && report.total_redeps === 0) {
             text += '_No leads yet this week._';
         } else {
             for (let i = 0; i < report.reps.length; i++) {
                 const r = report.reps[i];
-                const medal = i === 0 ? '' : i === 1 ? '' : '';
+                const medal = i === 0 ? '2.' : i === 1 ? '3.' : '4.';
                 text += `${medal} *${r.name}* — ${r.ftd_count} FTDs · Redep Volume $${r.redep_volume.toFixed(2)}\n`;
             }
         }
@@ -508,17 +508,17 @@ export function createSalesBot(token: string): Telegraf {
         const contest = getContestConfig();
 
         await ctx.editMessageText(
-            ` *Admin Panel*\n━━━━━━━━━━━━━━━━━\n\n` +
-            ` KPI Targets: ${kpi.ftd || '—'} FTDs / $${kpi.redep || '—'} Redep Volume\n` +
-            ` Contest Prize: ${contest.prize ? `₦${contest.prize.toLocaleString()}` : 'Not set'}\n\n` +
+            `✦ *Admin Panel*\n━━━━━━━━━━━━━━━━━\n\n` +
+            `✦ KPI Targets: ${kpi.ftd || '—'} FTDs / $${kpi.redep || '—'} Redep Volume\n` +
+            `1. Contest Prize: ${contest.prize ? `₦${contest.prize.toLocaleString()}` : 'Not set'}\n\n` +
             `Select an action:`,
             {
                 parse_mode: 'Markdown',
                 reply_markup: {
                     inline_keyboard: [
                         [{ text: '◆ View Progress', callback_data: 'admin:progress' }],
-                        [{ text: ' Set KPI Targets', callback_data: 'admin:setkpi' }],
-                        [{ text: ' Set Contest Prize', callback_data: 'admin:setcontest' }],
+                        [{ text: '✦ Set KPI Targets', callback_data: 'admin:setkpi' }],
+                        [{ text: '1. Set Contest Prize', callback_data: 'admin:setcontest' }],
                         [{ text: '◆ Weekly Report', callback_data: 'admin:weekly' }],
                         [{ text: '◆ Leaderboard', callback_data: 'admin:leaderboard' }],
                     ],
@@ -549,7 +549,7 @@ export function createSalesBot(token: string): Telegraf {
                 adminState.set(chatId, state);
                 ctx.reply(`FTD target: *${ftd}*\nNow send the *Redeposit volume target* in USD (number only):`, {
                     parse_mode: 'Markdown',
-                    reply_markup: { inline_keyboard: [[{ text: ' Cancel', callback_data: 'admin:menu' }]] },
+                    reply_markup: { inline_keyboard: [[{ text: '❌ Cancel', callback_data: 'admin:menu' }]] },
                 });
                 return;
             }
@@ -563,7 +563,7 @@ export function createSalesBot(token: string): Telegraf {
                 adminState.delete(chatId);
                 ctx.reply(
                     `✅ *KPI Targets Updated!*\n\n` +
-                    ` ${state.ftd} FTDs / $${redep} Redep Volume per week`,
+                    `✦ ${state.ftd} FTDs / $${redep} Redep Volume per week`,
                     {
                         parse_mode: 'Markdown',
                         reply_markup: { inline_keyboard: [[{ text: '⟵ Back to Menu', callback_data: 'admin:menu' }]] },
@@ -585,7 +585,7 @@ export function createSalesBot(token: string): Telegraf {
                 adminState.set(chatId, state);
                 ctx.reply(`Prize: *₦${prize.toLocaleString()}*\nNow send a *description* (or send \`-\` to skip):`, {
                     parse_mode: 'Markdown',
-                    reply_markup: { inline_keyboard: [[{ text: ' Cancel', callback_data: 'admin:menu' }]] },
+                    reply_markup: { inline_keyboard: [[{ text: '❌ Cancel', callback_data: 'admin:menu' }]] },
                 });
                 return;
             }
@@ -595,7 +595,7 @@ export function createSalesBot(token: string): Telegraf {
                 adminState.delete(chatId);
                 ctx.reply(
                     `✅ *Contest Prize Updated!*\n\n` +
-                    ` ₦${state.ftd!.toLocaleString()}` +
+                    `1. ₦${state.ftd!.toLocaleString()}` +
                     (desc ? ` — ${desc}` : ''),
                     {
                         parse_mode: 'Markdown',
@@ -615,14 +615,14 @@ export function createSalesBot(token: string): Telegraf {
         const kpi = getKpiTargets();
         const contest = getContestConfig();
 
-        let text = `◆ *SUNDAY TEAM RESULTS* \n${report.week_start} → ${report.week_end}\n\n`;
+        let text = `◆ *SUNDAY TEAM RESULTS* 1.\n${report.week_start} → ${report.week_end}\n\n`;
 
         if (report.total_ftds === 0 && report.total_redeps === 0) {
             text += `_No leads claimed this week._`;
         } else {
             for (let i = 0; i < report.reps.length; i++) {
                 const r = report.reps[i];
-                const medal = i === 0 ? '' : i === 1 ? '' : i === 2 ? '' : '';
+                const medal = i === 0 ? '2.' : i === 1 ? '3.' : i === 2 ? '4.' : '';
                 text += `${medal} *${r.name}* — ${r.ftd_count} FTDs · Redep Volume $${r.redep_volume.toFixed(2)}\n\n`;
             }
             const totalRedepVol = report.reps.reduce((s, r) => s + r.redep_volume, 0);
@@ -630,9 +630,9 @@ export function createSalesBot(token: string): Telegraf {
             text += `Total: ${report.total_ftds} FTDs + $${totalRedepVol.toFixed(2)} redep volume\n`;
         }
 
-        text += `\n Target: ${kpi.ftd || '—'} FTDs / $${kpi.redep || '—'} Redep Volume`;
+        text += `\n✦ Target: ${kpi.ftd || '—'} FTDs / $${kpi.redep || '—'} Redep Volume`;
         if (contest.prize) {
-            text += `\n Prize: ₦${contest.prize.toLocaleString()}`;
+            text += `\n1. Prize: ₦${contest.prize.toLocaleString()}`;
         }
 
         // Send to admin + shared rep account + all registered teams
