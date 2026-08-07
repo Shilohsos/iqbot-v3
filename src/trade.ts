@@ -1,13 +1,17 @@
+/**
+ * Trade facade — Upgrade Phase 2.
+ * All settlement goes through trade-core. TIMEOUT is never a gale input.
+ */
 import {
     ClientSdk,
     SsidAuthMethod,
-    BlitzOptionsDirection,
-    BalanceType,
     type Positions,
     type Position,
 } from './index.js';
 import { WS_URL, PLATFORM_ID, IQ_HOST } from './protocol.js';
-import { db } from './db.js';
+import { settle, type CoreFinal, type FinalStatus } from './trade-core.js';
+import { runGale } from './gale-engine.js';
+import { logger } from './logger.js';
 
 export interface TradeRequest {
     pair: string;
@@ -19,118 +23,52 @@ export interface TradeRequest {
     telegramId?: number;
 }
 
+/** Legacy shape kept for bot/auto compatibility. NO_FILL maps from core. TIMEOUT never emitted. */
 export interface TradeResult {
-    status: 'WIN' | 'LOSS' | 'TIE' | 'TIMEOUT' | 'ERROR';
+    status: 'WIN' | 'LOSS' | 'TIE' | 'TIMEOUT' | 'ERROR' | 'NO_FILL';
     pnl: number;
     tradeId: number;
     pair: string;
     direction: string;
     amount: number;
     error?: string;
+    settleSource?: string;
+    settleMs?: number;
+    externalId?: number;
 }
 
-const normTicker = (s: string) => s.toUpperCase().replace(/^front\./i, '').replace(/[-/\s]/g, '');
+function coreToLegacy(f: CoreFinal): TradeResult {
+    // Map NO_FILL → ERROR for older UI branches that only know ERROR, but keep NO_FILL too.
+    return {
+        status: f.status === 'NO_FILL' ? 'NO_FILL' : f.status,
+        pnl: f.pnl,
+        tradeId: f.tradeId,
+        pair: f.pair,
+        direction: f.direction,
+        amount: f.amount,
+        error: f.error,
+        settleSource: f.settleSource,
+        settleMs: f.settleMs,
+        externalId: f.externalId,
+    };
+}
 
 /**
- * Runs a single trade on an already-authenticated SDK instance.
- * The caller owns the SDK lifecycle (connect / shutdown).
- * Catches SDK-internal TimeoutError and converts it to an ERROR result
- * so the martingale loop can handle it gracefully instead of crashing.
- *
- * All timeframes (30s / 60s / 300s) execute via BlitzOptions.
+ * Single-round settle via TradeCore. Never returns TIMEOUT.
  */
 export async function executeTradeWithSdk(sdk: ClientSdk, trade: TradeRequest): Promise<TradeResult> {
-    let optionId: number | undefined;
-    try {
-        // sdk.positions() is cached after the first call — safe to call every round.
-        const positions = await sdk.positions();
-
-        const balances = await sdk.balances();
-        const wantLive = trade.balanceType === 'live';
-        let selectedBalance = balances.getBalances().find(b =>
-            b.type === (wantLive ? BalanceType.Real : BalanceType.Demo)
-        );
-        // Fallback for accounts whose balance typeId the SDK doesn't map (e.g. NGN)
-        if (!selectedBalance) {
-            selectedBalance = wantLive
-                ? balances.getBalances().find(b => b.type === undefined || b.type === BalanceType.Real)
-                : balances.getBalances().find(b => b.type === undefined || b.type === BalanceType.Demo);
-        }
-        if (!selectedBalance) return errorResult(trade, wantLive ? 'No real balance found' : 'No demo balance found');
-
-        const currentTime = sdk.currentTime();
-        const targetSize = trade.timeframeSec ?? 60;
-        const normalizedInput = normTicker(trade.pair);
-
-        const blitzOptions = await sdk.blitzOptions();
-        const active = blitzOptions.getActives().find(a =>
-            normTicker(a.ticker) === normalizedInput ||
-            normTicker(a.localizationKey) === normalizedInput
-        );
-        if (!active) return errorResult(trade, `Unknown pair: ${trade.pair}`);
-        if (!active.canBeBoughtAt(currentTime)) return errorResult(trade, `${trade.pair} market is closed right now`);
-        if (!active.expirationTimes.includes(targetSize)) return errorResult(trade, `No ${targetSize}s instrument available for ${trade.pair}`);
-
-        const dir = trade.direction === 'call' ? BlitzOptionsDirection.Call : BlitzOptionsDirection.Put;
-        const option = await blitzOptions.buy(active, dir, targetSize, trade.amount, selectedBalance);
-        optionId = option.id;
-
-        // Persist in-flight immediately — so a restart doesn't orphan the trade.
-        const nowSql = new Date().toISOString();
-        if (trade.telegramId != null) {
-            db.prepare(`INSERT OR IGNORE INTO users (telegram_id, created_at, last_used) VALUES (?, datetime('now'), datetime('now'))`)
-                .run(trade.telegramId);
-        }
-        db.prepare(`INSERT INTO trades (telegram_id, pair, direction, amount, status, trade_id, created_at)
-                     VALUES (?, ?, ?, ?, 'in_flight', ?, ?)`)
-            .run(trade.telegramId ?? null, trade.pair, trade.direction, trade.amount, optionId, nowSql);
-
-        // Save external_id as soon as the position appears so crash recovery can find it.
-        const optId = optionId!; // narrowed for closure
-        const saveExtId = setInterval(() => {
-            const match = positions.getOpenedPositions().find(p => p.orderIds.includes(optId));
-            const extId: number | undefined = match?.externalId;
-            if (extId != null) {
-                db.prepare('UPDATE trades SET external_id = ? WHERE trade_id = ? AND status = ?')
-                    .run(extId, optId, 'in_flight');
-                clearInterval(saveExtId);
-            }
-        }, 500);
-        setTimeout(() => clearInterval(saveExtId), 15_000);
-
-        const result = await waitForResult(positions, option.id, targetSize + 90);
-        clearInterval(saveExtId);
-        const tradeResult: TradeResult = {
-            ...result,
-            tradeId: option.id,
-            pair: trade.pair,
-            direction: trade.direction,
-            amount: trade.amount,
-        };
-
-        // Update the in-flight row with the final outcome.
-        db.prepare(`UPDATE trades SET status = ?, pnl = ?, external_id = ?, error = NULL
-                     WHERE trade_id = ? AND status = 'in_flight'`)
-            .run(tradeResult.status, tradeResult.pnl, result.externalId ?? null, optionId);
-
-        return tradeResult;
-    } catch (err: unknown) {
-        // Mark any in-flight row as ERROR so recovery doesn't leave it dangling.
-        if (optionId != null) {
-            db.prepare(`UPDATE trades SET status = 'ERROR', error = ? WHERE trade_id = ? AND status = 'in_flight'`)
-                .run(err instanceof Error ? err.message : String(err), optionId);
-        }
-        if (isTimeoutError(err)) {
-            return errorResult(trade, 'IQ Option timed out');
-        }
-        const msg = err instanceof Error ? err.message : String(err);
-        return errorResult(trade, msg);
-    }
+    const final = await settle(sdk, {
+        pair: trade.pair,
+        direction: trade.direction,
+        amount: trade.amount,
+        timeframeSec: trade.timeframeSec,
+        balanceType: trade.balanceType,
+        telegramId: trade.telegramId,
+        martingaleRunId: trade.martingaleRunId,
+    });
+    return coreToLegacy(final);
 }
 
-/**
- * One-shot trade — fresh connection per call, shut down when done.
- */
 export async function executeTrade(ssid: string, trade: TradeRequest): Promise<TradeResult> {
     let sdk: ClientSdk;
     try {
@@ -141,13 +79,21 @@ export async function executeTrade(ssid: string, trade: TradeRequest): Promise<T
             ),
         ]);
     } catch (err: unknown) {
-        if (isTimeoutError(err)) return errorResult(trade, 'Connection timed out');
-        throw err;
+        const msg = err instanceof Error ? err.message : String(err);
+        return {
+            status: 'NO_FILL',
+            pnl: 0,
+            tradeId: 0,
+            pair: trade.pair,
+            direction: trade.direction,
+            amount: trade.amount,
+            error: msg.includes('timed out') ? 'Connection timed out' : msg,
+        };
     }
     try {
         return await executeTradeWithSdk(sdk, trade);
     } finally {
-        await sdk.shutdown();
+        try { await sdk.shutdown(); } catch { /* */ }
     }
 }
 
@@ -160,160 +106,71 @@ export interface MartingaleParams {
     direction: 'call' | 'put';
     amount: number;
     timeframeSec: number;
-    galeRounds: number;            // 0 = no recovery (single trade)
+    galeRounds: number;
     balanceType: 'demo' | 'live';
     telegramId?: number;
-    cooldownMs?: number;           // wait between recovery rounds
+    cooldownMs?: number;
 }
 
 export interface MartingaleRoundInfo {
-    round: number;                 // 1-based
+    round: number;
     amount: number;
     result: TradeResult;
 }
 
 export interface MartingaleOutcome {
-    status: 'WIN' | 'LOSS' | 'TIE' | 'ERROR' | 'TIMEOUT';
+    status: 'WIN' | 'LOSS' | 'TIE' | 'ERROR' | 'TIMEOUT' | 'NO_FILL';
     totalPnl: number;
-    rounds: number;                // rounds actually executed
+    rounds: number;
 }
 
 /**
- * UI-free martingale runner: executes a trade on an already-connected SDK and
- * doubles the stake on loss until a win/tie, an error, or `galeRounds` recovery
- * rounds are exhausted. Shared execution primitive (`executeTradeWithSdk`) with
- * the Telegram-coupled runMartingale in bot.ts. The optional `onRound` callback
- * lets callers render progress without this function knowing about Telegram.
+ * Auto/Swarm/Copy entry — GaleEngine over TradeCore.
+ * Never doubles on unconfirmed settlement.
  */
 export async function runMartingaleCore(
     sdk: ClientSdk,
     params: MartingaleParams,
     onRound?: (info: MartingaleRoundInfo) => void | Promise<void>,
 ): Promise<MartingaleOutcome> {
-    const runId = crypto.randomUUID();
-    const cooldownMs = params.cooldownMs ?? 2000;
-    let currentAmount = params.amount;
-    let totalPnl = 0;
-
-    for (let round = 1; round <= params.galeRounds + 1; round++) {
-        const roundTrade: TradeRequest = {
-            pair: params.pair,
-            direction: params.direction,
-            amount: currentAmount,
-            martingaleRunId: runId,
-            timeframeSec: params.timeframeSec,
-            balanceType: params.balanceType,
-            telegramId: params.telegramId,
-        };
-
-        const result = await executeTradeWithSdk(sdk, roundTrade);
-        await onRound?.({ round, amount: currentAmount, result });
-
-        if (result.status === 'WIN' || result.status === 'TIE') {
-            // Gale losses are recovery rounds — only the final outcome affects P&L
-            totalPnl = result.status === 'WIN' ? (result.pnl - currentAmount) : 0;
-            return { status: result.status, totalPnl, rounds: round };
-        }
-        if (result.status === 'ERROR' || result.status === 'TIMEOUT') {
-            return { status: result.status, totalPnl, rounds: round };
-        }
-
-        // LOSS
-        totalPnl -= currentAmount;
-        if (round <= params.galeRounds) {
-            currentAmount *= 2;
-            if (cooldownMs > 0) await new Promise(r => setTimeout(r, cooldownMs));
-        }
-    }
-
-    return { status: 'LOSS', totalPnl, rounds: params.galeRounds + 1 };
-}
-
-function isTimeoutError(err: unknown): boolean {
-    if (!(err instanceof Error)) return false;
-    return err.name === 'TimeoutError' || err.message.includes('timed out') || err.message.includes('TimeoutError');
-}
-
-export function waitForResult(
-    positions: Positions,
-    optionId: number,
-    timeoutSeconds: number,
-): Promise<Pick<TradeResult, 'status' | 'pnl' | 'error'> & { externalId?: number }> {
-    return new Promise(resolve => {
-        let externalId: number | undefined;
-        let done = false;
-
-        const finish = (result: Pick<TradeResult, 'status' | 'pnl' | 'error'>) => {
-            if (done) return;
-            done = true;
-            clearTimeout(timer);
-            clearInterval(poll);
-            positions.unsubscribeOnUpdatePosition(callback);
-            resolve({ ...result, externalId });
-        };
-
-        const timer = setTimeout(() => {
-            finish({ status: 'TIMEOUT', pnl: 0, error: 'Result timeout' });
-        }, timeoutSeconds * 1000);
-
-        // Initial sync: capture externalId if the position is already in the opened list
-        const existing = positions.getOpenedPositions().find(p => p.orderIds.includes(optionId));
-        if (existing) externalId = existing.externalId;
-
-        const callback = (pos: Position) => {
-            if (externalId === undefined && pos.orderIds.includes(optionId)) {
-                externalId = pos.externalId;
-            }
-            if (externalId !== undefined && pos.externalId === externalId && pos.status === 'closed') {
-                const pnl = pos.closeProfit ?? 0;
-                const reason = pos.closeReason ?? '';
-                const status: TradeResult['status'] = reason === 'win' ? 'WIN' : reason === 'equal' ? 'TIE' : 'LOSS';
-                finish({ status, pnl });
-            }
-        };
-
-        positions.subscribeOnUpdatePosition(callback);
-
-        // Polling fallback every 5s:
-        // - Captures externalId if the websocket open event was missed
-        // - Detects close if the websocket close event is never delivered
-        // - Falls back to position history API for trades that left the opened list
-        const poll = setInterval(async () => {
-            const opened = positions.getOpenedPositions();
-
-            if (externalId === undefined) {
-                const match = opened.find(p => p.orderIds.includes(optionId));
-                if (match) externalId = match.externalId;
-            }
-
-            if (externalId !== undefined) {
-                const pos = opened.find(p => p.externalId === externalId);
-                if (pos?.status === 'closed') {
-                    const pnl = pos.closeProfit ?? 0;
-                    const reason = pos.closeReason ?? '';
-                    const status: TradeResult['status'] = reason === 'win' ? 'WIN' : reason === 'equal' ? 'TIE' : 'LOSS';
-                    finish({ status, pnl });
-                    return;
-                }
-
-                if (!pos) {
-                    try {
-                        const historyPos = await positions.getPositionsHistory().getPositionHistory(externalId);
-                        if (historyPos && historyPos.status === 'closed') {
-                            const pnl = historyPos.closeProfit ?? 0;
-                            const reason = historyPos.closeReason ?? '';
-                            const status: TradeResult['status'] = reason === 'win' ? 'WIN' : reason === 'equal' ? 'TIE' : 'LOSS';
-                            finish({ status, pnl });
-                        }
-                    } catch {
-                        // History lookup failed — next poll will retry
-                    }
-                }
-            }
-        }, 5_000);
+    const outcome = await runGale(sdk, {
+        pair: params.pair,
+        direction: params.direction,
+        amount: params.amount,
+        timeframeSec: params.timeframeSec,
+        galeRounds: params.galeRounds,
+        balanceType: params.balanceType,
+        telegramId: params.telegramId,
+        cooldownMs: params.cooldownMs,
+    }, async (info) => {
+        await onRound?.({
+            round: info.round,
+            amount: info.amount,
+            result: coreToLegacy(info.result),
+        });
     });
+
+    // Map for auto-trading which checks ERROR/TIMEOUT
+    let status: MartingaleOutcome['status'] = outcome.status as MartingaleOutcome['status'];
+    if (outcome.status === 'NO_FILL') status = 'NO_FILL';
+
+    logger.info('trade', `runMartingaleCore done status=${status} pnl=${outcome.totalPnl} rounds=${outcome.rounds}`);
+    return {
+        status,
+        totalPnl: outcome.totalPnl,
+        rounds: outcome.rounds,
+    };
 }
 
-function errorResult(trade: TradeRequest, error: string): TradeResult {
-    return { status: 'ERROR', pnl: 0, tradeId: 0, pair: trade.pair, direction: trade.direction, amount: trade.amount, error };
+// Re-export core helpers for bot wiring
+export { settle, recoverFinal } from './trade-core.js';
+export { runGale } from './gale-engine.js';
+
+/** @deprecated — use settle(); kept so old imports don't crash */
+export function waitForResult(
+    _positions: Positions,
+    _optionId: number,
+    _timeoutSeconds: number,
+): Promise<Pick<TradeResult, 'status' | 'pnl' | 'error'> & { externalId?: number }> {
+    return Promise.resolve({ status: 'ERROR', pnl: 0, error: 'waitForResult deprecated — use settle()' });
 }

@@ -29,7 +29,7 @@ export const BRAND_VOICE = `You are writing as Shiloh — the founder and face o
 10. @username personalization when addressing individuals.
 
 ## WHAT 10X BOT IS
-- The smartest semi auto-trading bot for IQ Option OTC pairs
+- The most refined semi auto-trading bot for IQ Option OTC pairs
 - Scans markets, reads signals, places trades
 - Users sit back and watch the wins land
 - Demo-friendly, PRO for serious traders

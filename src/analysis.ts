@@ -40,12 +40,12 @@ async function runAnalysis(sdk: ClientSdk, pair: string, timeframeSec: number, t
     const count = candleCount ?? 35;
     const history = await candlesFacade.getCandles(active.id, timeframeSec, { count });
 
-    if (history.length < Math.min(30, Math.max(5, Math.floor(count * 0.7)))) throw new Error('Not enough data for analysis');
+    if (history.length < Math.min(30, Math.max(2, Math.floor(count * 0.7)))) throw new Error('Not enough data for analysis');
 
     const closes = history.map(c => c.close);
 
     // 1-indicator drain mode: candleCount ≤ 5 → RSI only
-    if (candleCount !== undefined && candleCount <= 5) {
+    if (candleCount !== undefined && candleCount <= 5 && candleCount >= 2) {
         const rsi = computeRSI(closes, 14);
         const direction: 'call' | 'put' = rsi > 50 ? 'call' : 'put';
         const confidence = Math.min(100, Math.max(0, Math.abs(rsi - 50) * 2));

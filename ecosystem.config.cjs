@@ -1,35 +1,28 @@
-// Resolve paths relative to this file so the config works regardless of
-// where the repo is checked out (no more hardcoded /root/iqbot-v3 paths).
-const path = require('node:path');
-const ROOT = __dirname;
-const TSX  = path.join(ROOT, 'node_modules', '.bin', 'tsx');
-
 module.exports = {
-  apps: [
-    {
-      name:               'iqbot-v3-bot',
-      script:             'src/bot.ts',
-      interpreter:        TSX,
-      cwd:                ROOT,
-      autorestart:        true,
-      restart_delay:      3000,
-      max_memory_restart: '300M',
-      out_file:           path.join(ROOT, 'logs', 'bot-out.log'),
-      error_file:         path.join(ROOT, 'logs', 'bot-error.log'),
-      env: { NODE_ENV: 'production' },
-    },
-    {
-      name:               'iqbot-v3-monitor',
-      script:             'src/monitor.ts',
-      interpreter:        TSX,
-      cwd:                ROOT,
-      autorestart:        true,
-      restart_delay:      10000,
-      max_restarts:       20,
-      max_memory_restart: '200M',
-      out_file:           path.join(ROOT, 'logs', 'monitor-out.log'),
-      error_file:         path.join(ROOT, 'logs', 'monitor-error.log'),
-      env: { NODE_ENV: 'production' },
-    },
-  ],
+  apps: [{
+    name: 'iqbot-v3-bot',
+    script: 'dist/bot.js',
+    cwd: '/root/iqbot-v3',
+    // Stay-Alive Phase A: seatbelt only. Real peak was ~500-550M; 1G headroom
+    // until Phase B flattens RSS. Do not thrash live trades.
+    max_memory_restart: '1G',
+    autorestart: true,
+    min_uptime: '60s',
+    max_restarts: 15,
+    restart_delay: 5000,
+    kill_timeout: 30000,
+    exp_backoff_restart_delay: 3000,
+    // Merge logs for restart forensics
+    time: true,
+  }, {
+    // Phase D: lightweight external watcher (no IQ sockets)
+    name: 'iqbot-stay-alive',
+    script: 'upgrades/scripts/stay-alive-monitor.mjs',
+    cwd: '/root/iqbot-v3',
+    autorestart: true,
+    max_memory_restart: '80M',
+    min_uptime: '10s',
+    restart_delay: 10000,
+    time: true,
+  }]
 };

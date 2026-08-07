@@ -26,7 +26,8 @@ export function getAdminId(): number {
     return isNaN(fromEnv) ? 1615652240 : fromEnv;
 }
 
-export function adminKeyboard(): IKMarkup {
+export function adminKeyboard(adminAnalysisAll = false): IKMarkup {
+    const toggleText = adminAnalysisAll ? '🟢 Admin Analysis: Everyone (ON)' : '⚪ Admin Analysis: Privileged Only (OFF)';
     return {
         inline_keyboard: [
             [
@@ -51,10 +52,11 @@ export function adminKeyboard(): IKMarkup {
             ],
             [
                 { text: '🛡️ Admin',      callback_data: 'admin:admin' },
-                { text: '✍️ Compose Post', callback_data: 'admin:compose' },
             ],
             [{ text: '📔 Admin Diary',     callback_data: 'admin:diary' }],
             [{ text: '📝 Reviews',        callback_data: 'admin:reviews' }],
+            [{ text: '📋 Copy Trading',   callback_data: 'admin:copy' }],
+            [{ text: toggleText,          callback_data: 'admin:analysis_toggle' }],
             [{ text: '🟢 Go Live',         callback_data: 'admin:golive' }],
             [{ text: '🔙 Back', callback_data: 'ui:start' }],
         ],
@@ -413,11 +415,10 @@ export function composeToneKeyboard(): IKMarkup {
     return {
         inline_keyboard: [
             [{ text: '📝 Edit Style Guide', callback_data: 'compose_tone:guide' }],
-            [{ text: '📄 Sample Post 1',    callback_data: 'compose_tone:sample1' }],
-            [{ text: '📄 Sample Post 2',    callback_data: 'compose_tone:sample2' }],
-            [{ text: '📄 Sample Post 3',    callback_data: 'compose_tone:sample3' }],
+            [{ text: '📄 Sample Post 1', callback_data: 'compose_tone:sample1' }],
+            [{ text: '📄 Sample Post 2', callback_data: 'compose_tone:sample2' }],
+            [{ text: '📄 Sample Post 3', callback_data: 'compose_tone:sample3' }],
             [{ text: '👁️ View Current Tone', callback_data: 'compose_tone:view' }],
-            [{ text: '🔙 Compose Post',     callback_data: 'admin:compose' }],
         ],
     };
 }

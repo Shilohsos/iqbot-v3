@@ -242,8 +242,10 @@ export class ClientSdk {
      * Shuts down instance of SDK entry point class.
      */
     public async shutdown(): Promise<void> {
-        await this.wsApiClient.disconnectGracefully();
-
+        // Clear all facade intervals FIRST — before disconnectGracefully().
+        // If disconnectGracefully hangs (waiting for pending requests to drain),
+        // the intervals would keep firing on a dead WebSocket forever, causing
+        // "WebSocket is closing; new requests are rejected" errors.
         if (this.blitzOptionsFacade) {
             this.blitzOptionsFacade.close()
         }
@@ -271,6 +273,8 @@ export class ClientSdk {
         if (this.chatsFacade) {
             this.chatsFacade.close()
         }
+
+        await this.wsApiClient.disconnectGracefully();
     }
 
     /**
@@ -4442,9 +4446,13 @@ export class BlitzOptions {
         const blitzOptions = new BlitzOptions(initializationData.blitzActives, wsApiClient)
 
         blitzOptions.intervalId = setInterval(async () => {
-            const response = await wsApiClient.doRequest<InitializationDataV3>(new CallBinaryOptionsGetInitializationDataV3())
-            blitzOptions.updateActives(response.blitzActives)
-        }, 600000)
+            try {
+                const response = await wsApiClient.doRequest<InitializationDataV3>(new CallBinaryOptionsGetInitializationDataV3())
+                blitzOptions.updateActives(response.blitzActives)
+            } catch {
+                // Keep last-known actives on refresh failure
+            }
+        }, 60_000) // was 600000 (10 min) — OTC profit rates change far more often
 
         return blitzOptions
     }
@@ -4473,6 +4481,15 @@ export class BlitzOptions {
     }
 
     /**
+     * Force-refresh actives (profit rates, schedule) from IQ Option.
+     * Must run before buy — stale profit_percent causes 4117 "profit rate change".
+     */
+    public async refreshActives(): Promise<void> {
+        const response = await this.wsApiClient.doRequest<InitializationDataV3>(new CallBinaryOptionsGetInitializationDataV3())
+        this.updateActives(response.blitzActives)
+    }
+
+    /**
      * Makes request for buy blitz option.
      * @param active - The asset for which the option is purchased.
      * @param direction - Direction of price change.
@@ -4487,16 +4504,43 @@ export class BlitzOptions {
         price: number,
         balance: Balance
     ): Promise<BlitzOptionsOption> {
-        const request = new CallBinaryOptionsOpenBlitzOptionV2(
-            active.id,
-            direction,
-            expirationSize,
-            price,
-            balance.id,
-            active.profitPercent(),
-        )
-        const response = await this.wsApiClient.doRequest<BinaryOptionsOptionV1>(request)
-        return new BlitzOptionsOption(response)
+        // ROOT FIX for 4117: IQ Option validates profit_percent against the live rate.
+        // Actives were only refreshed every 10 minutes, so buys often sent a stale rate
+        // and got "The option has not been purchased because of the profit rate change."
+        // Always refresh immediately before buy, then silent-retry once if rate still races.
+        try {
+            await this.refreshActives()
+        } catch {
+            // Keep cached actives if refresh fails — better than blocking the buy entirely.
+        }
+
+        const openWith = async (act: BlitzOptionsActive): Promise<BinaryOptionsOptionV1> => {
+            const request = new CallBinaryOptionsOpenBlitzOptionV2(
+                act.id,
+                direction,
+                expirationSize,
+                price,
+                balance.id,
+                act.profitPercent(),
+            )
+            return this.wsApiClient.doRequest<BinaryOptionsOptionV1>(request)
+        }
+
+        const current = this.actives.get(active.id) ?? active
+        try {
+            const response = await openWith(current)
+            return new BlitzOptionsOption(response)
+        } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : String(err)
+            if (!/4117|profit rate change|not been purchased/i.test(msg)) {
+                throw err
+            }
+            // Rate changed in the milliseconds between refresh and server accept — re-fetch & retry once.
+            await this.refreshActives()
+            const retried = this.actives.get(active.id) ?? active
+            const response = await openWith(retried)
+            return new BlitzOptionsOption(response)
+        }
     }
 
     /**
@@ -7786,7 +7830,7 @@ class WsApiClient {
         this.stopTimeSyncMonitoring()
         this.lastTimeSyncReceived = Date.now()
         this.timeSyncInterval = setInterval(() => {
-            if (Date.now() - this.lastTimeSyncReceived > 60000 && !this.reconnecting) {
+            if (Date.now() - this.lastTimeSyncReceived > 30000 && !this.reconnecting) {
                 this.forceCloseConnection()
                 this.reconnect()
             }

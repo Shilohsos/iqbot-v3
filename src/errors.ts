@@ -1,6 +1,8 @@
 export const FriendlyErrors: Record<string, string> = {
     'Unknown pair':          '⚠️ Couldn\'t read market data for this pair. Try another one.',
     'SDK timeout':           '⏱ IQ Option is taking longer than usual. This happens during high traffic.',
+    'TIMEOUT:':              '🔌 Lost connection to IQ Option. Your account is safe — try again.',
+    'timed out':             '🔌 Lost connection to IQ Option. Your account is safe — try again.',
     'Connection timed out':  '🔌 Lost connection to IQ Option. Your account is safe — try again.',
     'ConnectTimeoutError':   '🔌 IQ Option is unreachable right now. Your account is safe — try again in a moment.',
     'ConnectTimeout':        '🔌 IQ Option is unreachable right now. Your account is safe — try again in a moment.',

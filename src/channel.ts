@@ -2,7 +2,6 @@ import { Telegraf } from 'telegraf';
 import { insertFunnelEvent } from './db.js';
 
 const CHANNEL_ID    = parseInt(process.env.CHANNEL_ID ?? '-1002766084283', 10);
-const META_TRACK_URL = process.env.META_TRACK_URL ?? 'http://localhost:8766/api/track';
 
 export function setupChannelHandlers(bot: Telegraf): void {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -22,25 +21,6 @@ export function setupChannelHandlers(bot: Telegraf): void {
             await ctx.telegram.approveChatJoinRequest(chatId, userId);
             console.log(`[channel] auto-approved user ${userId}`);
             insertFunnelEvent('channel_join_approved', JSON.stringify({ telegram_id: userId }));
-
-            // Fire Meta CompleteRegistration
-            const lang: string = (req.from as any)?.language_code ?? '';
-            const eventId = `cr_${userId}_${Date.now()}`;
-            fetch(META_TRACK_URL, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    event_name: 'CompleteRegistration',
-                    event_source_url: 'https://t.me/10xpremium',
-                    event_id: eventId,
-                    custom_data: { source: 'telegram_channel', telegram_id: userId, language_code: lang },
-                    skip_ip: false,
-                }),
-            }).then(() => {
-                console.log(`[meta] CompleteRegistration sent for user ${userId}`);
-            }).catch((err: unknown) => {
-                console.error(`[meta] failed to send join event for ${userId}:`, err);
-            });
         } catch (err) {
             console.error(`[channel] failed to approve user ${userId}:`, err instanceof Error ? err.message : err);
         }

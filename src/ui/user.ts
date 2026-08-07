@@ -1,39 +1,25 @@
-import { hasAccess } from '../access.js';
-
-type Btn = { text: string; callback_data: string } | { text: string; url: string };
-type IKMarkup = { inline_keyboard: Btn[][] };
-
 /**
- * Product-based main menu. Unlocked products route to their submenu; locked
- * products route to an upsell that explains the deposit needed.
+ * Product-based main menu.
+ * Removed per Master: Marathon, History, Leaderboard, Swarm.
  */
-export function startKeyboard(accessLevel?: string): IKMarkup {
+export function startKeyboard(_accessLevel?: string) {
     const supportUrl = process.env.ADMIN_CONTACT_LINK ?? 'https://t.me/shiloh_is_10xing';
-
-    // All products are available to everyone — demo mode gates via daily caps
-    // in the individual handlers. No lock icons.
-    const aiBtn: Btn = { text: '🤖 AI Trading', callback_data: 'ui:trade' };
-    const autoBtn: Btn = { text: '🚀 Auto Trading', callback_data: 'ui:auto' };
-
-    const rows: Btn[][] = [
-        [{ text: '⚡ Signals', callback_data: 'ui:signals' }, aiBtn],
+    const aiBtn = { text: '⟡ Private Trader', callback_data: 'ui:trade' };
+    const autoBtn = { text: '✦ Autopilot', callback_data: 'ui:auto' };
+    const rows = [
+        [{ text: '· Signals', callback_data: 'ui:signals' }, aiBtn],
         [autoBtn],
-        [{ text: '🛥️ Join 10x Yacht Club', callback_data: 'ui:yacht' }],
+        [{ text: '◆ Copy Trading', callback_data: 'ui:copy' }],
+        [{ text: '⟢ 10x Yacht Club', callback_data: 'ui:yacht' }],
         [
-            { text: '🎁 Giveaways', callback_data: 'ui:giveaways' },
-            { text: 'History 📆', callback_data: 'ui:history' },
-            { text: 'Leaderboard 🏆', callback_data: 'ui:leaderboard' },
-        ],
-        [
-            { text: '❓ Help & FAQ', callback_data: 'ui:help' },
-            { text: '🔋 Support', url: supportUrl },
+            { text: '❖ Help & FAQ', callback_data: 'ui:help' },
+            { text: '✆ Support', url: supportUrl },
         ],
     ];
     return { inline_keyboard: rows };
 }
-
-export function backKeyboard(): IKMarkup {
+export function backKeyboard() {
     return {
-        inline_keyboard: [[{ text: '🔙 Back', callback_data: 'ui:start' }]],
+        inline_keyboard: [[{ text: '⟵ Back', callback_data: 'ui:start' }]],
     };
 }

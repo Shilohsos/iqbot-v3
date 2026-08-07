@@ -1,5 +1,6 @@
 import { TelegramClient } from 'telegram';
 import { StringSession } from 'telegram/sessions/index.js';
+import { db } from './db.js';
 
 export interface AffiliateResult {
     found: boolean;
@@ -60,6 +61,31 @@ export async function checkAffiliate(iqUserId: number): Promise<AffiliateResult>
                 },
             };
         }
+    }
+
+    // Fallback: the channel scan window (last N messages) may have scrolled past
+    // this ID's events. Consult lead_events history — if the ID was ever tracked
+    // (FTD/redep from the affiliate channel), treat it as verified.
+    try {
+        const hist = db.prepare(
+            `SELECT event_type, amount, event_date, channel_msg_id
+             FROM lead_events
+             WHERE iq_user_id = ?
+             ORDER BY event_date DESC
+             LIMIT 1`
+        ).get(iqUserId);
+        if (hist) {
+            return {
+                found: true,
+                data: {
+                    message: `[history] ${hist.event_type} ${hist.amount} on ${hist.event_date} (msg ${hist.channel_msg_id ?? 'n/a'})`,
+                    date: hist.event_date,
+                },
+            };
+        }
+    }
+    catch {
+        // lead_events table may not exist in every deployment — channel scan is the primary check.
     }
 
     return { found: false, data: null };

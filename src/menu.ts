@@ -1,6 +1,7 @@
 export const OTC_PAIRS = [
     'EURUSD-OTC', 'GBPUSD-OTC', 'EURJPY-OTC', 'GBPJPY-OTC',
     'AUDUSD-OTC', 'USDCAD-OTC', 'EURGBP-OTC', 'USDCHF-OTC',
+    'XAUUSD-OTC', 'BTCUSD-OTC-op',
 ];
 
 type Btn = { text: string; callback_data: string } | { text: string; url: string };
@@ -48,16 +49,17 @@ export function amountKeyboard(currency = 'USD'): IKMarkup {
     };
 }
 
-const ALL_TIMEFRAMES = [30, 60, 300];
+const ALL_TIMEFRAMES = [30, 60, 120, 300];
 const ALL_PAIRS = [
     'EURUSD-OTC', 'GBPUSD-OTC', 'EURJPY-OTC', 'GBPJPY-OTC',
     'AUDUSD-OTC', 'USDCAD-OTC', 'EURGBP-OTC', 'USDCHF-OTC',
+    'XAUUSD-OTC', 'BTCUSD-OTC-op',
 ];
 
 // `tier` params are retained for call-site compatibility but no longer gate
 // anything — all timeframes and pairs are available to every product now.
 export function timeframeKeyboard(_tier?: string): IKMarkup {
-    const labels: Record<number, string> = { 30: '30s', 60: '1m', 300: '5m' };
+    const labels: Record<number, string> = { 30: '30s', 60: '1m', 120: '2m', 300: '5m' };
     const row: Btn[] = ALL_TIMEFRAMES.map(s => ({ text: labels[s] ?? `${s}s`, callback_data: `tf:${s}` }));
     return {
         inline_keyboard: [
@@ -67,6 +69,24 @@ export function timeframeKeyboard(_tier?: string): IKMarkup {
     };
 }
 
+// Display name for pairs — users see clean names, not raw tickers
+const PAIR_DISPLAY: Record<string, string> = {
+    'EURUSD-OTC': 'EUR/USD',
+    'GBPUSD-OTC': 'GBP/USD',
+    'EURJPY-OTC': 'EUR/JPY',
+    'GBPJPY-OTC': 'GBP/JPY',
+    'AUDUSD-OTC': 'AUD/USD',
+    'USDCAD-OTC': 'USD/CAD',
+    'EURGBP-OTC': 'EUR/GBP',
+    'USDCHF-OTC': 'USD/CHF',
+    'XAUUSD-OTC': '🥇 Gold',
+    'BTCUSD-OTC-op': '₿ Bitcoin',
+};
+
+export function pairLabel(pair: string): string {
+    return PAIR_DISPLAY[pair] ?? pair;
+}
+
 export function pairKeyboard(page = 0, _tier?: string): IKMarkup {
     const PAGE_SIZE = 6;
     const start = page * PAGE_SIZE;
@@ -74,9 +94,9 @@ export function pairKeyboard(page = 0, _tier?: string): IKMarkup {
     const rows: Btn[][] = [];
 
     for (let i = 0; i < pagePairs.length; i += 2) {
-        const row: Btn[] = [{ text: pagePairs[i], callback_data: `pair:${pagePairs[i]}` }];
+        const row: Btn[] = [{ text: pairLabel(pagePairs[i]), callback_data: `pair:${pagePairs[i]}` }];
         if (pagePairs[i + 1]) {
-            row.push({ text: pagePairs[i + 1], callback_data: `pair:${pagePairs[i + 1]}` });
+            row.push({ text: pairLabel(pagePairs[i + 1]), callback_data: `pair:${pagePairs[i + 1]}` });
         }
         rows.push(row);
     }
@@ -98,9 +118,9 @@ export function signalPairKeyboard(page = 0): IKMarkup {
     const rows: Btn[][] = [];
 
     for (let i = 0; i < pagePairs.length; i += 2) {
-        const row: Btn[] = [{ text: pagePairs[i], callback_data: `spair:${pagePairs[i]}` }];
+        const row: Btn[] = [{ text: pairLabel(pagePairs[i]), callback_data: `spair:${pagePairs[i]}` }];
         if (pagePairs[i + 1]) {
-            row.push({ text: pagePairs[i + 1], callback_data: `spair:${pagePairs[i + 1]}` });
+            row.push({ text: pairLabel(pagePairs[i + 1]), callback_data: `spair:${pagePairs[i + 1]}` });
         }
         rows.push(row);
     }
@@ -116,7 +136,7 @@ export function signalPairKeyboard(page = 0): IKMarkup {
 
 /** Timeframe selection for the Signals wizard (uses stf: prefix). */
 export function signalTimeframeKeyboard(pair: string): IKMarkup {
-    const labels: Record<number, string> = { 30: '30s', 60: '1m', 300: '5m' };
+    const labels: Record<number, string> = { 30: '30s', 60: '1m', 120: '2m', 300: '5m' };
     const row: Btn[] = ALL_TIMEFRAMES.map(s => ({ text: labels[s] ?? `${s}s`, callback_data: `stf:${s}` }));
     return {
         inline_keyboard: [
@@ -130,6 +150,7 @@ export function signalTimeframeKeyboard(pair: string): IKMarkup {
 export function tfLabel(timeframeSec: number): string {
     if (timeframeSec === 30) return '30s';
     if (timeframeSec === 60) return '1m';
+    if (timeframeSec === 120) return '2m';
     if (timeframeSec === 300) return '5m';
     return '15m';
 }

@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import path from 'node:path';
 import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 
 const DB_PATH = process.env.DB_PATH ?? path.resolve('iqbot-v3.db');
 
@@ -497,6 +498,18 @@ db.exec(`
 `);
 db.exec(`CREATE INDEX IF NOT EXISTS idx_scheduled_broadcasts_sent ON scheduled_broadcasts(sent, scheduled_at)`);
 db.exec(`CREATE INDEX IF NOT EXISTS idx_users_created_at ON users(created_at)`);
+// Admin broadcast drafts — survive restarts
+db.exec(`
+  CREATE TABLE IF NOT EXISTS pending_broadcasts (
+    chat_id         INTEGER PRIMARY KEY,
+    message         TEXT    NOT NULL DEFAULT '',
+    target_ids      TEXT    NOT NULL DEFAULT '[]',
+    button          TEXT,
+    media           TEXT,
+    delete_after_ms INTEGER NOT NULL DEFAULT 0,
+    created_at      INTEGER NOT NULL DEFAULT 0
+  )
+`);
 db.exec(`CREATE INDEX IF NOT EXISTS idx_trades_telegram_id ON trades(telegram_id, created_at)`);
 db.exec(`CREATE INDEX IF NOT EXISTS idx_trades_created_at ON trades(created_at)`);
 db.exec(`CREATE INDEX IF NOT EXISTS idx_trades_martingale_run ON trades(martingale_run)`);
@@ -588,27 +601,7 @@ db.exec(`
     if (!tmplCols.includes('button_callback'))
         db.exec('ALTER TABLE templates ADD COLUMN button_callback TEXT');
 }
-
-{
-    const autoCount = (db.prepare("SELECT COUNT(*) AS cnt FROM broadcast_messages WHERE type = 'auto'").get() as { cnt: number }).cnt;
-    if (autoCount === 0) {
-        const seed: [string, string][] = [
-            ['persuasion',   "👀 Want to see the bot actually trade?\n\nDemo mode is risk-free.\nOne tap, one signal, one trade.\n\nWatch it work 👇"],
-            ['social_proof', "💸 Another 10x user just banked +$270 CASH\n\nSame bot. Same signals. Real money.\nYou're still on demo coins.\n\nSwitch up 👇"],
-            ['social_proof', "📊 71% of demo users upgraded to LIVE this week.\n\nThey didn't guess. They watched the bot win on demo first.\nThen they switched.\n\nRun your demo trade 👇"],
-            ['urgency',      "⏱ Markets don't wait. Every minute you're not trading is profit someone else is taking.\n\nTap Trade Now 👇"],
-            ['persuasion',   "🤑 Real money. Real wins. Real withdrawals.\n\nThe bot's been printing for users all day.\nYour account should be next.\n\nStart a trade 👇"],
-            ['motivation',   "🔋 Tired of watching others win while you sit out?\n\nOne trade changes everything.\nOne win builds momentum.\nOne session could pay your bills.\n\nTrade now 👇"],
-            ['social_proof', "🏆 Top trader today banked +$890 in 3 trades.\n\nNo magic. Just the bot doing its job.\nThe same bot you have access to.\n\nUse it 👇"],
-            ['urgency',      "📈 The algorithm just fired a 84% confidence signal.\n\nThese don't come often. When they do, smart traders act.\n\nTap to catch this one 👇"],
-            ['persuasion',   "💡 Demo mode exists for ONE reason:\n\nSo you can see it work before you go live.\nIf you've seen it work… what are you waiting for?\n\nGo live 👇"],
-            ['motivation',   "🎯 Your next trade could be the one that pays for your week.\n\nThe bot is online. Signals are firing. Account is ready.\n\nWhat's stopping you? 👇"],
-        ];
-        const ins = db.prepare("INSERT INTO broadcast_messages (type, category, content) VALUES ('auto', ?, ?)");
-        for (const [cat, content] of seed) ins.run(cat, content);
-        console.log('[db] seeded 10 auto broadcast messages');
-    }
-}
+// ⛔ KILLED 2026-08-07: auto-broadcast seed removed per Master — no automatic broadcasts.
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS channel_approvals (
@@ -1663,6 +1656,69 @@ export function getPendingScheduledBroadcasts(): PersistedScheduledBroadcast[] {
         sent: r.sent === 1,
     }));
 }
+
+// ─── Pending broadcast drafts (survive restarts) ──────────────────────────────
+
+interface BroadcastButton {
+    text: string;
+    type: 'url' | 'callback';
+    value: string;
+}
+
+interface PendingBroadcastRow {
+    chat_id: number; message: string; target_ids: string; button: string | null;
+    media: string | null; delete_after_ms: number; created_at: number;
+}
+
+export function savePendingBroadcast(chatId: number, data: {
+    message: string; targetIds: number[];
+    button?: { text: string; type: string; value: string };
+    media?: Array<{ type: string; fileId: string }>;
+    deleteAfterMs?: number; createdAt?: number;
+}): void {
+    db.prepare(`
+        INSERT OR REPLACE INTO pending_broadcasts (chat_id, message, target_ids, button, media, delete_after_ms, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(
+        chatId,
+        data.message,
+        JSON.stringify(data.targetIds),
+        data.button ? JSON.stringify(data.button) : null,
+        data.media ? JSON.stringify(data.media) : null,
+        data.deleteAfterMs ?? 0,
+        data.createdAt ?? Date.now(),
+    );
+}
+
+export function getPendingBroadcast(chatId: number): PendingBroadcastRow | undefined {
+    return db.prepare('SELECT * FROM pending_broadcasts WHERE chat_id = ?').get(chatId) as PendingBroadcastRow | undefined;
+}
+
+export function deletePendingBroadcast(chatId: number): void {
+    db.prepare('DELETE FROM pending_broadcasts WHERE chat_id = ?').run(chatId);
+}
+
+export function loadAllPendingBroadcasts(): Map<number, {
+    message: string; targetIds: number[];
+    button?: BroadcastButton;
+    media?: Array<{ type: 'photo' | 'video' | 'video_note' | 'voice'; fileId: string }>;
+    deleteAfterMs?: number; createdAt?: number;
+}> {
+    const map = new Map<number, any>();
+    const rows = db.prepare('SELECT * FROM pending_broadcasts').all() as PendingBroadcastRow[];
+    for (const r of rows) {
+        map.set(r.chat_id, {
+            message: r.message,
+            targetIds: JSON.parse(r.target_ids) as number[],
+            button: r.button ? (JSON.parse(r.button) as BroadcastButton) : undefined,
+            media: r.media ? (JSON.parse(r.media) as Array<{ type: 'photo' | 'video' | 'video_note' | 'voice'; fileId: string }>) : undefined,
+            deleteAfterMs: r.delete_after_ms || undefined,
+            createdAt: r.created_at || undefined,
+        });
+    }
+    return map;
+}
+
 
 // ─── Pair win rates ───────────────────────────────────────────────────────────
 
@@ -3075,4 +3131,110 @@ export function upsertPendingPrompt(telegramId: number, last_msg_id: number | nu
 
 export function getPendingPromptDueUsers(): Array<{ telegram_id: number }> {
     return db.prepare(`SELECT telegram_id FROM pending_prompt WHERE next_run_at IS NOT NULL AND next_run_at <= datetime('now')`).all() as any;
+}
+
+export function getSessionTrades(telegramId: number): number {
+    const row = db.prepare('SELECT session_trades FROM users WHERE telegram_id = ?').get(telegramId) as { session_trades: number } | undefined;
+    return row?.session_trades ?? 0;
+}
+
+// ─── Marathon V2 ─────────────────────────────────────────────────────────────
+
+export interface MarathonConfig {
+    id: number;
+    giveaway_id: number;
+    min_balance_usd: number;
+    min_trades: number;
+    min_growth_multiplier: number;
+    status: string;
+    created_at: string;
+}
+
+export interface MarathonParticipant {
+    id: number;
+    marathon_config_id: number;
+    telegram_id: number;
+    start_balance_usd: number;
+    current_balance_usd: number;
+    trades_done: number;
+    growth_multiplier: number;
+    qualified: number;
+    qualified_at: string | null;
+    blown_account: number;
+    push_count: number;
+    last_push_at: string | null;
+    joined_at: string;
+    start_session_trades: number;
+}
+
+export function createMarathonConfig(
+    giveawayId: number,
+    minBalanceUsd: number,
+    minTrades: number,
+    minGrowthMultiplier: number
+): number {
+    const result = db.prepare(`
+        INSERT INTO marathon_config (giveaway_id, min_balance_usd, min_trades, min_growth_multiplier, status)
+        VALUES (?, ?, ?, ?, 'active')
+    `).run(giveawayId, minBalanceUsd, minTrades, minGrowthMultiplier);
+    return Number(result.lastInsertRowid);
+}
+
+export function getActiveMarathonConfig(): MarathonConfig | undefined {
+    return db.prepare(`SELECT * FROM marathon_config WHERE status = 'active' ORDER BY id DESC LIMIT 1`).get() as MarathonConfig | undefined;
+}
+
+export function getMarathonConfig(id: number): MarathonConfig | undefined {
+    return db.prepare(`SELECT * FROM marathon_config WHERE id = ?`).get(id) as MarathonConfig | undefined;
+}
+
+export function setMarathonConfigStatus(id: number, status: string): void {
+    db.prepare(`UPDATE marathon_config SET status = ? WHERE id = ?`).run(status, id);
+}
+
+export function getMarathonParticipant(marathonConfigId: number, telegramId: number): MarathonParticipant | undefined {
+    return db.prepare(`SELECT * FROM marathon_participants WHERE marathon_config_id = ? AND telegram_id = ?`).get(marathonConfigId, telegramId) as MarathonParticipant | undefined;
+}
+
+export function insertMarathonParticipant(marathonConfigId: number, telegramId: number, startBalanceUsd: number): void {
+    const sessionTrades = getSessionTrades(telegramId);
+    db.prepare(`
+        INSERT INTO marathon_participants (marathon_config_id, telegram_id, start_balance_usd, current_balance_usd, trades_done, growth_multiplier, start_session_trades)
+        VALUES (?, ?, ?, ?, 0, 0, ?)
+    `).run(marathonConfigId, telegramId, startBalanceUsd, startBalanceUsd, sessionTrades);
+}
+
+export function updateMarathonParticipantBalance(marathonConfigId: number, telegramId: number, currentBalanceUsd: number, tradesDone: number): void {
+    const p = getMarathonParticipant(marathonConfigId, telegramId);
+    if (!p) return;
+    const growth = p.start_balance_usd > 0 ? currentBalanceUsd / p.start_balance_usd : 0;
+    db.prepare(`
+        UPDATE marathon_participants SET current_balance_usd = ?, trades_done = ?, growth_multiplier = ? WHERE id = ?
+    `).run(currentBalanceUsd, tradesDone, growth, p.id);
+}
+
+export function markMarathonParticipantQualified(marathonConfigId: number, telegramId: number): void {
+    db.prepare(`UPDATE marathon_participants SET qualified = 1, qualified_at = datetime('now') WHERE marathon_config_id = ? AND telegram_id = ?`).run(marathonConfigId, telegramId);
+}
+
+export function markMarathonParticipantBlown(marathonConfigId: number, telegramId: number): void {
+    db.prepare(`UPDATE marathon_participants SET blown_account = 1 WHERE marathon_config_id = ? AND telegram_id = ?`).run(marathonConfigId, telegramId);
+}
+
+export function incrementMarathonPush(marathonConfigId: number, telegramId: number): void {
+    db.prepare(`UPDATE marathon_participants SET push_count = push_count + 1, last_push_at = datetime('now') WHERE marathon_config_id = ? AND telegram_id = ?`).run(marathonConfigId, telegramId);
+}
+
+export function getActiveMarathonParticipants(): MarathonParticipant[] {
+    return db.prepare(`SELECT * FROM marathon_participants WHERE blown_account = 0 ORDER BY trades_done DESC`).all() as MarathonParticipant[];
+}
+
+export function getMarathonLeaderboard(marathonConfigId: number): Array<{ telegram_id: number; trades_done: number; growth_multiplier: number; current_balance_usd: number; rank: number }> {
+    const rows = db.prepare(`
+        SELECT telegram_id, trades_done, growth_multiplier, current_balance_usd
+        FROM marathon_participants
+        WHERE marathon_config_id = ? AND blown_account = 0
+        ORDER BY trades_done DESC, growth_multiplier DESC
+    `).all(marathonConfigId) as Array<{ telegram_id: number; trades_done: number; growth_multiplier: number; current_balance_usd: number }>;
+    return rows.map((r, i) => ({ ...r, rank: i + 1 }));
 }

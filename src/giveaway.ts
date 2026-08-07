@@ -230,7 +230,7 @@ export async function participate(giveawayId: number, telegramId: number): Promi
 
     return {
         success: true,
-        message: `✅ You've joined the *${event.title}* giveaway!\n\n*${count}* participants so far. Good luck! 🍀`,
+        message: `✅ You've joined the *${event.title}* giveaway! Good luck! 🍀`,
     };
 }
 
@@ -444,6 +444,14 @@ export async function activateMarathon(giveawayId: number): Promise<void> {
     const event = getGiveawayEvent(giveawayId);
     if (!event) return;
 
+    // If a V2 marathon config exists, the new marathon.ts handles broadcasting.
+    // Skip the old notification loop to avoid duplicates.
+    const { getActiveMarathonConfig } = await import('./db.js');
+    const v2Config = getActiveMarathonConfig();
+    const isV2Marathon = v2Config && v2Config.giveaway_id === giveawayId;
+
+    if (isV2Marathon) return; // V2 handled by startMarathonBroadcast
+
     const testUserId = getTestUserId();
     if (testUserId) console.log(`[test-mode] sending only to test user ${testUserId}`);
     const users = testUserId
@@ -526,6 +534,15 @@ export async function checkMarathonDeadlines(telegram: Telegram): Promise<void> 
         g => g.event_type === 'marathon' && g.ends_at && new Date(g.ends_at) <= now
     );
     for (const m of expired) {
+        // Skip if a V2 marathon config exists for this event — the new system handles it.
+        const { getActiveMarathonConfig } = await import('./db.js');
+        const v2Config = getActiveMarathonConfig();
+        const isV2Marathon = v2Config && v2Config.giveaway_id === m.id;
+        if (isV2Marathon) {
+            setGiveawayStatus(m.id, 'completed');
+            continue;
+        }
+
         const winners = selectWinners(m.id);
         const winnerIds = new Set(winners.map(w => w.telegram_id));
         const all = getGiveawayParticipants(m.id, true);

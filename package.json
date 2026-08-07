@@ -8,6 +8,7 @@
   "scripts": {
     "bot": "tsx src/bot.ts",
     "build": "npx tsc",
+    "build:safe": "bash upgrades/scripts/build-safe.sh",
     "lint": "npx eslint .",
     "docs": "npx typedoc",
     "test": "vitest --config vitest.config.ts",

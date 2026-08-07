@@ -51,12 +51,12 @@ export const PRODUCT_LIMITS: Record<Product, ProductLimits> = {
     },
     ai_trading: {
         dailyCap: 10,
-        unlockBalance: 30,
+        unlockBalance: 100,
         capLabel: '10 trades/day',
     },
     auto_trading: {
         dailyCap: 30,  // minutes
-        unlockBalance: 100,
+        unlockBalance: 500,
         capLabel: '30 minutes/day',
     },
 };
@@ -69,31 +69,32 @@ export const SIGNALS_PREMIUM_COUNT = 5;
 export const ALL_PAIRS = [
     'EURUSD-OTC', 'GBPUSD-OTC', 'EURJPY-OTC', 'GBPJPY-OTC',
     'AUDUSD-OTC', 'USDCAD-OTC', 'EURGBP-OTC', 'USDCHF-OTC',
+    'XAUUSD-OTC', 'BTCUSD-OTC-op',
 ];
 
 export const PRODUCT_CONFIGS: Record<Product, ProductConfig> = {
     signals: {
         label: 'Signals',
         maxConcurrentTrades: 0, // signals don't trade
-        allowedTimeframes: [30, 60, 300],
+        allowedTimeframes: [30, 60, 120, 300],
         allowedGaleOptions: [0, 3, 6],
         galeCanDisable: true,
         defaultGaleRounds: 6,
         pairs: ALL_PAIRS,
     },
     ai_trading: {
-        label: 'AI Trading',
+        label: 'Private Trader',
         maxConcurrentTrades: 5,
-        allowedTimeframes: [30, 60, 300],
+        allowedTimeframes: [30, 60, 120, 300],
         allowedGaleOptions: [0, 3, 6],
         galeCanDisable: true,
         defaultGaleRounds: 6,
         pairs: ALL_PAIRS,
     },
     auto_trading: {
-        label: 'Auto Trading',
+        label: 'Autopilot',
         maxConcurrentTrades: 1, // engine keeps 1 position open at a time
-        allowedTimeframes: [30, 60, 300],
+        allowedTimeframes: [30, 60, 120, 300],
         allowedGaleOptions: [0, 3, 6],
         galeCanDisable: true,
         defaultGaleRounds: 6,
