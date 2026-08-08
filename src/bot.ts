@@ -12,6 +12,7 @@ import { resolveAccess, getProductConfig, hasAccess, getProduct, convertToUsd, t
 import { runUpgradeTokenSweep, UPGRADE_TOKEN_RESET_DATE_KEY } from './upgrade-token.js';
 import { initCheckinDb, startCheckinScheduler, setCheckinLiveRefresher, handleCheckinCallback, tryHandleCheckinTargetText } from './checkin.js';
 import { initSmartFlowDb, setSmartFlowScanner, setSmartFlowWizardStarter, setSmartFlowPhotoSender, handleSmartFlowCallback, tryHandleSmartFlowText, getFlowMsgs } from './smart-flow.js';
+import { startUpdateWatchdog } from './watchdog.js';
 import { autoEngine, initAutoEngine } from './auto-trading.js';
 import { startSwarm, stopSwarm, getSwarmSession, getSwarmStats, setSwarmNotifier, initSwarmDb } from './swarm.js';
 import { startCopying, stopCopying, getCopyStatus, setCopyNotifier, initCopyDb } from './copy-trading.js';
@@ -188,6 +189,11 @@ const sendSuppressedUntil = new Map();
         }
     };
 }
+// Update-starvation watchdog — registered FIRST so its consumption tracker sits
+// ahead of every other middleware (the early-return gates below would otherwise
+// starve the tracker while the poller is alive). Its 30s health poll only ever
+// exits when Telegram reports queued updates AND nothing was consumed for 3min.
+startUpdateWatchdog(bot);
 // ─── Channel integration ──────────────────────────────────────────────────────
 setupChannelHandlers(bot);
 // Save Telegram username on every interaction
