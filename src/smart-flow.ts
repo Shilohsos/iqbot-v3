@@ -25,6 +25,8 @@ const DEPOSIT_URL = 'https://iqoption.com/pwa/payments/deposit';
 
 /** Recommendation cache freshness — a scan older than this is refreshed on open. */
 const CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+/** Card rotates after this many new trades (assets/timeframes/stakes all vary). */
+const ROTATION_TRADE_STEP = 5;
 /** A live balance at or below this fraction of the cached one forces a rescan. */
 const BALANCE_DROP_RATIO = 0.5;
 /** Suggested stake as a fraction of the live balance. */
@@ -65,9 +67,9 @@ const CAP_SPREAD_SETS = [
 ];
 
 /**
- * Deterministic rotation seed — changes once per cache window (6h) so each
- * fresh scan recommends a different timeframe pair / asset order / amounts,
- * but the card stays stable within the window. Mirrors needsRescan's TTL.
+ * Rotation key — changes once per ROTATION_TRADE_STEP trades so each fresh
+ * scan recommends a different timeframe pair / asset order / amounts, but the
+ * card stays stable between scans. (Trade-count based, not wall-clock based.)
  */
 function rotationSeed(): number {
     return Math.floor(Date.now() / CACHE_TTL_MS);
@@ -112,6 +114,7 @@ interface CacheRow {
     balance_demo: number | null;
     recommendations: string | null;
     updated_at: string | null;
+    trades_at_scan: number | null;
 }
 
 /** Table lives in db.ts (created at import); this only verifies it is present so
@@ -125,16 +128,22 @@ function readCache(telegramId: number): CacheRow | null {
     return (db.prepare('SELECT * FROM smart_flow_cache WHERE telegram_id = ?').get(telegramId) as CacheRow | undefined) ?? null;
 }
 
-function writeCache(telegramId: number, live: number, demo: number, rec: SmartRecommendation): void {
+function writeCache(telegramId: number, live: number, demo: number, rec: SmartRecommendation, tradesAtScan: number): void {
     const now = new Date().toISOString();
     db.prepare(`
-        INSERT INTO smart_flow_cache (telegram_id, last_scan_at, balance_live, balance_demo, recommendations, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO smart_flow_cache (telegram_id, last_scan_at, balance_live, balance_demo, recommendations, updated_at, trades_at_scan)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(telegram_id) DO UPDATE SET
             last_scan_at = excluded.last_scan_at, balance_live = excluded.balance_live,
             balance_demo = excluded.balance_demo, recommendations = excluded.recommendations,
-            updated_at = excluded.updated_at
-    `).run(telegramId, now, live, demo, JSON.stringify(rec), now);
+            updated_at = excluded.updated_at, trades_at_scan = excluded.trades_at_scan
+    `).run(telegramId, now, live, demo, JSON.stringify(rec), now, tradesAtScan);
+}
+
+/** Total trades the user has ever placed — the rotation key for the card. */
+function countUserTrades(telegramId: number): number {
+    const row = db.prepare('SELECT COUNT(*) AS n FROM trades WHERE telegram_id = ?').get(telegramId) as { n: number } | undefined;
+    return row?.n ?? 0;
 }
 
 /** Most-traded pairs and most-used timeframe over the last 7 days. */
@@ -209,14 +218,14 @@ function filterOpen(candidates: string[], openPairs: string[] | null, banned: Se
  * comparing the raw 150000 against 500 would wrongly unlock Autopilot. The stake
  * and every displayed figure stay in the user's own currency.
  */
-function buildRecommendation(liveUsd: number, liveNative: number, currency: string, telegramId: number, openPairs: string[] | null): SmartRecommendation {
+function buildRecommendation(liveUsd: number, liveNative: number, currency: string, telegramId: number, openPairs: string[] | null, tradeCount: number): SmartRecommendation {
     const privileged = telegramId === getAdminId() || PRIVILEGED_IDS.has(telegramId);
     const banned = privileged ? PRIV_BANNED_ASSETS : null;
     const history = readHistory(telegramId);
-    // Rotate the asset suggestion order per scan window so the card is not
-    // identical every time — most-used pairs still lead, but a different slice
-    // of the pool gets surfaced each window.
-    const rot = rotationSeed() % 3;
+    // Rotate the asset suggestion order per 5 trades so the card visibly
+    // changes as the user trades — most-used pairs still lead, but a different
+    // slice of the pool gets surfaced every 5 trades (not once per 6h window).
+    const rot = Math.floor(tradeCount / ROTATION_TRADE_STEP) % 3;
     const candidates = history.pairs.length > 0
         ? [...history.pairs.slice(rot), ...history.pairs.slice(0, rot), ...DEFAULT_ASSETS.filter(d => !history.pairs.includes(d))]
         : DEFAULT_ASSETS;
@@ -283,12 +292,17 @@ function buildRecommendation(liveUsd: number, liveNative: number, currency: stri
     };
 }
 
-/** Cache-freshness rule: rescan when absent or older than 6h (the ≥50%-drop
- *  trigger is evaluated separately, in resolveSetup). */
-function needsRescan(cache: CacheRow | null): boolean {
+/** Cache-freshness rule: rescan when absent, older than 6h, or the user has
+ *  placed ≥5 new trades since the cached scan (the card should rotate as they
+ *  trade, not only when the window expires). The ≥50%-drop trigger is evaluated
+ *  separately, in resolveSetup. */
+function needsRescan(cache: CacheRow | null, tradeCount: number): boolean {
     if (!cache || !cache.last_scan_at || !cache.recommendations) return true;
     const age = Date.now() - new Date(cache.last_scan_at).getTime();
-    return !isFinite(age) || age > CACHE_TTL_MS;
+    if (isFinite(age) && age > CACHE_TTL_MS) return true;
+    const tradesAtScan = cache.trades_at_scan;
+    if (tradesAtScan != null && tradeCount - tradesAtScan >= ROTATION_TRADE_STEP) return true;
+    return false;
 }
 
 /** True when the balance has at least halved since the scan the cache was built
@@ -390,8 +404,9 @@ async function resolveSetup(telegramId: number): Promise<{ rec: SmartRecommendat
     const cache = readCache(telegramId);
     const cachedRec = parseRec(cache?.recommendations);
     const currentUsd = getUser(telegramId)?.funded_balance_usd ?? 0;
+    const tradeCount = countUserTrades(telegramId);
 
-    if (!needsRescan(cache) && cachedRec && !balanceDropped(cachedRec.scanLiveUsd, currentUsd)) {
+    if (!needsRescan(cache, tradeCount) && cachedRec && !balanceDropped(cachedRec.scanLiveUsd, currentUsd)) {
         return { rec: cachedRec, live: cache!.balance_live, demo: cache!.balance_demo, stale: false };
     }
 
@@ -412,8 +427,8 @@ async function resolveSetup(telegramId: number): Promise<{ rec: SmartRecommendat
     // The scanner refreshes funded_balance_usd as part of the live read, so this
     // is the USD value matching the balance we just fetched.
     const liveUsd = getUser(telegramId)?.funded_balance_usd ?? 0;
-    const rec = buildRecommendation(liveUsd, liveNative, currency, telegramId, scan.openPairs);
-    writeCache(telegramId, liveNative, demoNative, rec);
+    const rec = buildRecommendation(liveUsd, liveNative, currency, telegramId, scan.openPairs, tradeCount);
+    writeCache(telegramId, liveNative, demoNative, rec, tradeCount);
     return { rec, live: liveNative, demo: demoNative, stale: false };
 }
 

@@ -491,7 +491,8 @@ db.exec(`
     balance_live    REAL,
     balance_demo    REAL,
     recommendations TEXT,
-    updated_at      TEXT
+    updated_at      TEXT,
+    trades_at_scan  INTEGER
   )
 `);
 {
@@ -502,6 +503,8 @@ db.exec(`
         db.exec('ALTER TABLE smart_flow_cache ADD COLUMN recommendations TEXT');
     if (!sfCols.includes('updated_at'))
         db.exec('ALTER TABLE smart_flow_cache ADD COLUMN updated_at TEXT');
+    if (!sfCols.includes('trades_at_scan'))
+        db.exec('ALTER TABLE smart_flow_cache ADD COLUMN trades_at_scan INTEGER');
 }
 
 db.exec(`
