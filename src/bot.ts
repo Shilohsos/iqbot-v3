@@ -1320,7 +1320,11 @@ async function runMartingale(ctx, ssid, pair, direction, amount, timeframeSec = 
         const roundTimeoutMs = (timeframeSec + 120) * 1000 + 300_000;
         // Subtle-loss display: strike a lost round via combining U+0336 so it renders
         // in PLAIN text (the trade card has no parse_mode — Markdown ~~ never shows).
-        const strike = (s) => [...String(s)].map(c => c + '\u0336').join('');
+        // Losses render as Telegram-native <s> strikethrough (HTML parse mode).
+        // Unicode U+0336 combining marks did not render on all Android clients,
+        // so losses appeared plain — user-facing subtle-loss rule broken.
+        const escHtml = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        const strike = (s) => `<s>${escHtml(s)}</s>`;
         let currentAmount = amount;
         let totalPnl = 0;
         const logLines = ['✦ Trade session initialized…'];
@@ -1363,7 +1367,7 @@ async function runMartingale(ctx, ssid, pair, direction, amount, timeframeSec = 
         };
         const syncLog = async () => {
             try {
-                await ctx.telegram.editMessageText(ctx.chat.id, logMsg.message_id, undefined, logLines.join('\n'));
+                await ctx.telegram.editMessageText(ctx.chat.id, logMsg.message_id, undefined, logLines.join('\n'), { parse_mode: 'HTML' });
             }
             catch (e) { logger.warn('gale', `session log edit failed: ${e instanceof Error ? e.message : e}`); }
         };
@@ -1563,10 +1567,10 @@ async function runMartingale(ctx, ssid, pair, direction, amount, timeframeSec = 
                             ] } }).catch((e) => logger.warn('gale', `insufficient-balance notice send failed: ${e instanceof Error ? e.message : e}`));
                     return;
                 }
-                logLines[lastIdx] = `✦ Trade ${round}|⚠️ ${fmtMoney(currentAmount, currency)} → ${result.error ?? result.status}`;
+                logLines[lastIdx] = `✦ Trade ${round}|⚠️ ${fmtMoney(currentAmount, currency)} → ${friendlyError(result.error ?? result.status, '⚠️ Something went wrong — try again.')}`;
             }
             else {
-                logLines[lastIdx] = `✦ Trade ${round}|⚠️ ${fmtMoney(currentAmount, currency)} → ${result.error ?? result.status}`;
+                logLines[lastIdx] = `✦ Trade ${round}|⚠️ ${fmtMoney(currentAmount, currency)} → ${friendlyError(result.error ?? result.status, '⚠️ Something went wrong — try again.')}`;
             }
             await syncLog();
             // Update session stats on any settled trade
@@ -1627,7 +1631,7 @@ async function runMartingale(ctx, ssid, pair, direction, amount, timeframeSec = 
             // Upgrade law: NO_FILL = buy/result unconfirmed — never double gale
             if (result.status === 'NO_FILL') {
                 buyFailRetries++;
-                logLines[logLines.length - 1] = `✦ Trade ${round}|⚠️ ${fmtMoney(currentAmount, currency)} → not filled (${result.error ?? 'unconfirmed'})`;
+                logLines[logLines.length - 1] = `✦ Trade ${round}|⚠️ ${fmtMoney(currentAmount, currency)} → not filled (${friendlyError(result.error, 'unconfirmed')})`;
                 await syncLog();
                 // Part C: a closing-socket rejection marks the pool entry unhealthy
                 // NOW, so the same-stake retry below goes through the pre-buy gate
@@ -1758,7 +1762,7 @@ async function runMartingale(ctx, ssid, pair, direction, amount, timeframeSec = 
                     /market is closed|Unknown pair|No .* instrument|can.*be bought|closed right now|WebSocket.*clos|ws.*clos|socket.*clos|is closing|profit rate change|not been purchased|4117|no trade placed|Buy timed out|Buy failed|IQ Option timed out|SDK .* timed out|timed out/i.test(errMsg);
                 if (isBuyFailure) {
                     buyFailRetries++;
-                    logLines[logLines.length - 1] = `✦ Trade ${round}|⚠️ ${fmtMoney(currentAmount, currency)} → ${errMsg}`;
+                    logLines[logLines.length - 1] = `✦ Trade ${round}|⚠️ ${fmtMoney(currentAmount, currency)} → ${friendlyError(errMsg, '⚠️ Trade could not be placed — try again.')}`;
                     await syncLog();
                     const isMarketClosed = /market is closed|closed right now|can.*be bought|No .* instrument|Unknown pair/i.test(errMsg);
                     const isTimeout = /timed out|timeout/i.test(errMsg);

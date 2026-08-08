@@ -81,14 +81,15 @@ export async function recoverMissedTradeResults(bot, runMartingaleFn) {
                     const galeRow = db.prepare("SELECT id, log_msg_id, current_round, effective_rounds, current_amount, base_amount, direction, balance_type, currency, timeframe_sec, total_pnl FROM gale_sessions WHERE telegram_id=? AND pair=? AND status IN ('active','resuming') ORDER BY id DESC LIMIT 1").get(row.telegram_id, row.pair);
                     if (galeRow && galeRow.log_msg_id) {
                         const emoji = dbStatus === 'WIN' ? '🟢' : dbStatus === 'LOSS' ? '' : '⚪';
-                        const strike = (s) => [...String(s)].map(c => c + '\u0336').join('');
+                        const escHtml = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                        const strike = (s) => `<s>${escHtml(s)}</s>`;
                         // Whole-dollar struck loss with the currency symbol (mirrors the
                         // dist-only patch — Part 6: no cents, symbol not currency code).
                         const sym = SYM[currency] ?? '$';
                         const cardText = dbStatus === 'LOSS'
                             ? `✦ Trade session\n✦ Trade ${galeRow.current_round}| ${strike(`-${sym}${Math.round(row.amount).toLocaleString('en-US')}`)}`
                             : `✦ Trade session\n✦ Trade ${galeRow.current_round}|${emoji} ${row.amount.toFixed(2)} ${currency} → ${dbStatus} ${pnlStr}`;
-                        await bot.telegram.editMessageText(row.telegram_id, galeRow.log_msg_id, undefined, cardText)
+                        await bot.telegram.editMessageText(row.telegram_id, galeRow.log_msg_id, undefined, cardText, { parse_mode: 'HTML' })
                             .catch((e: unknown) => console.warn(`[RECOVERY] card edit failed for user ${row.telegram_id}: ${e instanceof Error ? e.message : e}`));
                     }
                 } catch (e) {
