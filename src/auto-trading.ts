@@ -323,13 +323,23 @@ class AutoRunner {
             engineUnregister(this.chatId);
             return;
         }
-        // Validate martingale state: any mg_active on (re)start is orphaned — the
-        // in-flight trade died with the previous process — so clear it and start
-        // the sequence fresh instead of "resuming" a trade that no longer exists.
+        // Validate martingale state: mg_active on (re)start is only orphaned if
+        // there is NO pending trade to recover. If an in-flight/TIMEOUT trade
+        // exists (the process died mid-chain), PRESERVE the state — the periodic
+        // recovery resolves the trade and advances mg_next_amount so the chain
+        // continues doubling (restart-mid-chain bug: start() wiped the state,
+        // recovery found mg_active=0, next trade restarted at the base amount).
         const s = getAutoSession(this.chatId);
         if (s?.mg_active) {
-            logger.warn('auto', `clearing orphaned martingale state for ${this.chatId} (was amount ${s.mg_next_amount})`);
-            setAutoSessionMgState(this.chatId, false);
+            const pending = db.prepare(`SELECT COUNT(*) c FROM trades
+                WHERE telegram_id=? AND status IN ('in_flight','TIMEOUT')
+                  AND created_at >= datetime('now','-45 minutes')`).get(this.chatId);
+            if (pending.c === 0) {
+                logger.warn('auto', `clearing orphaned martingale state for ${this.chatId} (was amount ${s.mg_next_amount})`);
+                setAutoSessionMgState(this.chatId, false);
+            } else {
+                logger.info('auto', `preserving martingale state for ${this.chatId} (${pending.c} unresolved trade(s) — recovery will advance the chain)`);
+            }
         }
         // Start demo timer if in demo mode
         if (this.mode === 'demo') {
