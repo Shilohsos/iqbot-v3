@@ -11,7 +11,7 @@ import { withBackgroundSdk, bgSdkStats } from './concurrency.js';
 import { resolveAccess, getProductConfig, hasAccess, getProduct, convertToUsd, tokenToAccess, AI_TRADING_MIN_USD, AUTO_TRADING_MIN_USD, FREE_SIGNALS_PER_DAY, ALL_PAIRS, PRODUCT_LIMITS, SIGNALS_PREMIUM_COUNT, clampDisplayConfidence, TOKEN_ACCESS_DURATION_MS, godModeStakePct, godModeTimeframe, godModeGaleRounds, godModePickWorstAssets, CURRENCY_SYMBOLS, fmtBalance, fmtMoney, } from './access.js';
 import { runUpgradeTokenSweep, UPGRADE_TOKEN_RESET_DATE_KEY } from './upgrade-token.js';
 import { initCheckinDb, startCheckinScheduler, setCheckinLiveRefresher, handleCheckinCallback, tryHandleCheckinTargetText } from './checkin.js';
-import { initSmartFlowDb, setSmartFlowScanner, setSmartFlowWizardStarter, setSmartFlowPhotoSender, handleSmartFlowCallback, tryHandleSmartFlowText, getFlowMsgs } from './smart-flow.js';
+import { initSmartFlowDb, setSmartFlowScanner, setSmartFlowWizardStarter, setSmartFlowPhotoSender, handleSmartFlowCallback, tryHandleSmartFlowText, getFlowMsgs, startHotBoardScanner } from './smart-flow.js';
 import { startUpdateWatchdog } from './watchdog.js';
 import { autoEngine, initAutoEngine } from './auto-trading.js';
 import { startSwarm, stopSwarm, getSwarmSession, getSwarmStats, setSwarmNotifier, initSwarmDb } from './swarm.js';
@@ -7682,6 +7682,9 @@ startCheckinScheduler(bot);
 // entry. Nothing here runs on a schedule: the scan below fires only when a user
 // opens the flow and the cache is stale.
 initSmartFlowDb();
+// Hot-asset board (10-min scan, all products) — privileged users' smart-flow
+// asset suggestions follow what is winning right now.
+startHotBoardScanner();
 // Photo sender — reuses the asset file_id cache so the new smart-flow sections
 // (card L4, timeframe L5, hand-off L6) upload each graphic once, like the wizard.
 setSmartFlowPhotoSender(async (ctx, assetName, caption, keyboard) => {

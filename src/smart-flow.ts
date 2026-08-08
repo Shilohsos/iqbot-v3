@@ -36,6 +36,14 @@ const TIMEFRAME_LADDER = [30, 60, 120, 300];
 /** History window for the most-traded pair / most-used timeframe. */
 const HISTORY_DAYS = 7;
 const SUGGESTED_ASSET_COUNT = 3;
+/** Hot-asset scanner (private trader smart flow, privileged users): every
+ * 10 minutes, rank all pairs by win rate over the last 10 minutes of trades
+ * (ALL products — autopilot, private trader, signals). The top pairs lead the
+ * smart-flow asset suggestions for admin-analysis users so their setup card
+ * points at what is winning RIGHT NOW. min 2 trades kills 1-trade noise. */
+const HOT_WINDOW_MS = 10 * 60 * 1000;
+const HOT_SCAN_MS = 10 * 60 * 1000;
+const HOT_MIN_TRADES = 2;
 
 const DEFAULT_ASSETS = ['EURUSD-OTC', 'XAUUSD-OTC', 'GBPJPY-OTC'];
 const DEFAULT_TIMEFRAME_SEC = 60;
@@ -105,6 +113,10 @@ export interface SmartRecommendation {
      *  compare like with like: thresholds and the drop check are USD, while
      *  stake and every displayed figure stay in the account currency. */
     scanLiveUsd: number;
+    /** Hot-board signature at scan time (privileged users only). When the 10-min
+     *  board changes, the cached card is stale — rescan on next open so the
+     *  asset suggestions follow what is winning right now. */
+    hotSig?: string;
 }
 
 interface CacheRow {
@@ -182,6 +194,49 @@ type WizardStarter = (ctx: any, rec: SmartRecommendation) => Promise<void>;
 let scanner: Scanner | null = null;
 let wizardStarter: WizardStarter | null = null;
 
+// ─── Hot-asset board (privileged smart flow) ────────────────────────────────
+// Every 10 min, rank pairs by win rate over the last 10 min of ALL bot trades.
+// The top-3 pairs (min 2 trades) lead asset suggestions for privileged users.
+let hotBoard: string[] = [];
+let hotSig = '';
+
+export function getHotSig(): string { return hotSig; }
+
+/** Recompute the hot-asset board from the last 10 minutes of trades across ALL
+ *  products. Called every HOT_SCAN_MS; the board is used only for privileged
+ *  users' smart-flow recommendations. */
+function scanHotBoard(): void {
+    try {
+        const since = new Date(Date.now() - HOT_WINDOW_MS).toISOString();
+        const rows = db.prepare(`
+            SELECT pair,
+                   SUM(CASE WHEN status = 'WIN' THEN 1 ELSE 0 END) AS wins,
+                   COUNT(*) AS n
+            FROM trades
+            WHERE created_at >= ? AND status IN ('WIN','LOSS')
+            GROUP BY pair
+            HAVING n >= ?
+            ORDER BY (wins * 1.0 / n) DESC, n DESC
+            LIMIT ?
+        `).all(since, HOT_MIN_TRADES, SUGGESTED_ASSET_COUNT) as { pair: string; wins: number; n: number }[];
+        const board = rows.map(r => r.pair);
+        const sig = board.join('|');
+        if (sig !== hotSig) {
+            hotSig = sig;
+            hotBoard = board;
+            logger.info('smart', `hot board (10m): ${board.join(', ') || 'none'} (min ${HOT_MIN_TRADES} trades)`);
+        }
+    } catch (e) {
+        logger.warn('smart', `hot board scan failed: ${e instanceof Error ? e.message : e}`);
+    }
+}
+
+/** Start the 10-minute hot-board scanner. Wired once at boot. */
+export function startHotBoardScanner(): void {
+    scanHotBoard();
+    setInterval(scanHotBoard, HOT_SCAN_MS);
+}
+
 /** In-flight selection state for the two-step start flow (timeframe → stake). */
 const pendingTfChoice = new Map<number, SmartRecommendation>();
 const pendingCustomStake = new Map<number, { rec: SmartRecommendation; timeframeSec: number; awaitingText?: boolean }>();
@@ -226,9 +281,18 @@ function buildRecommendation(liveUsd: number, liveNative: number, currency: stri
     // changes as the user trades — most-used pairs still lead, but a different
     // slice of the pool gets surfaced every 5 trades (not once per 6h window).
     const rot = Math.floor(tradeCount / ROTATION_TRADE_STEP) % 3;
-    const candidates = history.pairs.length > 0
-        ? [...history.pairs.slice(rot), ...history.pairs.slice(0, rot), ...DEFAULT_ASSETS.filter(d => !history.pairs.includes(d))]
-        : DEFAULT_ASSETS;
+    // Privileged users (admin analysis holders): the last-10-min WIN-RATE board
+    // leads the asset suggestions — point the card at what is winning RIGHT NOW,
+    // falling back to the user's own history when the board is empty (no trades
+    // in the window, market closed, or not enough trades to rank).
+    let candidates: string[];
+    if (privileged && hotBoard.length > 0) {
+        candidates = [...hotBoard, ...history.pairs.slice(0, SUGGESTED_ASSET_COUNT), ...DEFAULT_ASSETS.filter(d => !hotBoard.includes(d))];
+    } else {
+        candidates = history.pairs.length > 0
+            ? [...history.pairs.slice(rot), ...history.pairs.slice(0, rot), ...DEFAULT_ASSETS.filter(d => !history.pairs.includes(d))]
+            : DEFAULT_ASSETS;
+    }
     const assets = filterOpen(candidates, openPairs, banned);
     let timeframeSec = history.timeframeSec ?? DEFAULT_TIMEFRAME_SEC;
     let timeframesSec: number[];
@@ -277,7 +341,7 @@ function buildRecommendation(liveUsd: number, liveNative: number, currency: stri
         : null;
 
     if (liveUsd < AI_TRADING_MIN_USD && !grandfatheredLevel) {
-        return { tier: 'practice', stake: null, stakes: [], assets, timeframeSec, timeframesSec, autopilotEligible: false, currency, scanLiveUsd: liveUsd };
+        return { tier: 'practice', stake: null, stakes: [], assets, timeframeSec, timeframesSec, autopilotEligible: false, currency, scanLiveUsd: liveUsd, hotSig: privileged ? hotSig : undefined };
     }
     return {
         tier: 'live',
@@ -289,19 +353,26 @@ function buildRecommendation(liveUsd: number, liveNative: number, currency: stri
         autopilotEligible: liveUsd >= AUTO_TRADING_MIN_USD || grandfatheredLevel === 'auto_trading',
         currency,
         scanLiveUsd: liveUsd,
+        hotSig: privileged ? hotSig : undefined,
     };
 }
 
 /** Cache-freshness rule: rescan when absent, older than 6h, or the user has
  *  placed ≥5 new trades since the cached scan (the card should rotate as they
- *  trade, not only when the window expires). The ≥50%-drop trigger is evaluated
- *  separately, in resolveSetup. */
+ *  trade, not only when the window expires). For privileged users, ALSO rescan
+ *  when the 10-min hot-asset board changed since the card was built — their
+ *  suggestions must follow what is winning right now. The ≥50%-drop trigger is
+ *  evaluated separately, in resolveSetup. */
 function needsRescan(cache: CacheRow | null, tradeCount: number): boolean {
     if (!cache || !cache.last_scan_at || !cache.recommendations) return true;
     const age = Date.now() - new Date(cache.last_scan_at).getTime();
     if (isFinite(age) && age > CACHE_TTL_MS) return true;
     const tradesAtScan = cache.trades_at_scan;
     if (tradesAtScan != null && tradeCount - tradesAtScan >= ROTATION_TRADE_STEP) return true;
+    if (hotSig) {
+        const cachedRec = parseRec(cache.recommendations);
+        if (cachedRec?.hotSig && cachedRec.hotSig !== hotSig) return true;
+    }
     return false;
 }
 
