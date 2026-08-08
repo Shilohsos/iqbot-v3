@@ -29,6 +29,13 @@ class UserSdkPool {
             return inFlight;
         const existing = this.entries.get(userId);
         if (existing) {
+            // Part C: a closing/not-open SDK must never be returned as healthy —
+            // catch it here so even the healthy-flag fast path below can't hand
+            // out a disconnect()-ed SDK whose flag was never flipped.
+            if (existing.healthy && this.sdkClosingState(existing.sdk)) {
+                existing.healthy = false;
+                console.warn(`[pool] user ${userId} SDK is closing/not-open — marked unhealthy, rebuilding`);
+            }
             const ssidMismatch = existing.ssid !== ssid;
             if (!ssidMismatch && existing.healthy) {
                 existing.inUse = true;
@@ -114,6 +121,29 @@ class UserSdkPool {
         ]);
     }
 
+    /** True when the SDK's transport is closing/disconnecting or its socket is
+     *  not OPEN — the state whose buys reject with "WebSocket is closing; new
+     *  requests are rejected" (DIRECTIVE-WEBSOCKET-CLOSING-PERMANENT-FIX). */
+    sdkClosingState(sdk) {
+        try {
+            const ws = sdk?.ws?.socket?.readyState;
+            if (ws !== undefined && ws !== 1) return true; // 1 = OPEN
+            const client = sdk?.wsApiClient;
+            if (client && (client.isClosing || client.disconnecting)) return true;
+        } catch { /* can't check */ }
+        return false;
+    }
+
+    /** Part C: consumers report an observed closing/not-open rejection so the
+     *  next get() rebuilds instead of returning the same dying SDK. */
+    markUnhealthy(userId, reason) {
+        const entry = this.entries.get(userId);
+        if (entry && entry.healthy) {
+            entry.healthy = false;
+            console.warn(`[pool] user ${userId} marked unhealthy: ${reason}`);
+        }
+    }
+
     /** Check if a pooled entry's SDK is actually alive. */
     isEntryHealthy(entry) {
         if (!entry) return false;
@@ -121,10 +151,17 @@ class UserSdkPool {
         if (!entry.healthy) return false;
         // Last activity < 5 min ago
         if (Date.now() - entry.lastUsed > 5 * 60 * 1000) return false;
-        // Check WebSocket readyState if available
+        // Check WebSocket readyState + closing/disconnecting flags if available.
+        // A closing-state SDK is marked unhealthy on the spot so no other path
+        // (including get()'s healthy-flag fast path) can hand it out again.
         try {
             const ws = entry.sdk?.ws?.socket?.readyState;
             if (ws !== undefined && ws !== 1) return false; // 1 = OPEN
+            const client = entry.sdk?.wsApiClient;
+            if (client && (client.isClosing || client.disconnecting)) {
+                entry.healthy = false;
+                return false;
+            }
         } catch { /* can't check — trust healthy flag */ }
         return true;
     }

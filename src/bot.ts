@@ -1394,6 +1394,19 @@ async function runMartingale(ctx, ssid, pair, direction, amount, timeframeSec = 
             sentMessages.push(catchReply.message_id);
             scheduleCleanup();
         };
+        // Pre-buy socket check (DIRECTIVE-WEBSOCKET-CLOSING-PERMANENT-FIX Part A):
+        // a buy on a closing/disconnecting transport rejects with "WebSocket is
+        // closing; new requests are rejected" — never even attempt it.
+        function sdkUsable(sdk) {
+            try {
+                const ws = sdk?.ws?.socket?.readyState;
+                // 1 = OPEN; treat undefined as "can't check" → assume usable
+                if (ws !== undefined && ws !== 1) return false;
+                const client = sdk?.wsApiClient;
+                if (client && (client.isClosing || client.disconnecting)) return false;
+                return true;
+            } catch { return true; }
+        }
         for (let round = 1; round <= effectiveRounds + 1; round++) {
             // Update persisted gale state before each round
             if (galeSessionId) {
@@ -1405,6 +1418,33 @@ async function runMartingale(ctx, ssid, pair, direction, amount, timeframeSec = 
             const execRound = () => activeSdk
                 ? withTimeout(executeTradeWithSdk(activeSdk, roundTrade), roundTimeoutMs, 'trade')
                 : withTimeout(executeTrade(activeSsid, roundTrade), roundTimeoutMs, 'trade');
+            // Pre-buy health gate — runs before EVERY buy (first trade + each gale
+            // round + same-stake NO_FILL retries). A dying socket is replaced with a
+            // fresh SDK BEFORE the buy; the post-failure rebuild below stays as the
+            // second line of defense. Unlike that path, this gate is not limited to
+            // one use per run — a WS drop between any two rounds gets a fresh
+            // connection and the round is bought at the same stake.
+            if (activeSdk && !sdkUsable(activeSdk)) {
+                logger.warn('gale', `pre-buy gate: SDK socket closing/not-open for ${userId} round ${round} — rebuilding before buy`);
+                try {
+                    if (isAdminUser) {
+                        try { await activeSdk.shutdown(); } catch (e) { logger.warn('gale', `pre-buy stale admin SDK shutdown failed: ${e instanceof Error ? e.message : e}`); }
+                        createdAdminSdk = await createSdk(getAdminSsid() || activeSsid);
+                        activeSdk = createdAdminSdk;
+                    }
+                    else {
+                        sdkPool.markUnhealthy(userId, 'pre-buy gate: socket closing/not-open');
+                        activeSdk = await sdkPool.get(userId, activeSsid);
+                    }
+                    logger.info('gale', `pre-buy gate: fresh SDK ready for ${userId} round ${round}`);
+                }
+                catch (e) {
+                    // Rebuild failed — fall back to the one-shot ssid path, which
+                    // opens its own brand-new connection for this round.
+                    logger.warn('gale', `pre-buy SDK rebuild failed (falling back to one-shot connection): ${e instanceof Error ? e.message : e}`);
+                    activeSdk = undefined;
+                }
+            }
             let result = { status: 'ERROR', error: '', pnl: 0, tradeId: 0, pair: '', direction: '', amount: 0 };
             try {
                 result = await execRound();
@@ -1589,6 +1629,13 @@ async function runMartingale(ctx, ssid, pair, direction, amount, timeframeSec = 
                 buyFailRetries++;
                 logLines[logLines.length - 1] = `✦ Trade ${round}|⚠️ ${fmtMoney(currentAmount, currency)} → not filled (${result.error ?? 'unconfirmed'})`;
                 await syncLog();
+                // Part C: a closing-socket rejection marks the pool entry unhealthy
+                // NOW, so the same-stake retry below goes through the pre-buy gate
+                // onto a rebuilt connection instead of the same dying one (this was
+                // the ₦3,000-failed-twice pattern — retry #2 reused the dead socket).
+                if (!isAdminUser && /WebSocket|is closing|not open/i.test(result.error ?? '')) {
+                    sdkPool.markUnhealthy(userId, `buy rejected: ${result.error}`);
+                }
                 if (buyFailRetries >= 2) {
                     const abortReply = await ctx.reply(
                         '⚠️ *Trade not confirmed*\n\n' +
