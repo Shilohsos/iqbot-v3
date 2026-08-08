@@ -1189,6 +1189,7 @@ export function upsertAutoSession(s: {
             currency = excluded.currency, amount = excluded.amount, assets = excluded.assets,
             timeframe = excluded.timeframe, gale_rounds = excluded.gale_rounds,
             status = 'running', current_asset_index = 0, trades_done = 0, evaluations = 0, pnl = 0,
+            seq_wins = 0, seq_losses = 0,
             last_error = NULL, started_at = datetime('now'), last_trade_at = NULL, mode = excluded.mode,
             status_msg_id = NULL
     `).run({ ...s, assets: JSON.stringify(s.assets), mode });
