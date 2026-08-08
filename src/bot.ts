@@ -503,7 +503,14 @@ async function dispatchBroadcastPayload(payload) {
     const sentMsgIds = [];
     let deferredCount = 0;
     const MAX_PENDING_PER_USER = 5;
-    for (const uid of targetIds) {
+    // Concurrency guard: sending to every user sequentially inside a Telegraf
+    // callback froze the bot — Telegraf processes updates one at a time, so a
+    // 1,000-user broadcast (2 API calls each: username lookup + send) blocked
+    // ALL other updates until it finished. Batches of 10 run concurrently and
+    // each send is timeout-wrapped so one stuck user can't stall the queue.
+    const BATCH = 10;
+    const SEND_TIMEOUT_MS = 20_000;
+    const sendOne = async (uid) => {
         try {
             // Resolve @username placeholder to actual first name
             const name = await resolveUsernameForId(bot, uid);
@@ -515,7 +522,7 @@ async function dispatchBroadcastPayload(payload) {
                     q.shift();
                 pendingDeliveries.set(uid, q);
                 deferredCount++;
-                continue;
+                return null;
             }
             let m;
             if (media && media.length > 1) {
@@ -556,9 +563,21 @@ async function dispatchBroadcastPayload(payload) {
             else {
                 m = await bot.telegram.sendMessage(uid, personalized, replyMarkup ? { reply_markup: replyMarkup } : undefined);
             }
-            sentMsgIds.push({ telegramId: uid, msgId: m.message_id });
+            return m;
         }
-        catch { }
+        catch { return null; }
+    };
+    const withTimeout = (p, ms) => Promise.race([
+        p,
+        new Promise(res => setTimeout(() => res(null), ms)),
+    ]);
+    for (let i = 0; i < targetIds.length; i += BATCH) {
+        const batch = targetIds.slice(i, i + BATCH);
+        const results = await Promise.all(batch.map(uid => withTimeout(sendOne(uid), SEND_TIMEOUT_MS)));
+        for (let j = 0; j < batch.length; j++) {
+            const m = results[j];
+            if (m) sentMsgIds.push({ telegramId: batch[j], msgId: m.message_id });
+        }
     }
     if (deleteAfterMs > 0) {
         setTimeout(() => { void runStaggeredDeletes(sentMsgIds); }, deleteAfterMs);
@@ -655,7 +674,12 @@ async function executeBroadcast(chatId, deleteAfterMs, ctx) {
         await ctx.reply('❌ Session expired.', { reply_markup: adminBackKeyboard() });
         return;
     }
-    const { sent, deferred } = await dispatchBroadcastPayload({ ...pending, deleteAfterMs });
+    // Fire-and-forget: the dispatch runs in the background so the Telegraf
+    // callback returns immediately. Awaiting it here froze the bot — Telegraf
+    // processes updates one at a time, so a multi-user broadcast blocked ALL
+    // other updates (messages, trades, everything) until it finished. The
+    // handler replies instantly; the broadcast completes on its own schedule.
+    const promise = dispatchBroadcastPayload({ ...pending, deleteAfterMs });
     // Pause auto-broadcasts for 30 minutes after manual broadcast
     const cooldownUntil = new Date(Date.now() + 30 * 60 * 1000).toISOString();
     setConfig('manual_broadcast_cooldown', cooldownUntil);
@@ -663,10 +687,17 @@ async function executeBroadcast(chatId, deleteAfterMs, ctx) {
     const timerLabel = deleteAfterMs === 0 ? 'never' :
         deleteAfterMs < 60_000 ? `${deleteAfterMs / 1_000}s` :
             deleteAfterMs < 3_600_000 ? `${deleteAfterMs / 60_000}m` : `${deleteAfterMs / 3_600_000}h`;
-    let confirmMsg = `✅ Broadcast sent to *${sent}/${pending.targetIds.length}* users. Auto-delete: ${timerLabel}`;
-    if (deferred > 0)
-        confirmMsg += `\n··· *${deferred}* deferred (active traders — will deliver after trade ends)`;
-    await ctx.reply(confirmMsg, { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
+    const targetCount = pending.targetIds.length;
+    await ctx.reply(`✅ Broadcast started — delivering to *${targetCount}* users in the background. Auto-delete: ${timerLabel}. I'll stay responsive while it runs.`, { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
+    promise.then(({ sent, deferred }) => {
+        let confirmMsg = `✅ Broadcast complete — *${sent}/${targetCount}* delivered. Auto-delete: ${timerLabel}`;
+        if (deferred > 0)
+            confirmMsg += `\n··· *${deferred}* deferred (active traders — will deliver after trade ends)`;
+        void notifyAdmin(confirmMsg, 'Markdown').catch(() => { });
+    }).catch((err) => {
+        console.error('[broadcast] background dispatch failed:', err);
+        void notifyAdmin('❌ Broadcast failed mid-delivery — check PM2 logs.', 'Markdown').catch(() => { });
+    });
 }
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 export function getSsidForUser(telegramId) {
