@@ -119,6 +119,14 @@ class AutoRunner {
     ssid = ''; // current SSID; updated when reconnect() re-logs in for a fresh one
     busy = false; // busy lock: true while runMartingaleCore is in-flight
     mode;
+    // ── Live engine state for the session card (visibility directive Part E) ──
+    // The card previously showed only counters, so a session that was alive but
+    // filtering weak setups looked identical to a dead one ("Active for 5 min,
+    // no trades — is that normal?"). These drive one extra status line.
+    engineState = 'scanning'; // scanning | watching | placed | paused | stopped
+    skipsSinceTrade = 0;      // consecutive low-confidence skips since the last placed trade
+    lastStateLine = '';       // last rendered line — re-render only on real change
+    lastStateRenderAt = 0;    // throttle stamp (see maybeRenderState)
     constructor(session, mode) {
         this.session = session;
         this.assets = JSON.parse(session.assets);
@@ -182,7 +190,37 @@ class AutoRunner {
         }
         return false;
     }
-    async renderStatus(last) {
+    /** The live engine-state line — tells the user the loop is alive and what it
+     *  is doing, so a filtering session no longer looks like a dead one. Same
+     *  visual style as the rest of the card (· marker, Markdown). */
+    stateLine(sessionStatus: string): string {
+        if (sessionStatus === 'paused')
+            return '· Paused';
+        if (sessionStatus === 'stopped')
+            return '· Stopped';
+        if (this.engineState === 'placed')
+            return '· Trade placed — waiting settlement';
+        if (this.engineState === 'watching' && this.skipsSinceTrade > 0) {
+            const n = this.skipsSinceTrade;
+            return `· Watching — ${n} setup${n === 1 ? '' : 's'} skipped (low confidence)`;
+        }
+        return '· Scanning market';
+    }
+    /** Re-render the card only when the state line actually changed, and at most
+     *  once per 25s. Skips arrive at most one per candle, so this bounds card
+     *  edits to ~2/min worst case while still showing the loop is alive — it
+     *  extends the existing per-trade edit cadence rather than adding messages. */
+    async maybeRenderState() {
+        const s = getAutoSession(this.chatId);
+        if (!s)
+            return;
+        if (this.stateLine(s.status) === this.lastStateLine)
+            return;
+        if (Date.now() - this.lastStateRenderAt < 25_000)
+            return;
+        await this.renderStatus();
+    }
+    async renderStatus(last?: string) {
         const s = getAutoSession(this.chatId);
         if (!s)
             return;
@@ -193,13 +231,17 @@ class AutoRunner {
         const asset = this.assets[s.current_asset_index % this.assets.length];
         const statusEmoji = s.status === 'running' ? '🟢 Live' : s.status === 'paused' ? '🟡 Paused' : '⚪ Stopped';
         const modeLabel = this.mode === 'demo' ? '✦ Demo' : '✦ Live';
+        const stateLine = this.stateLine(s.status);
         const text = [
             `✦ *Autopilot* · ${statusEmoji} · ${modeLabel}`,
             ``,
             `${asset} (${idx}/${this.assets.length}) · ${tfLabel(s.timeframe)} · ${s.gale_rounds}-round recovery`,
             `Trades: ${s.trades_done}   Scanned: ${scanned}   Won: ${wins}   Lost: ${losses}`,
+            stateLine,
             last ? `_${last}_` : '',
         ].filter(Boolean).join('\n');
+        this.lastStateLine = stateLine;
+        this.lastStateRenderAt = Date.now();
         const extra = {
             parse_mode: 'Markdown',
             reply_markup: { inline_keyboard: [[
@@ -329,16 +371,40 @@ class AutoRunner {
         // recovery resolves the trade and advances mg_next_amount so the chain
         // continues doubling (restart-mid-chain bug: start() wiped the state,
         // recovery found mg_active=0, next trade restarted at the base amount).
+        // RACE FIX: a pending-trade count alone is not enough. Boot fires
+        // recoverMissedTradeResults() and restoreAll() concurrently, and start()
+        // only reaches this check after `await this.connect(ssid)`. If recovery
+        // wins that race it resolves the orphan (status → LOSS) and advances
+        // mg_next_amount — and this check would then see pending=0 and CLEAR the
+        // state recovery just advanced, reintroducing the base-amount restart the
+        // fix was meant to remove. So decide from evidence, not from timing:
+        //   pending trade            → mid-chain            → preserve
+        //   last settled WIN/TIE     → chain finished       → clear
+        //   last settled LOSS/other  → recovery advanced it → preserve
+        //   no trade in the window   → genuinely orphaned   → clear
+        // mg_active only survives a restart when the process died mid-chain (the
+        // normal completion path clears it), so preserving is the safe default;
+        // the loop's own WIN/TIE check re-clears anything this over-preserves.
         const s = getAutoSession(this.chatId);
         if (s?.mg_active) {
             const pending = db.prepare(`SELECT COUNT(*) c FROM trades
                 WHERE telegram_id=? AND status IN ('in_flight','TIMEOUT')
                   AND created_at >= datetime('now','-45 minutes')`).get(this.chatId);
-            if (pending.c === 0) {
-                logger.warn('auto', `clearing orphaned martingale state for ${this.chatId} (was amount ${s.mg_next_amount})`);
-                setAutoSessionMgState(this.chatId, false);
-            } else {
+            if (pending.c > 0) {
                 logger.info('auto', `preserving martingale state for ${this.chatId} (${pending.c} unresolved trade(s) — recovery will advance the chain)`);
+            } else {
+                const last = db.prepare(`SELECT status FROM trades
+                    WHERE telegram_id=? AND created_at >= datetime('now','-45 minutes')
+                    ORDER BY id DESC LIMIT 1`).get(this.chatId);
+                if (!last) {
+                    logger.warn('auto', `clearing orphaned martingale state for ${this.chatId} (no trade in the recovery window, was amount ${s.mg_next_amount})`);
+                    setAutoSessionMgState(this.chatId, false);
+                } else if (last.status === 'WIN' || last.status === 'TIE') {
+                    logger.info('auto', `clearing martingale state for ${this.chatId} — chain already finished (last trade ${last.status})`);
+                    setAutoSessionMgState(this.chatId, false);
+                } else {
+                    logger.info('auto', `preserving martingale state for ${this.chatId} (last trade ${last.status} — recovery resolved it before start(); chain continues at ${s.mg_next_amount})`);
+                }
             }
         }
         // Start demo timer if in demo mode
@@ -465,7 +531,9 @@ class AutoRunner {
                 try {
                     const isPrivileged = this.chatId === getAdminId() || PRIV_IDS.has(this.chatId);
                     const useAdminAnalysis = isPrivileged || getConfig('admin_analysis_all') === 'true';
-                    let a;
+                    this.engineState = 'scanning';
+                    await this.maybeRenderState();
+                    let a: any;
                     if (this.mode === 'demo' || useAdminAnalysis) {
                         // Demo mode or privileged → admin analysis
                         a = await withTimeout(this.analyzeAsset(asset, s.timeframe), 15_000, 'analyze');
@@ -473,12 +541,21 @@ class AutoRunner {
                     else {
                         a = await withTimeout(this.analyzeAsset(asset, s.timeframe), 15_000, 'analyze');
                     }
+                    // Diagnosis (Part E.3): log EVERY analysis outcome so the per-user
+                    // confidence distribution can be compared — this is the data that
+                    // explains the 1-trade-then-silence asymmetry between users on the
+                    // same engine and the same floor. Never gates anything.
+                    logger.info('auto', `analysis uid=${this.chatId} asset=${asset} tf=${s.timeframe}s direction=${a.direction} confidence=${a.confidence}% score=${a.score ?? '-'} path=${(this.mode === 'demo' || useAdminAnalysis) ? 'admin' : 'rsi'} gated=${isPrivileged ? 'yes' : 'no'}`);
                     // Only privileged users get the quality gate. Everyone else trades
                     // whatever direction the analysis returns, regardless of confidence.
                     if (isPrivileged && a.confidence < AUTO_CONFIDENCE_FLOOR) {
                         // Skipped setup — advance the cursor and count an evaluation,
                         // NOT a trade. trades_done must only reflect placed trades.
+                        this.skipsSinceTrade++;
+                        logger.info('auto', `skip uid=${this.chatId} asset=${asset} confidence=${a.confidence}% (floor ${AUTO_CONFIDENCE_FLOOR}%) consecutive=${this.skipsSinceTrade}`);
+                        this.engineState = 'watching';
                         recordAutoSessionEvaluation(this.chatId, nextIdx);
+                        await this.maybeRenderState();
                         await new Promise(r => setTimeout(r, msToNextCandle(s.timeframe)));
                         continue;
                     }
@@ -512,6 +589,13 @@ class AutoRunner {
                     logger.info('auto', `resuming martingale for ${this.chatId} at amount ${startAmount} (${roundsUsed} rounds used, ${effectiveGaleRounds} remaining)`);
                 }
                 setAutoSessionMgState(this.chatId, true, startAmount);
+                // A setup cleared the gate — the card moves from watching/scanning to
+                // "trade placed" and the skip streak resets (it counts skips SINCE the
+                // last trade, which is what makes the silence stretches legible).
+                logger.info('auto', `placing uid=${this.chatId} asset=${asset} direction=${direction} amount=${startAmount} (after ${this.skipsSinceTrade} skipped setup(s))`);
+                this.skipsSinceTrade = 0;
+                this.engineState = 'placed';
+                await this.maybeRenderState();
                 let outcome;
                 let lastTradePnl = 0;
                 const balanceType = this.mode === 'demo' ? 'demo' : 'live';
@@ -611,6 +695,9 @@ class AutoRunner {
                     console.log(`[auto-trade] uid=${this.chatId} AFTER record: sessionPnl=${s2?.pnl} trades=${s2?.trades_done} wins=${s2?.seq_wins} losses=${s2?.seq_losses}`);
                     const emoji = outcome.status === 'WIN' ? '🟢' : outcome.status === 'TIE' ? '⚪' : '';
                     const outcomeLabel = outcome.status === 'WIN' ? 'Won' : outcome.status === 'TIE' ? 'Draw' : 'Lost';
+                    // Chain settled — back to scanning so the state line doesn't stay
+                    // stuck on "Trade placed" through the next quiet stretch.
+                    this.engineState = 'scanning';
                     await this.renderStatus(`${emoji} ${outcomeLabel}`.trim());
                 }
                 await new Promise(r => setTimeout(r, msToNextCandle(s.timeframe)));
