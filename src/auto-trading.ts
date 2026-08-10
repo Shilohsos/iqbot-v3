@@ -438,10 +438,30 @@ class AutoRunner {
             stopDemoTimer(this.chatId);
         }
     }
+    /** Next configured-asset index to try, skipping assets already known
+     *  closed/suspended in this closed-cycle. Wraps from `fromIdx+1`; falls back
+     *  to plain round-robin only when every asset is already marked closed (in
+     *  which case the caller pauses immediately after, so the exact index is
+     *  moot). Fixes the observed bug: naive round-robin re-attempted GBPUSD
+     *  twice while AUDUSD (open) was never tried (DIRECTIVE-AUTOPILOT-
+     *  MARKET-CLOSED-ACCURACY Part 1.6). */
+    nextOpenAssetIndex(fromIdx: number, closedAssets: Set<string>): number {
+        for (let step = 1; step <= this.assets.length; step++) {
+            const candidate = (fromIdx + step) % this.assets.length;
+            if (!closedAssets.has(this.assets[candidate]))
+                return candidate;
+        }
+        return (fromIdx + 1) % this.assets.length;
+    }
     async loop(ssid) {
         this.ssid = ssid;
         let consecutiveErrors = 0;
-        let closedStreak = 0; // consecutive closed-market rotations (pause when ALL pairs closed)
+        // Per-pair closed/suspended tracking (Part 1) — replaces the old
+        // closedStreak counter, which paused the session after N consecutive
+        // closed rotations even when a configured pair was still open (the
+        // Shara/session#836 bug: paused with AUDUSD-OTC tradeable). Only pause
+        // once EVERY configured asset has been observed closed in this cycle.
+        const closedAssets = new Set<string>();
         logger.info('auto', `loop started for ${this.chatId} (mode=${this.mode})`);
         try {
             while (!this.stopping) {
@@ -574,6 +594,45 @@ class AutoRunner {
                     await new Promise(r => setTimeout(r, 3000));
                     continue;
                 }
+                // ── Part 3 (optional, recommended): pre-trade actives check ────────
+                // Consult the live actives snapshot the SDK already maintains
+                // (getActives() reads the local WS-pushed cache — no new refresh
+                // call) and skip a known-suspended/closed pair before burning a
+                // NO_FILL round-trip. Fully defensive: any failure to read the
+                // snapshot, or no match found, falls straight through to the
+                // normal buy attempt — never blocks trading on a data-access gap.
+                let preTradeSkipReason = null;
+                try {
+                    const blitz = await this.sdk.blitzOptions();
+                    const actives = blitz?.getActives?.() ?? [];
+                    if (Array.isArray(actives) && actives.length > 0) {
+                        const norm = (x: string) => x.toUpperCase().replace(/^front\./i, '').replace(/[-\/\s]/g, '');
+                        const normalizedAsset = norm(asset);
+                        const active: any = actives.find((a: any) => norm(a.ticker) === normalizedAsset || norm(a.localizationKey) === normalizedAsset);
+                        if (active) {
+                            if (active.isSuspended === true)
+                                preTradeSkipReason = 'suspended';
+                            else if (typeof active.canBeBoughtAt === 'function' && !active.canBeBoughtAt(new Date()))
+                                preTradeSkipReason = 'canBeBoughtAt-false';
+                        }
+                    }
+                }
+                catch (e) {
+                    logger.warn('auto', `pre-trade actives check failed for ${this.chatId} asset=${asset} (falling through to attempt): ${e instanceof Error ? e.message : e}`);
+                }
+                if (preTradeSkipReason) {
+                    closedAssets.add(asset);
+                    const advanceTo = this.nextOpenAssetIndex(idx, closedAssets);
+                    logger.warn('auto', `pair ${asset} closed (${preTradeSkipReason}) for ${this.chatId} — pre-trade check, closed=${closedAssets.size}/${this.assets.length} (${[...closedAssets].join(',')})`);
+                    recordAutoSessionEvaluation(this.chatId, advanceTo);
+                    if (closedAssets.size >= this.assets.length) {
+                        setAutoSessionStatus(this.chatId, 'paused', 'market_closed');
+                        await this.notify('✦ Autopilot paused — all selected pairs are closed right now (market hours). Resume when they open.', true);
+                        break;
+                    }
+                    await new Promise(r => setTimeout(r, msToNextCandle(s.timeframe)));
+                    continue;
+                }
                 // ── Martingale persistence: if a sequence was interrupted by a
                 // restart, resume at the correct gale amount instead of the base.
                 // Also reduce the remaining gale rounds so the total sequence
@@ -658,25 +717,43 @@ class AutoRunner {
                 console.log(`[auto-trade] uid=${this.chatId} outcome=${outcome.status} totalPnl=${outcome.totalPnl} rounds=${outcome.rounds} mode=${this.mode}`);
                 const isError = outcome.status === 'ERROR' || outcome.status === 'TIMEOUT' || outcome.status === 'NO_FILL';
                 if (isError) {
-                    // Rotate to the next asset (don't count it as a trade).
-                    recordAutoSessionEvaluation(this.chatId, nextIdx);
                     // A closed market is NOT an error: skip that pair and move on.
                     // Only real connection/trade errors count against the pause
                     // budget, so a session with one open pair keeps trading while
-                    // its other pairs are in their closed window.
+                    // its other pairs are in their closed window. Part 2: suspended
+                    // pairs (schedule says open, platform rejects the buy) are
+                    // detected the same way — IQ Option's own error text is
+                    // "Cannot purchase an option (active is suspended)".
+                    const closedErrMsg = outcome.error ?? '';
                     const closedNow = outcome.status === 'NO_FILL' &&
-                        /market is closed|unknown pair|not available|no .*instrument available|no .*balance found/i.test(outcome.error ?? '');
+                        /market is closed|unknown pair|not available|no .*instrument available|no .*balance found|active is suspended|is suspended|suspended/i.test(closedErrMsg);
                     if (closedNow) {
-                        closedStreak++;
-                        logger.warn('auto', `pair ${asset} closed for ${this.chatId} — rotating (${closedStreak}/${this.assets.length})`);
-                        if (closedStreak >= this.assets.length) {
+                        const reason = /suspended/i.test(closedErrMsg) ? 'suspended' : 'market-closed';
+                        closedAssets.add(asset);
+                        // Part 1.6: advance to the next asset NOT already known closed,
+                        // instead of naive round-robin (which re-attempted the same
+                        // closed pair while an untried open pair sat unused).
+                        const advanceTo = this.nextOpenAssetIndex(idx, closedAssets);
+                        logger.warn('auto', `pair ${asset} closed (${reason}) for ${this.chatId} — closed=${closedAssets.size}/${this.assets.length} (${[...closedAssets].join(',')})`);
+                        recordAutoSessionEvaluation(this.chatId, advanceTo);
+                        // Pause only when EVERY configured pair has been seen closed
+                        // in this cycle (Part 1.3) — not after N consecutive rotations.
+                        if (closedAssets.size >= this.assets.length) {
                             setAutoSessionStatus(this.chatId, 'paused', 'market_closed');
                             await this.notify('✦ Autopilot paused — all selected pairs are closed right now (market hours). Resume when they open.', true);
                             break;
                         }
                     }
                     else {
-                        closedStreak = 0;
+                        // Non-closed error (connection/timeout/etc) — the closed set
+                        // is not reliable evidence here, so clear it (Part 1.5): a
+                        // pair marked closed off a NO_FILL is not necessarily still
+                        // closed once real connection trouble is in play.
+                        if (closedAssets.size > 0) {
+                            logger.info('auto', `clearing closed-pair set for ${this.chatId} — non-closed error, pairs may not actually be closed`);
+                            closedAssets.clear();
+                        }
+                        recordAutoSessionEvaluation(this.chatId, nextIdx);
                         consecutiveErrors++;
                         logger.warn('auto', `trade ${outcome.status} for ${this.chatId} — consecutive=${consecutiveErrors}`);
                         if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
@@ -688,7 +765,13 @@ class AutoRunner {
                 }
                 else {
                     consecutiveErrors = 0;
-                    closedStreak = 0;
+                    // Part 1.4: a settled trade (WIN/LOSS/TIE) proves the pair was
+                    // tradeable — clear the closed set so the next closed-cycle starts
+                    // fresh instead of carrying stale suspensions forward.
+                    if (closedAssets.size > 0) {
+                        logger.info('auto', `pair ${asset} open again for ${this.chatId} — clearing closed-pair set (was ${[...closedAssets].join(',')})`);
+                        closedAssets.clear();
+                    }
                     this.clearWsNotifyLock(); // connection recovered — allow one notice next time it drops
                     recordAutoSessionTrade(this.chatId, nextIdx, outcome.totalPnl, outcome.status);
                     const s2 = getAutoSession(this.chatId);
