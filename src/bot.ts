@@ -152,6 +152,70 @@ function flushAdminNotifications() {
     }
 }
 const bot = new Telegraf(BOT_TOKEN, { handlerTimeout: Infinity });
+// ─── 10x Yacht Club keyword watcher ─────────────────────────────────────────
+const YACHT_CLUB_CHAT_ID = -1004351740042;
+const YACHT_CLUB_LINK_BTN = 'https://t.me/xyachtclub';
+const YACHT_WATCH_KEYWORDS = {
+    withdrawal: [/withdraw/i, /withdrew/i, /payout/i, /paid out/i, /credited/i],
+    testimonial: [/testimonial/i, /review/i, /just made/i, /banked/i, /thank you/i],
+    signal: [/signal/i, /setup/i, /opportunity/i, /trade now/i, /alert/i, /entry/i],
+};
+const YACHT_WATCH_TEMPLATES = {
+    withdrawal: '✦ A withdrawal was just made in the Yacht Club. Real money leaving the platform — daily.',
+    testimonial: '· A member just posted their results in the Yacht Club. See what the circle sees.',
+    signal: '· New signal just dropped in the Yacht Club ✦ The scan is live — check it before the window closes.',
+};
+try {
+    db.exec('CREATE TABLE IF NOT EXISTS yacht_watch_sent (telegram_id INTEGER PRIMARY KEY, message_id INTEGER, sent_at INTEGER)');
+} catch { }
+bot.on('channel_post', async (ctx) => {
+    try {
+        if (!ctx.chat || ctx.chat.id !== YACHT_CLUB_CHAT_ID) return;
+        const msg = ctx.channelPost ?? ctx.message ?? {};
+        const text = String(msg.text ?? msg.caption ?? '');
+        console.log(`[yacht-watch] post received (${text.length} chars): ${text.slice(0, 100)}`);
+        let cat = null;
+        let nudgeText = '';
+        let kb;
+        // 1) Private Trader setup — compact template: "EURUSD | 1M | Gale 3"
+        const ptMatch = text.match(/^([A-Z]{3,8}(?:\s*[A-Z]{3})?)\s*\|\s*(\d+\s*[SMm])\s*\|\s*Gale\s*(\d+)\s*$/im);
+        if (ptMatch) {
+            const pair = ptMatch[1].replace(/\s+/g, '');
+            const tf = ptMatch[2].toUpperCase();
+            const gale = ptMatch[3];
+            cat = 'private';
+            nudgeText = `⟡ New Private Trader setup dropped ✦ ${pair} · ${tf} · Gale ${gale} — the engine has a read. Trade it before the window closes.`;
+            kb = { inline_keyboard: [[{ text: '⟡ Open Private Trader', callback_data: 'ui:trade' }]] };
+        }
+        else {
+            for (const key of Object.keys(YACHT_WATCH_KEYWORDS)) {
+                if (YACHT_WATCH_KEYWORDS[key].some((p) => p.test(text))) { cat = key; break; }
+            }
+            if (!cat) return;
+            nudgeText = YACHT_WATCH_TEMPLATES[cat];
+            kb = { inline_keyboard: [[{ text: 'Check the Yacht Club', url: YACHT_CLUB_LINK_BTN }]] };
+        }
+        const targets = [];
+        const testUid = getTestUserId();
+        if (testUid) { targets.push(testUid); }
+        else {
+            try {
+                targets.push(...db.prepare("SELECT telegram_id FROM users WHERE approval_status='approved' AND funded_balance_usd > 0").all().map((r) => r.telegram_id));
+            } catch { }
+        }
+        for (const uid of targets) {
+            try {
+                const m = await bot.telegram.sendMessage(uid, nudgeText, { reply_markup: kb });
+                const prev = db.prepare('SELECT message_id FROM yacht_watch_sent WHERE telegram_id = ?').get(uid);
+                if (prev) { bot.telegram.deleteMessage(uid, prev.message_id).catch(() => { }); }
+                db.prepare('INSERT OR REPLACE INTO yacht_watch_sent (telegram_id, message_id, sent_at) VALUES (?, ?, ?)').run(uid, m.message_id, Date.now());
+            } catch { }
+        }
+        console.log(`[yacht-watch] ${cat} post detected → sent to ${targets.length} user(s)`);
+    } catch (err) {
+        console.error('[yacht-watch] error:', err instanceof Error ? err.message : err);
+    }
+});
 // ── Central send guard: topic-aware 400 handling + per-chat backoff (fixes #4/#5)
 // All send* calls funnel through telegram.callApi. A chat that returns repeated
 // 400s (e.g. a forum/topic channel needing message_thread_id, or a bad chat) is
@@ -469,8 +533,7 @@ async function flushPendingDeliveries(userId) {
                 m = await bot.telegram.sendMessage(userId, p.message, rm ? { reply_markup: rm } : undefined);
             }
             if (p.deleteAfterMs > 0 && m) {
-                const msgId = m.message_id;
-                setTimeout(() => bot.telegram.deleteMessage(userId, msgId).catch(() => { }), p.deleteAfterMs);
+                persistPendingDelete(userId, m.message_id, p.deleteAfterMs);
             }
         }
         catch { }
@@ -485,8 +548,58 @@ async function runStaggeredDeletes(ids) {
             await bot.telegram.deleteMessage(telegramId, msgId);
         }
         catch { }
+        try {
+            db.prepare('DELETE FROM pending_deletes WHERE telegram_id = ? AND message_id = ?').run(telegramId, msgId);
+        }
+        catch { }
         await new Promise(r => setTimeout(r, DELETE_INTERVAL_MS));
     }
+}
+// Persist a scheduled delete to DB so it survives bot restarts. The delete
+// timer is re-armed on boot by restorePendingDeletes(). Only stored when the
+// message was actually sent (m has a message_id).
+function persistPendingDelete(telegramId, msgId, deleteAfterMs) {
+    if (!msgId || !(deleteAfterMs > 0)) return;
+    const deleteAt = Date.now() + deleteAfterMs;
+    try {
+        db.prepare('INSERT OR REPLACE INTO pending_deletes (telegram_id, message_id, delete_at) VALUES (?, ?, ?)')
+            .run(telegramId, msgId, deleteAt);
+        setTimeout(() => bot.telegram.deleteMessage(telegramId, msgId).catch(() => { }), deleteAfterMs);
+    }
+    catch (err) {
+        console.error('[pending-delete] persist failed:', err instanceof Error ? err.message : err);
+    }
+}
+// On boot: fire any deletes that came due while the bot was down, and
+// re-arm timers for future ones. Removes stale rows after firing.
+function restorePendingDeletes() {
+    let rows = [];
+    try {
+        rows = db.prepare('SELECT telegram_id, message_id, delete_at FROM pending_deletes').all();
+    }
+    catch (err) {
+        console.error('[pending-delete] restore failed:', err instanceof Error ? err.message : err);
+        return;
+    }
+    const now = Date.now();
+    let fired = 0, rearmed = 0;
+    for (const row of rows) {
+        const remaining = row.delete_at - now;
+        if (remaining <= 0) {
+            bot.telegram.deleteMessage(row.telegram_id, row.message_id).catch(() => { });
+            try {
+                db.prepare('DELETE FROM pending_deletes WHERE telegram_id = ? AND message_id = ?').run(row.telegram_id, row.message_id);
+            }
+            catch { }
+            fired++;
+        }
+        else {
+            setTimeout(() => bot.telegram.deleteMessage(row.telegram_id, row.message_id).catch(() => { }), remaining);
+            rearmed++;
+        }
+    }
+    if (fired || rearmed)
+        console.log(`[pending-delete] boot restore: ${fired} fired (due while down), ${rearmed} re-armed`);
 }
 async function dispatchBroadcastPayload(payload) {
     const testUserId = getTestUserId();
@@ -580,6 +693,11 @@ async function dispatchBroadcastPayload(payload) {
         }
     }
     if (deleteAfterMs > 0) {
+        // Persist every sent message so deletes survive restarts, then arm
+        // the staggered deleter as before.
+        for (const { telegramId, msgId } of sentMsgIds) {
+            persistPendingDelete(telegramId, msgId, deleteAfterMs);
+        }
         setTimeout(() => { void runStaggeredDeletes(sentMsgIds); }, deleteAfterMs);
     }
     return { sent: sentMsgIds.length, deferred: deferredCount };
@@ -7579,7 +7697,7 @@ async function ensurePolling() {
     const retryDelay = 5_000;
     while (true) {
         try {
-            await bot.launch();
+            await bot.launch({ allowedUpdates: ['message', 'edited_message', 'channel_post', 'edited_channel_post', 'business_connection', 'business_message', 'edited_business_message', 'deleted_business_messages', 'message_reaction', 'message_reaction_count', 'inline_query', 'chosen_inline_result', 'callback_query', 'shipping_query', 'pre_checkout_query', 'purchased_paid_media', 'poll', 'poll_answer', 'my_chat_member', 'chat_member', 'chat_join_request', 'chat_boost', 'removed_chat_boost'] });
             break;
         }
         catch (err) {
@@ -7709,6 +7827,9 @@ setCopyNotifier({
 initCheckinDb();
 setCheckinLiveRefresher(refreshFundedBalanceFromLive);
 startCheckinScheduler(bot);
+// Pending-delete recovery — fire deletes that came due while the bot was
+// down, re-arm future ones (broadcast auto-delete survival across restarts).
+restorePendingDeletes();
 // Smart Flow (DIRECTIVE-SMART-FLOW.md) — recommendation-only Private Trader
 // entry. Nothing here runs on a schedule: the scan below fires only when a user
 // opens the flow and the cache is stale.

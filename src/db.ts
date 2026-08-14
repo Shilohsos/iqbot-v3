@@ -627,6 +627,14 @@ db.exec(`
     sent_at     TEXT NOT NULL DEFAULT (datetime('now'))
   )
 `);
+db.exec(`
+  CREATE TABLE IF NOT EXISTS pending_deletes (
+    telegram_id INTEGER NOT NULL,
+    message_id  INTEGER NOT NULL,
+    delete_at   INTEGER NOT NULL,
+    PRIMARY KEY (telegram_id, message_id)
+  )
+`);
 
 {
     const bmCols = (db.prepare('PRAGMA table_info(broadcast_messages)').all() as { name: string }[]).map(c => c.name);

@@ -46,6 +46,16 @@ export function initCheckinDb(): void {
             PRIMARY KEY (telegram_id, goal_date)
         )
     `);
+    // Cancel-out tracking: every message the check-in system sends to a user,
+    // so the NEXT check-in can delete the previous block (chat stays clean —
+    // only one check-in visible at a time).
+    db.exec(`
+        CREATE TABLE IF NOT EXISTS checkin_messages (
+            telegram_id INTEGER NOT NULL,
+            message_id  INTEGER NOT NULL,
+            PRIMARY KEY (telegram_id, message_id)
+        )
+    `);
 }
 
 function isSent(telegramId: number, date: string, win: string): boolean {
@@ -56,6 +66,22 @@ function isSent(telegramId: number, date: string, win: string): boolean {
 function markSent(telegramId: number, date: string, win: string): void {
     db.prepare('INSERT OR IGNORE INTO checkin_sent (telegram_id, checkin_date, window) VALUES (?, ?, ?)')
         .run(telegramId, date, win);
+}
+
+function trackMessage(telegramId: number, messageId: number): void {
+    db.prepare('INSERT OR IGNORE INTO checkin_messages (telegram_id, message_id) VALUES (?, ?)')
+        .run(telegramId, messageId);
+}
+
+/** Cancel-out: delete every message the previous check-in sent to this user. */
+async function deleteTrackedMessages(tg: Telegram, telegramId: number): Promise<void> {
+    const rows = db.prepare('SELECT message_id FROM checkin_messages WHERE telegram_id = ?')
+        .all(telegramId) as { message_id: number }[];
+    for (const r of rows) {
+        try { await tg.deleteMessage(telegramId, r.message_id); } catch { /* already gone / too old */ }
+        db.prepare('DELETE FROM checkin_messages WHERE telegram_id = ? AND message_id = ?')
+            .run(telegramId, r.message_id);
+    }
 }
 
 function saveGoal(telegramId: number, goalDate: string, target: number, currency: string): void {
@@ -306,9 +332,13 @@ const TICK_MS = 60_000;
 const MAINTENANCE_ALLOWED_IDS = new Set([6622587977, getAdminId()]);
 
 async function sendCheckin(bot: Telegraf, telegramId: number, win: WindowName, date: string): Promise<void> {
+    // Cancel-out: the new check-in replaces the previous one — delete last
+    // window's block first so only ONE check-in is ever visible per user.
+    await deleteTrackedMessages(bot.telegram, telegramId);
     const name = await resolveName(bot.telegram, telegramId);
     const { text, keyboard } = buildInitialMessage(win, date, name);
-    await bot.telegram.sendMessage(telegramId, text, { reply_markup: keyboard });
+    const msg = await bot.telegram.sendMessage(telegramId, text, { reply_markup: keyboard });
+    trackMessage(telegramId, msg.message_id);
 }
 
 async function tick(bot: Telegraf): Promise<void> {
@@ -350,7 +380,10 @@ async function safeEdit(ctx: any, text: string, replyMarkup: any): Promise<void>
     try {
         await ctx.editMessageText(text, { reply_markup: replyMarkup });
     } catch {
-        try { await ctx.reply(text, { reply_markup: replyMarkup }); } catch { /* best effort */ }
+        try {
+            const m = await ctx.reply(text, { reply_markup: replyMarkup });
+            if (m?.message_id && ctx.from?.id != null) trackMessage(ctx.from.id, m.message_id);
+        } catch { /* best effort */ }
     }
 }
 
@@ -433,7 +466,8 @@ export async function tryHandleCheckinTargetText(ctx: any): Promise<boolean> {
     checkinTargetAwaiting.delete(chatId);
 
     if (isSessionExpired(awaiting.win, awaiting.winDate)) {
-        await ctx.reply(`This check-in has ended. Next check-in at ${nextWindowLabel()}.`, { reply_markup: signalsOnlyKeyboard() }).catch(() => { });
+        const m = await ctx.reply(`This check-in has ended. Next check-in at ${nextWindowLabel()}.`, { reply_markup: signalsOnlyKeyboard() }).catch(() => undefined);
+        if (m?.message_id) trackMessage(awaiting.telegramId, m.message_id);
         return true;
     }
 
@@ -441,16 +475,18 @@ export async function tryHandleCheckinTargetText(ctx: any): Promise<boolean> {
     const amount = parseFloat(text.replace(/[^0-9.]/g, ''));
     if (!isFinite(amount) || amount <= 0) {
         checkinTargetAwaiting.set(chatId, awaiting); // give them another try
-        await ctx.reply('Please send a number, e.g. 1,000.', {
+        const m = await ctx.reply('Please send a number, e.g. 1,000.', {
             reply_markup: { inline_keyboard: [[{ text: '⟵ Back', callback_data: `checkin:${goalEntryAction(awaiting.win)}:${awaiting.win}:${awaiting.winDate}` }]] },
-        }).catch(() => { });
+        }).catch(() => undefined);
+        if (m?.message_id) trackMessage(awaiting.telegramId, m.message_id);
         return true;
     }
 
     const currency = getUser(awaiting.telegramId)?.currency ?? 'USD';
     saveGoal(awaiting.telegramId, awaiting.goalDate, amount, currency);
     const text2 = `Goal locked. ✦\n\nToday's target: ${fmtTarget(amount, currency)}\n\nI'll check on you at ${nextWindowLabel()}.\n\nStart now ─`;
-    await ctx.reply(text2, { reply_markup: momentumKeyboard() }).catch(() => { });
+    const m2 = await ctx.reply(text2, { reply_markup: momentumKeyboard() }).catch(() => undefined);
+    if (m2?.message_id) trackMessage(awaiting.telegramId, m2.message_id);
     return true;
 }
 

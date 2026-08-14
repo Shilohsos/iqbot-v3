@@ -316,6 +316,10 @@ export async function settle(sdk: ClientSdk, order: CoreOrder): Promise<CoreFina
         } catch (e) {
             logger.warn('trade-core', `refreshActives failed (using cached actives): ${e instanceof Error ? e.message : e}`);
         }
+        // Warm-up: on a fresh/rebuilt connection the actives snapshot can carry a
+        // stale profit rate; IQ then rejects the first buy with 4117. Let the feed
+        // sync before touching canBeBoughtAt/buy.
+        await new Promise(r => setTimeout(r, 1200));
         const active = blitzOptions.getActives().find(a =>
             normTicker(a.ticker) === normalizedInput ||
             normTicker(a.localizationKey) === normalizedInput
@@ -334,14 +338,31 @@ export async function settle(sdk: ClientSdk, order: CoreOrder): Promise<CoreFina
             // fill, so retrying the SAME amount can never double a round.
             if (/4117|profit rate|not been purchased/i.test(msg)) {
                 logger.warn('trade-core', `buy rejected (profit-rate/4117) pair=${pair} amt=${amount} — refreshing actives and retrying same stake`);
-                try {
-                    const refresh = (blitzOptions as any).refreshActives?.();
-                    if (refresh) await sdkTimeout(refresh, 'refreshActives-retry', 15_000);
-                    await new Promise(r => setTimeout(r, 400));
-                    option = await sdkTimeout(blitzOptions.buy(active, dir, targetSize, amount, selectedBalance), 'buy-retry', 20_000);
-                } catch (e2) {
-                    return noFill(e2 instanceof Error ? e2.message : String(e2));
+                let placed = false;
+                const backoffs = [1000, 2000, 3000, 4000];
+                for (let attempt = 0; attempt < backoffs.length; attempt++) {
+                    try {
+                        await new Promise(r => setTimeout(r, backoffs[attempt]));
+                        const refresh = (blitzOptions as any).refreshActives?.();
+                        if (refresh) await sdkTimeout(refresh, 'refreshActives-retry', 15_000);
+                        await new Promise(r => setTimeout(r, 400));
+                        // Re-read the FRESH active — the stale object still carries the old rate.
+                        const freshActive = (blitzOptions as any).getActives().find((a: any) => normTicker(a.ticker) === normalizedInput ||
+                            normTicker(a.localizationKey) === normalizedInput) ?? active;
+                        option = await sdkTimeout((blitzOptions as any).buy(freshActive, dir, targetSize, amount, selectedBalance), 'buy-retry', 20_000);
+                        placed = true;
+                        break;
+                    } catch (e2) {
+                        const m2 = e2 instanceof Error ? e2.message : String(e2);
+                        if (/4117|profit rate|not been purchased/i.test(m2)) {
+                            logger.warn('trade-core', `buy retry ${attempt + 1} still profit-rate-rejected — backing off ${backoffs[attempt + 1] ?? 0}ms`);
+                            continue;
+                        }
+                        return noFill(m2);
+                    }
                 }
+                if (!placed)
+                    return noFill('Payout rate changed');
             } else if (isTimeoutError(buyErr) || /WebSocket|is closing|not open/i.test(msg)) {
                 return noFill(`Buy failed — no trade placed (${msg})`);
             } else {
