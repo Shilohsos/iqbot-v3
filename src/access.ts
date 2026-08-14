@@ -51,12 +51,12 @@ export const PRODUCT_LIMITS: Record<Product, ProductLimits> = {
     },
     ai_trading: {
         dailyCap: 10,
-        unlockBalance: 100,
+        unlockBalance: 50,
         capLabel: '10 trades/day',
     },
     auto_trading: {
         dailyCap: 30,  // minutes
-        unlockBalance: 500,
+        unlockBalance: 200,
         capLabel: '30 minutes/day',
     },
 };
@@ -70,6 +70,7 @@ export const ALL_PAIRS = [
     'EURUSD-OTC', 'GBPUSD-OTC', 'EURJPY-OTC', 'GBPJPY-OTC',
     'AUDUSD-OTC', 'USDCAD-OTC', 'EURGBP-OTC', 'USDCHF-OTC',
     'XAUUSD-OTC', 'BTCUSD-OTC-op',
+    'EURCHF-OTC', 'AUDJPY-OTC', 'NZDUSD-OTC', 'NZDJPY-OTC', 'GBPCHF-OTC',
 ];
 
 export const PRODUCT_CONFIGS: Record<Product, ProductConfig> = {

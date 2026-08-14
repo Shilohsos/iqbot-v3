@@ -134,10 +134,19 @@ export async function recoverMissedTradeResults(bot, runMartingaleFn) {
                         const galeRow = db.prepare("SELECT * FROM gale_sessions WHERE telegram_id=? AND pair=? AND status IN ('active','resuming') ORDER BY id DESC LIMIT 1").get(row.telegram_id, row.pair);
                         if (galeRow) {
                             if (!runMartingaleFn) { console.log('[GALE-RESUME] No runMartingale passed, skipping'); continue; }
-                            // GUARD: prevent double-resume (boot scan + periodic recovery racing)
+                            // GUARD: prevent double-resume (boot scan + periodic recovery racing).
+                            // Self-heal: a resume that stalled >5 min (e.g. hung SDK acquire)
+                            // is cleared back to 'active' so the chain can retry — it can
+                            // never be permanently blocked by a dead 'resuming' marker.
                             if (galeRow.status === 'resuming') {
-                                console.log(`[GALE-RESUME] Already resuming for user ${row.telegram_id}, skipping (prevent double-fire)`);
-                                continue;
+                                const updatedMs = Date.parse(String(galeRow.updated_at).replace(' ', 'T') + 'Z');
+                                const stale = Number.isFinite(updatedMs) && (Date.now() - updatedMs) > 5 * 60 * 1000;
+                                if (!stale) {
+                                    console.log(`[GALE-RESUME] Already resuming for user ${row.telegram_id}, skipping (prevent double-fire)`);
+                                    continue;
+                                }
+                                console.log(`[GALE-RESUME] Stale resuming (>5 min) for user ${row.telegram_id} — clearing and retrying`);
+                                db.prepare("UPDATE gale_sessions SET status='active', updated_at=datetime('now') WHERE id=?").run(galeRow.id);
                             }
                             // Mark as resuming BEFORE calling runMartingale — mark ALL active
                             // rows for this user so a concurrent recovery pass can't grab

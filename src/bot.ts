@@ -1410,13 +1410,26 @@ async function resumeGaleAfterRestart(bot, galeRow, recoveredStatus) {
         const effectiveSsid = userId === getAdminId() ? (getAdminSsid() || user.ssid) : user.ssid;
         let sdk;
         try {
-            sdk = userId === getAdminId() ? await createSdk(effectiveSsid) : await sdkPool.get(userId, effectiveSsid);
+            const acquire = userId === getAdminId() ? createSdk(effectiveSsid) : sdkPool.get(userId, effectiveSsid);
+            sdk = await withTimeout(acquire, 25000, 'gale-resume sdk acquire');
         } catch {
-            await bot.telegram.sendMessage(userId,
-                `⚠️ Could not reconnect to IQ Option to resume your gale chain.\n` +
-                `Try again `,
-                { reply_markup: { inline_keyboard: [[{ text: '↻ New Opportunity', callback_data: 'ui:trade' }]] } });
-            clearGaleSession(userId);
+            // Self-heal: re-login with stored creds (the admin path refreshes the
+            // stored SSID), then reset the row to 'active' so the 2-minute
+            // recovery pass retries the resume. A hung createSdk can never
+            // permanently block the chain again.
+            let fresh = null;
+            try {
+                if (userId === getAdminId()) fresh = (await adminAutoReconnect()) ? (getAdminSsid() ?? null) : null;
+                else fresh = (await autoReconnect(userId)) ? (getSsidForUser(userId) ?? null) : null;
+            } catch { /* keep null */ }
+            try { db.prepare("UPDATE gale_sessions SET status='active', updated_at=datetime('now') WHERE id=?").run(galeRow.id); } catch { /* */ }
+            if (fresh) {
+                await bot.telegram.sendMessage(userId, '↻ Reconnected — resuming your gale chain automatically…').catch(() => { });
+            } else {
+                await bot.telegram.sendMessage(userId,
+                    '⚠️ Reconnect needed to resume your gale chain — the bot will retry automatically once you reconnect ',
+                    { reply_markup: { inline_keyboard: [[{ text: '✦ Reconnect', callback_data: 'ui:connect' }]] } }).catch(() => { });
+            }
             return;
         }
         
@@ -1452,7 +1465,9 @@ async function resumeGaleAfterRestart(bot, galeRow, recoveredStatus) {
         clearGaleSession(userId);
     } catch (err) {
         console.error('[GALE-RESUME] Outer error:', err instanceof Error ? err.message : err);
-        clearGaleSession(userId);
+        // Never lose the chain to a transient error: reset to 'active' so the
+        // 2-minute recovery pass retries instead of leaving it stuck.
+        try { db.prepare("UPDATE gale_sessions SET status='active', updated_at=datetime('now') WHERE id=?").run(galeRow.id); } catch { /* */ }
     }
 }
 
@@ -7752,7 +7767,13 @@ setTimeout(async () => {
             console.log(`[GALE-BOOT] Found ${activeGales.length} active gale session(s) to resume`);
             const bootResumed = new Set();
             for (const gale of activeGales) {
-                if (gale.status === 'resuming') { console.log(`[GALE-BOOT] Already resuming for user ${gale.telegram_id}, skip`); continue; }
+                if (gale.status === 'resuming') {
+                    const updatedMs = Date.parse(String(gale.updated_at).replace(' ', 'T') + 'Z');
+                    const stale = Number.isFinite(updatedMs) && (Date.now() - updatedMs) > 5 * 60 * 1000;
+                    if (!stale) { console.log(`[GALE-BOOT] Already resuming for user ${gale.telegram_id}, skip`); continue; }
+                    console.log(`[GALE-BOOT] Stale resuming (>5 min) for user ${gale.telegram_id} — clearing and retrying`);
+                    db.prepare("UPDATE gale_sessions SET status='active', updated_at=datetime('now') WHERE id=?").run(gale.id);
+                }
                 // Same-pass guard: never resume the same user twice at boot
                 if (bootResumed.has(gale.telegram_id)) { console.log(`[GALE-BOOT] Already resumed user ${gale.telegram_id} this pass, skip`); continue; }
                 // Mark ALL active rows for this user as resuming BEFORE we act, so the

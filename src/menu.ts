@@ -2,6 +2,7 @@ export const OTC_PAIRS = [
     'EURUSD-OTC', 'GBPUSD-OTC', 'EURJPY-OTC', 'GBPJPY-OTC',
     'AUDUSD-OTC', 'USDCAD-OTC', 'EURGBP-OTC', 'USDCHF-OTC',
     'XAUUSD-OTC', 'BTCUSD-OTC-op',
+    'EURCHF-OTC', 'AUDJPY-OTC', 'NZDUSD-OTC', 'NZDJPY-OTC', 'GBPCHF-OTC',
 ];
 
 type Btn = { text: string; callback_data: string } | { text: string; url: string };
@@ -54,6 +55,7 @@ const ALL_PAIRS = [
     'EURUSD-OTC', 'GBPUSD-OTC', 'EURJPY-OTC', 'GBPJPY-OTC',
     'AUDUSD-OTC', 'USDCAD-OTC', 'EURGBP-OTC', 'USDCHF-OTC',
     'XAUUSD-OTC', 'BTCUSD-OTC-op',
+    'EURCHF-OTC', 'AUDJPY-OTC', 'NZDUSD-OTC', 'NZDJPY-OTC', 'GBPCHF-OTC',
 ];
 
 // `tier` params are retained for call-site compatibility but no longer gate
