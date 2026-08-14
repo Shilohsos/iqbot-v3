@@ -507,6 +507,36 @@ db.exec(`
         db.exec('ALTER TABLE smart_flow_cache ADD COLUMN trades_at_scan INTEGER');
 }
 
+// Bot A hourly smart loop (DIRECTIVE-BOT-A-HOURLY-SMART-LOOP.md). Copy, buttons
+// and placeholder pools all live in the DB so operations can edit them without a
+// code change; bot_a_sent holds per-user cancel-out + daily-cap state.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS bot_a_templates (
+    key        TEXT PRIMARY KEY,
+    copy       TEXT NOT NULL,
+    buttons    TEXT NOT NULL DEFAULT '[]',
+    image_file TEXT NOT NULL DEFAULT ''
+  )
+`);
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS bot_a_pools (
+    key   TEXT PRIMARY KEY,
+    items TEXT NOT NULL
+  )
+`);
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS bot_a_sent (
+    telegram_id    INTEGER PRIMARY KEY,
+    message_id     INTEGER,
+    last_archetype TEXT,
+    sent_count     INTEGER NOT NULL DEFAULT 0,
+    sent_date      TEXT NOT NULL DEFAULT '',
+    last_sent_at   TEXT
+  )
+`);
+
 db.exec(`
   CREATE TABLE IF NOT EXISTS broadcast_schedule (
     id           INTEGER PRIMARY KEY CHECK (id = 1),
