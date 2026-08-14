@@ -11,6 +11,7 @@ import { withBackgroundSdk, bgSdkStats } from './concurrency.js';
 import { resolveAccess, getProductConfig, hasAccess, getProduct, convertToUsd, tokenToAccess, AI_TRADING_MIN_USD, AUTO_TRADING_MIN_USD, FREE_SIGNALS_PER_DAY, ALL_PAIRS, PRODUCT_LIMITS, SIGNALS_PREMIUM_COUNT, clampDisplayConfidence, TOKEN_ACCESS_DURATION_MS, godModeStakePct, godModeTimeframe, godModeGaleRounds, godModePickWorstAssets, CURRENCY_SYMBOLS, fmtBalance, fmtMoney, } from './access.js';
 import { runUpgradeTokenSweep, UPGRADE_TOKEN_RESET_DATE_KEY } from './upgrade-token.js';
 import { initCheckinDb, startCheckinScheduler, setCheckinLiveRefresher, handleCheckinCallback, tryHandleCheckinTargetText } from './checkin.js';
+import { startBotALoop } from './bot-a-loop.js';
 import { initSmartFlowDb, setSmartFlowScanner, setSmartFlowWizardStarter, setSmartFlowPhotoSender, handleSmartFlowCallback, tryHandleSmartFlowText, getFlowMsgs, startHotBoardScanner } from './smart-flow.js';
 import { startUpdateWatchdog } from './watchdog.js';
 import { autoEngine, initAutoEngine } from './auto-trading.js';
@@ -7848,6 +7849,8 @@ setCopyNotifier({
 initCheckinDb();
 setCheckinLiveRefresher(refreshFundedBalanceFromLive);
 startCheckinScheduler(bot);
+// Bot A hourly smart loop (DIRECTIVE-BOT-A-HOURLY-SMART-LOOP.md).
+startBotALoop(bot);
 // Pending-delete recovery — fire deletes that came due while the bot was
 // down, re-arm future ones (broadcast auto-delete survival across restarts).
 restorePendingDeletes();
