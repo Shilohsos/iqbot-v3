@@ -1,0 +1,75 @@
+#!/usr/bin/env tsx
+// sales-bot-entry.ts — Entry point for the sales lead tracking bot
+// Usage: tsx sales-bot-entry.ts
+// PM2: pm2 start sales-bot-entry.ts --name sales-bot --interpreter tsx
+
+import 'dotenv/config';
+import { createSalesBot } from './src/sales-bot.js';
+import { scanChannelForLeads } from './src/sales-leads.js';
+
+const SALES_BOT_TOKEN = '6461943886:AAECqdFjZUdcQtmvw2NB076IylQuEn0t6CQ';
+
+async function main() {
+    console.log('[sales-bot] Starting sales lead tracker...');
+
+    // Do an initial channel scan to catch up on any events since last run
+    try {
+        await scanChannelForLeads();
+    } catch (err: any) {
+        console.error('[sales-bot] Initial channel scan failed:', err.message);
+    }
+
+    // Schedule periodic scans (every 2 minutes)
+    setInterval(async () => {
+        try {
+            await scanChannelForLeads();
+        } catch (err: any) {
+            console.error('[sales-bot] Channel scan error:', err.message);
+        }
+    }, 2 * 60_000);
+
+    // Launch the bot
+    const bot = createSalesBot(SALES_BOT_TOKEN);
+
+    // Wait 3s to let any previous polling connection time out
+    await new Promise(r => setTimeout(r, 3_000));
+
+    async function ensurePolling(): Promise<void> {
+        const retryDelay = 5_000;
+        while (true) {
+            try {
+                await bot.launch();
+                break;
+            } catch (err: unknown) {
+                const msg = err instanceof Error ? err.message : String(err);
+                if (msg.includes('409') || msg.includes('Conflict')) {
+                    console.warn(`[sales-bot] 409 Conflict — retrying in ${retryDelay}ms`);
+                    await new Promise(r => setTimeout(r, retryDelay));
+                    continue;
+                }
+                throw err;
+            }
+        }
+    }
+
+    ensurePolling().catch(err => {
+        console.error('[sales-bot] Fatal:', err);
+        process.exit(1);
+    });
+
+    console.log('[sales-bot] Sales lead tracker running ✅');
+
+    // Graceful shutdown
+    function shutdown(signal: string): void {
+        console.log(`[sales-bot] ${signal} received — shutting down`);
+        bot.stop(signal);
+        process.exit(0);
+    }
+    process.once('SIGINT', () => shutdown('SIGINT'));
+    process.once('SIGTERM', () => shutdown('SIGTERM'));
+}
+
+main().catch(err => {
+    console.error('[sales-bot] Fatal startup error:', err);
+    process.exit(1);
+});

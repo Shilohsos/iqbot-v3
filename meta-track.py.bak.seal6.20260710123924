@@ -1,0 +1,156 @@
+"""Meta Conversions API proxy — receives events from funnel page, forwards to Meta.
+Supports multiple pixels simultaneously (dual-dispatch)."""
+import os
+import json
+import time
+import hashlib
+import logging
+from pathlib import Path
+from flask import Flask, request, jsonify
+
+# Load .env from project root
+env_path = Path(__file__).resolve().parent / ".env"
+if env_path.exists():
+    with open(env_path) as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                key, _, val = line.partition("=")
+                os.environ.setdefault(key.strip(), val.strip())
+
+logging.basicConfig(level=logging.INFO, format="[meta-track] %(message)s")
+logger = logging.getLogger("meta-track")
+
+app = Flask(__name__)
+
+# ── Pixel registry ──────────────────────────────────────────────────────
+PIXELS = [
+    {
+        "pixel_id": "1028221572925295",
+        "token": "EAAO4u6ZBDBZCsBRwzJ4Swj4rpo6hgX2v41AFpBNjk4lArZBXdDjQFZCRIoiTuVZBLcEQmuSfiqRNgaowZAZCxdxfZBlBFe4xzCTQTbUFJGoOZBcstzuwE9gfLBrHKkJos18YROcZAsleLydZCUY9eC0pkwIKeVvzU9bAwYxEsUHvK5nZAe0GFsk4jC1gu5gliqYk1QZDZD",
+    },
+]
+
+def send_to_meta(pixel_id: str, token: str, payload: dict) -> str:
+    """Send a single CAPI event to Meta. Returns status string."""
+    api_url = f"https://graph.facebook.com/v22.0/{pixel_id}/events?access_token={token}"
+    try:
+        import urllib.request
+        req = urllib.request.Request(
+            api_url,
+            data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            result = resp.read().decode()
+            logger.info(f"meta: pixel={pixel_id} event={payload['data'][0]['event_name']} → {resp.status}")
+            logger.info(f"meta detail: fbp={payload['data'][0]['user_data'].get('fbp','')} fbc={payload['data'][0]['user_data'].get('fbc','')} em={payload['data'][0]['user_data'].get('em','')} ip={payload['data'][0]['user_data'].get('client_ip_address','')[:20]} ext_id={payload['data'][0]['user_data'].get('external_id','')}")
+            logger.info(f"meta response: {result[:200]}")
+            return f"200: {result}"
+    except Exception as e:
+        logger.error(f"meta fail: pixel={pixel_id} → {e}")
+        return f"error: {e}"
+
+
+@app.route("/api/track", methods=["POST"])
+def track():
+    data = request.get_json(silent=True) or {}
+    event_name = data.get("event_name", "ViewContent")
+    event_source_url = data.get("event_source_url", request.headers.get("Referer", ""))
+    client_ip = (request.headers.get("CF-Connecting-IP") or
+                 request.headers.get("X-Forwarded-For", request.remote_addr) or "")
+    client_ua = request.headers.get("User-Agent", "")
+
+    # IP geolocation via ip-api.com
+    geo: dict = {}
+    try:
+        import urllib.request as ureq
+        geo_resp = ureq.urlopen(
+            f"http://ip-api.com/json/{client_ip}?fields=city,regionName,countryCode",
+            timeout=3,
+        )
+        geo = json.loads(geo_resp.read().decode())
+    except Exception:
+        pass
+
+    user_data: dict = {"client_user_agent": client_ua}
+
+    skip_ip = data.get("skip_ip", False)
+    if not skip_ip and client_ip and client_ip not in ("127.0.0.1", "::1", ""):
+        user_data["client_ip_address"] = client_ip
+
+    for field in ("fbc", "fbp", "em", "ph", "external_id"):
+        val = data.get(field, "")
+        if val:
+            user_data[field] = val
+
+    if geo.get("countryCode"):
+        user_data["country"] = hashlib.sha256(geo["countryCode"].encode()).hexdigest()
+    if geo.get("regionName"):
+        user_data["st"] = hashlib.sha256(geo["regionName"].encode()).hexdigest()
+    if geo.get("city"):
+        user_data["ct"] = hashlib.sha256(geo["city"].encode()).hexdigest()
+
+    event_id = data.get("event_id")
+    if not event_id:
+        bucket = int(time.time()) // 60
+        seed = f"{event_name}|{data.get('fbp','')}|{data.get('fbc','')}|{client_ip}|{bucket}"
+        event_id = hashlib.sha256(seed.encode()).hexdigest()[:32]
+
+    custom_data = data.get("custom_data", {})
+    if event_name == "Lead" and "currency" not in custom_data:
+        custom_data["currency"] = "USD"
+
+    base_event = {
+        "event_name": event_name,
+        "event_id": event_id,
+        "event_time": int(time.time()),
+        "action_source": "website",
+        "event_source_url": event_source_url,
+        "user_data": user_data,
+        "custom_data": custom_data,
+    }
+
+    # ── Fire to all pixels simultaneously ───────────────────────────────
+    results = {}
+    for pixel in PIXELS:
+        if not pixel["token"]:
+            results[pixel["pixel_id"]] = "skipped (no token)"
+            continue
+        payload = {"data": [base_event]}
+        results[pixel["pixel_id"]] = send_to_meta(pixel["pixel_id"], pixel["token"], payload)
+
+    return jsonify({"status": "ok", "pixels": results})
+
+
+@app.route("/api/log_visit", methods=["POST"])
+def log_visit():
+    """Log a landing page visit to the bot's funnel_events table."""
+    data = request.get_json(silent=True) or {}
+    source = str(data.get("source", "direct"))[:64]
+    db_path = os.path.join(os.path.dirname(__file__), "iqbot-v3.db")
+    try:
+        import sqlite3
+        con = sqlite3.connect(db_path, timeout=5)
+        con.execute(
+            "INSERT INTO funnel_events (event_type, source) VALUES (?, ?)",
+            ("page_visit", source),
+        )
+        con.commit()
+        con.close()
+        return jsonify({"ok": True})
+    except Exception as e:
+        logger.error(f"log_visit error: {e}")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/health")
+def health():
+    pixels_status = {p["pixel_id"]: bool(p["token"]) for p in PIXELS}
+    return jsonify({"status": "ok", "pixels": pixels_status})
+
+
+if __name__ == "__main__":
+    port = int(os.getenv("META_TRACK_PORT", "8766"))
+    logger.info(f"meta tracking proxy on :{port} — {len(PIXELS)} pixels")
+    app.run(host="0.0.0.0", port=port, debug=False, threaded=True)

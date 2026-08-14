@@ -43,7 +43,7 @@ const MAINTENANCE_ALLOWED_IDS = new Set<number>([6622587977, getAdminId()]);
 /** Archetypes rotated for funded-idle users. J (live session) and L (Yacht Club
  *  watcher) are driven elsewhere and deliberately excluded. G and H are segment
  *  destinations, not rotation members. */
-const FUNDED_IDLE_ARCHETYPES = ['A', 'B', 'C', 'D', 'E', 'F', 'I', 'K', 'M', 'N', 'O'];
+const FUNDED_IDLE_ARCHETYPES = ['A', 'B', 'C', 'D', 'E', 'F', 'I', 'K', 'M', 'N', 'O', 'P'];
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -154,11 +154,90 @@ const PAIRS = ['EURUSD', 'GBPUSD', 'AUDUSD', 'USDCAD', 'GBPJPY'];
 const TFS = ['30s', '1m', '2m'];
 const GOALS = ['50', '100', '150'];
 
+/** No-repeat pool bag, persisted in bot_a_pools (bag + bag_idx) so the cycle
+ *  survives restarts: each pool cycles through a shuffled copy of itself and
+ *  only reshuffles when the bag is exhausted — no name or amount repeats until
+ *  every item has been used once, across bot restarts too. */
+function pickNoRepeat(poolKey: string): string {
+    const row = db.prepare('SELECT items, bag, bag_idx FROM bot_a_pools WHERE key = ?')
+        .get(poolKey) as { items: string; bag: string; bag_idx: number } | undefined;
+    let items: string[] = [];
+    if (row?.items) {
+        try {
+            const parsed = JSON.parse(row.items);
+            if (Array.isArray(parsed) && parsed.length > 0) items = parsed.map(String);
+        } catch { /* fall through */ }
+    }
+    if (items.length === 0) return poolKey === 'names' ? 'a member' : '+$350';
+    if (items.length === 1) return items[0];
+
+    let bag: string[] = [];
+    try {
+        const parsed = JSON.parse(row?.bag ?? '');
+        if (Array.isArray(parsed) && parsed.length === items.length) bag = parsed.map(String);
+    } catch { /* fresh bag below */ }
+    if (bag.length === 0) bag = [...items].sort(() => Math.random() - 0.5);
+
+    let idx = row?.bag_idx ?? 0;
+    if (!Number.isInteger(idx) || idx < 0 || idx >= bag.length) idx = 0;
+    const v = bag[idx];
+    idx = (idx + 1) % bag.length;
+    if (idx === 0) bag = [...items].sort(() => Math.random() - 0.5); // exhausted → reshuffle
+
+    db.prepare('UPDATE bot_a_pools SET bag = ?, bag_idx = ? WHERE key = ?')
+        .run(JSON.stringify(bag), idx, poolKey);
+    return v;
+}
+
+/** Daily-rotating spot price for the limited-time window templates: the value
+ *  is drawn once per Lagos day from the 'spots' pool and reused all day, so the
+ *  offer amount fluctuates daily but never mid-day. The WINDOW (how long the
+ *  offer stays valid) is drawn with the spot: a fresh expiry in hours, stored
+ *  in config so the access gate can honor it and expire it. */
+const WINDOW_HOURS = [2, 3, 4, 6];
+
+function ensureSpotWindow(poolKey: string, prefix: string): { spot: string; windowLabel: string; expiresAt: string } {
+    const expKey = `${prefix}_expires`;
+    const durKey = `${prefix}_duration`;
+    const spotKey = `${prefix}_spot`;
+    const dailyKey = prefix === 'promo_private' ? 'spot_private' : 'spot_autopilot';
+
+    const now = new Date();
+    const existing = db.prepare('SELECT value FROM config WHERE key = ?').get(expKey) as { value: string } | undefined;
+    let expiresAt: string | null = null;
+    if (existing?.value) {
+        const exp = new Date(existing.value);
+        if (!isNaN(exp.getTime()) && exp > now) expiresAt = existing.value;
+    }
+    const hours = WINDOW_HOURS[Math.floor(Math.random() * WINDOW_HOURS.length)];
+    if (!expiresAt) {
+        expiresAt = new Date(now.getTime() + hours * 3_600_000).toISOString();
+        db.prepare('INSERT INTO config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(expKey, expiresAt);
+        db.prepare('INSERT INTO config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(durKey, `${hours} hour${hours > 1 ? 's' : ''}`);
+    }
+    const windowLabel = (db.prepare('SELECT value FROM config WHERE key = ?').get(durKey) as { value: string } | undefined)?.value ?? `${hours} hours`;
+
+    const today = lagosDate();
+    const row = db.prepare('SELECT date, value FROM bot_a_daily WHERE key = ?').get(dailyKey) as { date: string; value: string } | undefined;
+    let spot: string;
+    if (row && row.date === today && row.value) {
+        spot = row.value;
+    } else {
+        const spots = getBotAPool(poolKey);
+        spot = spots.length > 0 ? pick(spots) : '$20';
+        db.prepare(`INSERT INTO bot_a_daily (key, date, value) VALUES (?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET date = excluded.date, value = excluded.value`).run(dailyKey, today, spot);
+    }
+    db.prepare('INSERT INTO config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
+        .run(spotKey, spot.replace('$', ''));
+    return { spot, windowLabel, expiresAt };
+}
+
 /** Substitute every supported token. `daysSinceLastTrade` comes from the
  *  activity check so {days} reflects the user's real gap (clamped 1–9). */
 function resolvePlaceholders(copy: string, daysSinceLastTrade: number): string {
-    const names = getBotAPool('names');
-    const amounts = getBotAPool('amounts');
+    const privateWindow = ensureSpotWindow('spots', 'promo_private');
+    const autoWindow = ensureSpotWindow('autospots', 'promo_auto');
     return copy
         .replace(/\{confidence\}/g, () => String(randInt(80, 97)))
         .replace(/\{countdown\}/g, () => String(randInt(2, 5)))
@@ -166,8 +245,12 @@ function resolvePlaceholders(copy: string, daysSinceLastTrade: number): string {
         .replace(/\{tf\}/g, () => pick(TFS))
         .replace(/\{gale\}/g, () => String(randInt(2, 4)))
         .replace(/\{days\}/g, () => String(daysSinceLastTrade))
-        .replace(/\{name\}/g, () => (names.length > 0 ? pick(names) : 'a member'))
-        .replace(/\{amount\}/g, () => (amounts.length > 0 ? pick(amounts) : '+$350'))
+        .replace(/\{name\}/g, () => pickNoRepeat('names'))
+        .replace(/\{amount\}/g, () => pickNoRepeat('amounts'))
+        .replace(/\{spot\}/g, () => privateWindow.spot)
+        .replace(/\{window\}/g, () => privateWindow.windowLabel)
+        .replace(/\{autospot\}/g, () => autoWindow.spot)
+        .replace(/\{autowindow\}/g, () => autoWindow.windowLabel)
         .replace(/\{count\}/g, () => String(randInt(15, 40)))
         .replace(/\{goal\}/g, () => pick(GOALS))
         .replace(/\{progress\}/g, () => String(randInt(20, 60)));
@@ -272,18 +355,27 @@ function lastTradeAt(telegramId: number): string | null {
     return row?.ts ?? null;
 }
 
+/** ISO-8601 UTC timestamp `minutes` ago — for julianday() comparisons, which
+ *  parse both the ISO 'T/Z' format (trades.created_at) and SQLite's space
+ *  format (checkin_sent.sent_at) correctly. Mixing raw string formats broke
+ *  the activity check: 'T' sorts above ' ' so every ISO timestamp looked
+ *  "newer" than a space-format cutoff on the same day. */
+function isoMinutesAgo(minutes: number): string {
+    return new Date(Date.now() - minutes * 60_000).toISOString();
+}
+
 /** True when the user traded inside the activity window (→ skip silently). */
 function tradedRecently(telegramId: number): boolean {
-    const row = db.prepare('SELECT MAX(created_at) AS ts FROM trades WHERE telegram_id = ? AND created_at >= ?')
-        .get(telegramId, utcMinutesAgo(ACTIVITY_WINDOW_MIN)) as { ts: string | null } | undefined;
+    const row = db.prepare('SELECT MAX(julianday(created_at)) AS ts FROM trades WHERE telegram_id = ? AND julianday(created_at) >= julianday(?)')
+        .get(telegramId, isoMinutesAgo(ACTIVITY_WINDOW_MIN)) as { ts: number | null } | undefined;
     return !!row?.ts;
 }
 
 /** True when a check-in landed within the quiet window (→ don't stack on it). */
 function checkinTooFresh(telegramId: number): boolean {
     try {
-        const row = db.prepare('SELECT 1 AS hit FROM checkin_sent WHERE telegram_id = ? AND sent_at >= ? LIMIT 1')
-            .get(telegramId, utcMinutesAgo(CHECKIN_QUIET_MIN)) as { hit: number } | undefined;
+        const row = db.prepare('SELECT 1 AS hit FROM checkin_sent WHERE telegram_id = ? AND julianday(sent_at) >= julianday(?) LIMIT 1')
+            .get(telegramId, isoMinutesAgo(CHECKIN_QUIET_MIN)) as { hit: number } | undefined;
         return !!row;
     } catch (e) {
         // checkin_sent is created by checkin.ts's own init; if it is not there

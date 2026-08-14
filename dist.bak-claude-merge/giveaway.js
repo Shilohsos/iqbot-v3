@@ -1,0 +1,558 @@
+import { dbCreateGiveawayEvent, getGiveawayEvent, getGiveawayEvents, getActiveGiveaways, setGiveawayStatus, incrementGiveawayWinnerCount, getUser, getApprovedUsersWithTier, getAllUserIds, getGiveawayParticipant, insertGiveawayParticipant, getGiveawayParticipants, getGiveawayParticipantCount, getMarathonParticipantCount, incrementParticipantTradeCount, setParticipantWinner, getActiveParticipations, insertGiveawayUpdate, getPendingGiveawayUpdates, markGiveawayUpdateSent, getRandomMotivationalMessage, insertNotification, getPendingNotifications, markNotificationSent, markNotificationFailed, getTestUserId, seedGiveawayFabricants, getRealAndFabricatedCounts, seedMarathonFabricants, getEligibleFabWinnerIds, markFabWinnerUsed, getMarathonLeaderboardRows, deleteMarathonFabricants, setPromoFabricatedClaims, incrementPromoFabricatedClaims, markPromoUrgencySent, getActivePromosDueForFabTick, } from './db.js';
+import { db } from './db.js';
+import { sdkPool } from './sdk-pool.js';
+import { BalanceType } from './index.js';
+import { convertToUsd } from './access.js';
+export { getGiveawayEvents, getActiveGiveaways, getGiveawayEvent, getRealAndFabricatedCounts };
+// Re-login callback injected from bot.ts (which owns autoReconnect) so the
+// balance check can recover from an expired SSID without a circular import.
+let reconnectFn;
+export function setGiveawayReconnect(fn) { reconnectFn = fn; }
+// Legacy-Markdown escape (parse_mode:'Markdown' only supports escaping _ * ` [).
+// Admin-set titles containing those chars would otherwise break message parsing.
+function escapeMd(s) { return s.replace(/[_*`[]/g, '\\$&'); }
+function formatCriteriaDescription(criteriaType, criteriaValue) {
+    if (!criteriaType || criteriaType === 'none')
+        return '';
+    if (criteriaType === 'new_user')
+        return `◆ Open to new users (joined ≤ ${criteriaValue ?? '7'} days ago)`;
+    if (criteriaType === 'min_balance')
+        return `◆ Minimum balance: $${criteriaValue ?? '0'}`;
+    if (criteriaType === 'top_traders')
+        return `◆ Top ${criteriaValue ?? '10'} traders by trade count win`;
+    return '';
+}
+function maskFabId(id) {
+    if (id.length <= 6)
+        return id;
+    return id.slice(0, 3) + '***' + id.slice(-3);
+}
+function futureTimestamp(minMs, maxMs) {
+    const ms = minMs + Math.floor(Math.random() * (maxMs - minMs));
+    return new Date(Date.now() + ms).toISOString().replace('T', ' ').split('.')[0];
+}
+export function createGiveawayEvent(input) {
+    return dbCreateGiveawayEvent(input);
+}
+export async function activateGiveaway(giveawayId) {
+    setGiveawayStatus(giveawayId, 'active');
+    const event = getGiveawayEvent(giveawayId);
+    if (!event)
+        return;
+    const testUserId = getTestUserId();
+    if (testUserId)
+        console.log(`[test-mode] sending only to test user ${testUserId}`);
+    const users = testUserId
+        ? [{ telegram_id: testUserId, tier: 'MASTER' }]
+        : getApprovedUsersWithTier();
+    const prizePoolText = event.prize_pool != null ? `$${event.prize_pool.toFixed(2)}` : '';
+    const criteriaText = formatCriteriaDescription(event.criteria_type, event.criteria_value);
+    for (const u of users) {
+        // All users can participate now (directive §8.1).
+        const lines = [
+            ` *LIVE GIVEAWAY*`,
+            ``,
+            `*${event.title}*`,
+            event.description ?? '',
+            prizePoolText ? `Prize Pool: ${prizePoolText}` : '',
+            criteriaText,
+            ``,
+            `Tap below to participate ─ `,
+        ].filter(Boolean);
+        const markup = { inline_keyboard: [[{ text: ' Participate', callback_data: `giveaway:participate:${giveawayId}` }]] };
+        insertNotification(u.telegram_id, lines.join('\n'), { replyMarkup: JSON.stringify(markup) });
+    }
+    seedGiveawayFabricants(giveawayId);
+}
+export async function participate(giveawayId, telegramId) {
+    const event = getGiveawayEvent(giveawayId);
+    if (!event || event.status !== 'active') {
+        return { success: false, message: ' This giveaway is no longer active.' };
+    }
+    const user = getUser(telegramId);
+    if (!user)
+        return { success: false, message: ' User not found.' };
+    // All users can participate in giveaways now (directive §8.1) — no tier gate.
+    const existing = getGiveawayParticipant(giveawayId, telegramId);
+    if (existing) {
+        return { success: false, alreadyIn: true, message: '✅ You\'re already in this giveaway! Good luck ' };
+    }
+    if (event.criteria_type === 'new_user') {
+        const daysThreshold = parseInt(event.criteria_value ?? '7', 10);
+        const starts = new Date(event.starts_at ?? event.created_at);
+        const cutoff = new Date(starts.getTime() - daysThreshold * 86_400_000);
+        const userCreated = new Date(user.created_at ?? '2000-01-01');
+        if (userCreated < cutoff) {
+            return {
+                success: false,
+                message: ` This giveaway is only for new users (joined within ${daysThreshold} days of the event start).`,
+            };
+        }
+    }
+    if (event.criteria_type === 'min_balance') {
+        const minBalance = parseFloat(event.criteria_value ?? '0');
+        if (!user.ssid) {
+            return {
+                success: false,
+                message: ` You need to connect your IQ Option account before participating.\n\nTap /connect to get started.`,
+                replyMarkup: {
+                    inline_keyboard: [[{ text: ' Connect Account', callback_data: 'ui:connect' }]],
+                },
+            };
+        }
+        // Returns a failing ParticipateResult, or null when the balance clears.
+        const checkBalance = async (sid) => {
+            const sdk = await sdkPool.get(telegramId, sid);
+            try {
+                const balances = (await sdk.balances()).getBalances();
+                const real = balances.find((b) => b.type === BalanceType.Real);
+                const rawAmount = real?.amount ?? 0;
+                const currency = real?.currency ?? 'USD';
+                const amount = currency === 'USD'
+                    ? rawAmount
+                    : await convertToUsd(rawAmount, currency, sdk).catch(() => null);
+                if (amount === null) {
+                    // Conversion failed — never compare a raw non-USD amount against a USD threshold
+                    return {
+                        success: false,
+                        message: '⚠️ Couldn\'t verify your balance right now. Please try again in a moment.',
+                    };
+                }
+                if (amount < minBalance) {
+                    return {
+                        success: false,
+                        message: ` You need at least $${minBalance} in your real account to participate.\n\nFund your account and try again ─ `,
+                        replyMarkup: {
+                            inline_keyboard: [[{
+                                        text: ' Fund Account',
+                                        url: 'https://iqoption.com/pwa/payments/deposit?payment_method_id=6786',
+                                    }]],
+                        },
+                    };
+                }
+                return null; // balance clears the threshold
+            }
+            finally {
+                sdkPool.release(telegramId);
+            }
+        };
+        const couldNotVerify = {
+            success: false,
+            message: ` Could not verify your balance. Please try again later or contact admin.`,
+            replyMarkup: {
+                inline_keyboard: [[{ text: ' Contact Admin', url: process.env.ADMIN_CONTACT_LINK ?? 'https://t.me/shiloh_is_10xing' }]],
+            },
+        };
+        try {
+            const fail = await checkBalance(user.ssid);
+            if (fail)
+                return fail;
+        }
+        catch (err) {
+            // On an expired SSID, re-login once for a fresh one and retry.
+            const msg = err instanceof Error ? err.message : String(err);
+            const isAuth = /auth|ssid|unauthor|401|session expired/i.test(msg);
+            const freshSsid = (isAuth && reconnectFn) ? await reconnectFn(telegramId).catch(() => null) : null;
+            if (!freshSsid)
+                return couldNotVerify;
+            try {
+                const fail = await checkBalance(freshSsid);
+                if (fail)
+                    return fail;
+            }
+            catch {
+                return couldNotVerify;
+            }
+        }
+    }
+    const participantId = insertGiveawayParticipant(giveawayId, telegramId);
+    const count = event.event_type === 'marathon'
+        ? getMarathonParticipantCount(giveawayId)
+        : getGiveawayParticipantCount(giveawayId);
+    return {
+        success: true,
+        message: `✅ You've joined the *${event.title}* giveaway! Good luck! `,
+    };
+}
+export function recordTrade(telegramId, isMartingaleRecovery = false) {
+    if (isMartingaleRecovery)
+        return;
+    const participations = getActiveParticipations(telegramId);
+    for (const p of participations) {
+        if (p.criteria_type === 'top_traders') {
+            incrementParticipantTradeCount(p.participation_id);
+            const sendAt = futureTimestamp(60_000, 300_000);
+            insertGiveawayUpdate(p.giveaway_id, p.participation_id, telegramId, 'progress', `◆ Trade recorded for *${p.title}*! Keep trading to climb the rankings.`, sendAt);
+        }
+    }
+}
+export function selectWinners(giveawayId) {
+    const event = getGiveawayEvent(giveawayId);
+    if (!event)
+        return [];
+    const realIqIds = new Set(db.prepare("SELECT iq_user_id FROM users WHERE iq_user_id IS NOT NULL").all()
+        .map(r => r.iq_user_id));
+    function generateFabId() {
+        let id;
+        let guard = 0;
+        do {
+            id = String(180_000_000 + Math.floor(Math.random() * 15_000_000));
+        } while (realIqIds.has(id) && ++guard < 1_000);
+        return id;
+    }
+    const allEligible = getGiveawayParticipants(giveawayId, true).filter(p => !p.won_at);
+    if (allEligible.length === 0)
+        return [];
+    // For giveaways: winners come from fabricated pool only — no real payout
+    const pool = event.event_type === 'giveaway'
+        ? allEligible.filter(p => p.fabricated === 1)
+        : allEligible;
+    if (pool.length === 0)
+        return [];
+    let winners;
+    if (event.criteria_type === 'top_traders') {
+        winners = pool.slice(0, event.max_winners);
+    }
+    else {
+        const shuffled = [...pool].sort(() => Math.random() - 0.5);
+        winners = shuffled.slice(0, event.max_winners);
+    }
+    // Auto-refill fabricated_traders if pool is running low
+    let eligibleIds = getEligibleFabWinnerIds(giveawayId);
+    const neededMinimum = Math.max(5, event.max_winners);
+    if (eligibleIds.length < neededMinimum) {
+        const needed = 20 - eligibleIds.length;
+        for (let i = 0; i < needed; i++) {
+            const newId = generateFabId();
+            db.prepare(`INSERT OR IGNORE INTO fabricated_traders (fabricated_id, display_name) VALUES (?, ?)`)
+                .run(newId, `Trader_${newId}`);
+        }
+        console.log(`[fab] refilled fabricated_traders: added ${needed} new IDs`);
+        eligibleIds = getEligibleFabWinnerIds(giveawayId);
+    }
+    // Assign eligible fabricated IDs — each winner gets a unique ID, no wrap-around
+    const usedInThisGiveaway = new Set();
+    const winnerDisplayIds = winners.map(() => {
+        const fresh = eligibleIds.filter(id => !usedInThisGiveaway.has(id));
+        if (fresh.length > 0) {
+            const chosen = fresh[Math.floor(Math.random() * fresh.length)];
+            usedInThisGiveaway.add(chosen);
+            return chosen;
+        }
+        // Pool exhausted — generate a unique fallback ID using consistent prefix range
+        let fallback;
+        do {
+            const prefixes = ['182', '185', '181', '192', '183', '189', '186', '184', '188', '187'];
+            const prefix = prefixes[Math.floor(Math.random() * prefixes.length)];
+            const suffix = String(Math.floor(Math.random() * 1_000_000)).padStart(6, '0');
+            fallback = prefix + suffix;
+        } while (realIqIds.has(fallback));
+        usedInThisGiveaway.add(fallback);
+        db.prepare(`INSERT OR IGNORE INTO fabricated_traders (fabricated_id, display_name) VALUES (?, ?)`)
+            .run(fallback, fallback.slice(0, 5) + 'XXXX');
+        return fallback;
+    });
+    for (let i = 0; i < winners.length; i++) {
+        const w = winners[i];
+        setParticipantWinner(w.id);
+        incrementGiveawayWinnerCount(giveawayId);
+        if (winnerDisplayIds[i])
+            markFabWinnerUsed(winnerDisplayIds[i], giveawayId);
+        const prizeText = event.prize_per_winner != null ? ` — Prize: *$${event.prize_per_winner.toFixed(2)}*` : '';
+        queueParticipantUpdate(giveawayId, w.id, w.telegram_id, 'won', ` Congratulations! You won the *${event.title}* giveaway!${prizeText}\n\nThe admin will contact you shortly.`);
+        // Fabricated winners have negative telegram_ids — sendMessage will fail silently
+    }
+    // Results announcement to ALL users in the DB — FOMO engine for non-participants
+    const allUserIds = getAllUserIds().filter(id => id > 0);
+    if (allUserIds.length > 0) {
+        const winnersList = winnerDisplayIds.map((id, i) => `${i + 1}. ${id}`).join('\n');
+        const totalPool = event.prize_pool != null ? `$${event.prize_pool.toFixed(2)}` : 'N/A';
+        const perWinner = event.prize_per_winner != null ? `$${event.prize_per_winner.toFixed(2)}` : 'N/A';
+        const announcementMsg = ` *GIVEAWAY RESULTS*\n\n` +
+            ` *Total Prize Pool:* ${totalPool}\n` +
+            ` *Amount Per Winner:* ${perWinner}\n\n` +
+            ` *WINNERS:*\n${winnersList}\n\n` +
+            `Winners contact admin now for your winnings\\!\n\n` +
+            `Missed out? Don't let it happen again\\. Upgrade your access and join the next one\\! `;
+        const adminLink = process.env.ADMIN_CONTACT_LINK ?? 'https://t.me/shiloh_is_10xing';
+        const replyMarkup = JSON.stringify({ inline_keyboard: [[{ text: '· Contact Admin', url: adminLink }]] });
+        for (const uid of allUserIds) {
+            insertNotification(uid, announcementMsg, { replyMarkup });
+        }
+    }
+    setGiveawayStatus(giveawayId, 'completed');
+    return winners.map(w => ({ telegram_id: w.telegram_id, participantId: w.id }));
+}
+export function queueParticipantUpdate(giveawayId, participantId, telegramId, type, text) {
+    const sendAt = futureTimestamp(30_000, 300_000);
+    insertGiveawayUpdate(giveawayId, participantId, telegramId, type, text, sendAt);
+}
+export function sendMotivationalMessages(giveawayId) {
+    const event = getGiveawayEvent(giveawayId);
+    if (!event)
+        return;
+    const msg = getRandomMotivationalMessage();
+    if (!msg)
+        return;
+    const count = event.event_type === 'marathon'
+        ? getMarathonParticipantCount(giveawayId)
+        : getGiveawayParticipantCount(giveawayId);
+    const text = msg.content
+        .replace(/\$\{prize_pool\}/g, event.prize_pool != null ? `$${event.prize_pool.toFixed(2)}` : 'the prize')
+        .replace(/\$\{prize_per_winner\}/g, event.prize_per_winner != null ? `$${event.prize_per_winner.toFixed(2)}` : 'the prize')
+        .replace(/\$\{count\}/g, String(count))
+        .replace(/\$\{title\}/g, event.title)
+        .replace(/\$\{spots_left\}/g, String(event.max_winners))
+        .replace(/\$\{time_left\}/g, 'soon')
+        .replace(/\$\{recent_winner\}/g, 'a recent winner');
+    const markup = JSON.stringify({
+        inline_keyboard: [[{ text: ' Participate', callback_data: `giveaway:participate:${giveawayId}` }]],
+    });
+    const testUserId = getTestUserId();
+    if (testUserId)
+        console.log(`[test-mode] sending only to test user ${testUserId}`);
+    const participants = getGiveawayParticipants(giveawayId, true)
+        .filter(p => !testUserId || p.telegram_id === testUserId);
+    for (const p of participants) {
+        insertNotification(p.telegram_id, text, { replyMarkup: markup });
+    }
+}
+export async function activatePromoCode(giveawayId) {
+    setGiveawayStatus(giveawayId, 'active');
+    const event = getGiveawayEvent(giveawayId);
+    if (!event)
+        return;
+    const testUserId = getTestUserId();
+    if (testUserId)
+        console.log(`[test-mode] sending only to test user ${testUserId}`);
+    const users = testUserId
+        ? [{ telegram_id: testUserId, tier: 'MASTER' }]
+        : getApprovedUsersWithTier();
+    for (const u of users) {
+        // All users can claim promo codes now (directive §8.1).
+        const lines = [
+            `·️ *NEW PROMO CODE*`,
+            ``,
+            `*${event.title}*`,
+            event.description ?? '',
+            event.max_winners != null ? `Limited: ${event.max_winners} claims available` : '',
+            ``,
+            `Tap below to claim your code ─ `,
+        ].filter(Boolean);
+        const fundUrl = process.env.FUNDING_URL ?? 'https://iqoption.com/pwa/payments/deposit';
+        const markup = { inline_keyboard: [
+                [{ text: ' Claim Code', callback_data: `promo:claim:${giveawayId}` }],
+                [{ text: ' Fund Account', url: fundUrl }],
+            ] };
+        insertNotification(u.telegram_id, lines.join('\n'), { replyMarkup: JSON.stringify(markup) });
+    }
+    // Seed initial fabricated claims (20-30% of max_winners)
+    const max = event.max_winners ?? 0;
+    if (max > 0) {
+        const initial = Math.floor(max * (0.20 + Math.random() * 0.10));
+        const firstTickMs = (10 + Math.floor(Math.random() * 5)) * 60_000;
+        const firstTickAt = new Date(Date.now() + firstTickMs).toISOString().replace('T', ' ').split('.')[0];
+        setPromoFabricatedClaims(giveawayId, initial, firstTickAt);
+    }
+}
+export async function activateMarathon(giveawayId) {
+    setGiveawayStatus(giveawayId, 'active');
+    seedMarathonFabricants(giveawayId);
+    const event = getGiveawayEvent(giveawayId);
+    if (!event)
+        return;
+    // If a V2 marathon config exists, the new marathon.ts handles broadcasting.
+    // Skip the old notification loop to avoid duplicates.
+    const { getActiveMarathonConfig } = await import('./db.js');
+    const v2Config = getActiveMarathonConfig();
+    const isV2Marathon = v2Config && v2Config.giveaway_id === giveawayId;
+    if (isV2Marathon)
+        return; // V2 handled by startMarathonBroadcast
+    const testUserId = getTestUserId();
+    if (testUserId)
+        console.log(`[test-mode] sending only to test user ${testUserId}`);
+    const users = testUserId
+        ? [{ telegram_id: testUserId, tier: 'MASTER' }]
+        : getApprovedUsersWithTier();
+    const prizePoolText = event.prize_pool != null ? `$${event.prize_pool.toFixed(2)}` : '';
+    const endsLine = event.ends_at ? `Ends: ${event.ends_at.split(' ')[0]}` : '';
+    for (const u of users) {
+        // All users can join marathons now (directive §8.1).
+        const lines = [
+            ` *LIVE MARATHON*`,
+            ``,
+            `*${event.title}*`,
+            event.description ?? '',
+            prizePoolText ? `Prize Pool: ${prizePoolText}` : '',
+            `Top ${event.max_winners} traders win`,
+            endsLine,
+            ``,
+            `Trade the most to win! ─ `,
+        ].filter(Boolean);
+        const markup = { inline_keyboard: [[{ text: ' Join Marathon', callback_data: `giveaway:participate:${giveawayId}` }]] };
+        insertNotification(u.telegram_id, lines.join('\n'), { replyMarkup: JSON.stringify(markup) });
+    }
+}
+export async function claimPromoCode(giveawayId, telegramId) {
+    const event = getGiveawayEvent(giveawayId);
+    if (!event || event.status !== 'active' || event.event_type !== 'promo_code') {
+        return { success: false, message: ' This promo code is no longer available.' };
+    }
+    const user = getUser(telegramId);
+    if (!user)
+        return { success: false, message: ' User not found.' };
+    // All users can claim promo codes now (directive §8.1) — no tier gate.
+    const code = event.criteria_value ?? '';
+    const existing = getGiveawayParticipant(giveawayId, telegramId);
+    if (existing) {
+        return { success: true, code, message: `✅ Already claimed!\n\n Your code: *${code}*\n\nUse this when funding your account.` };
+    }
+    const claimed = getGiveawayParticipantCount(giveawayId);
+    const totalClaimed = claimed + (event.fabricated_claims ?? 0);
+    if (event.max_winners != null && totalClaimed >= event.max_winners) {
+        return { success: false, message: ' This promo code has reached its maximum number of claims. Check back for more promos!' };
+    }
+    const participantId = insertGiveawayParticipant(giveawayId, telegramId);
+    setParticipantWinner(participantId);
+    const newCount = getGiveawayParticipantCount(giveawayId);
+    const newTotal = newCount + (event.fabricated_claims ?? 0);
+    if (event.max_winners != null && newTotal >= event.max_winners) {
+        setGiveawayStatus(giveawayId, 'completed');
+    }
+    return {
+        success: true,
+        code,
+        message: ` Your code: *${code}*\n\nUse this when funding your account.`,
+    };
+}
+export function getMarathonLeaderboard(giveawayId) {
+    const rows = getMarathonLeaderboardRows(giveawayId);
+    return rows.map((r, i) => ({ ...r, rank: i + 1 }));
+}
+export async function checkMarathonDeadlines(telegram) {
+    const now = new Date();
+    const expired = getActiveGiveaways().filter(g => g.event_type === 'marathon' && g.ends_at && new Date(g.ends_at) <= now);
+    for (const m of expired) {
+        // Skip if a V2 marathon config exists for this event — the new system handles it.
+        const { getActiveMarathonConfig } = await import('./db.js');
+        const v2Config = getActiveMarathonConfig();
+        const isV2Marathon = v2Config && v2Config.giveaway_id === m.id;
+        if (isV2Marathon) {
+            setGiveawayStatus(m.id, 'completed');
+            continue;
+        }
+        const winners = selectWinners(m.id);
+        const winnerIds = new Set(winners.map(w => w.telegram_id));
+        const all = getGiveawayParticipants(m.id, true);
+        for (const p of all) {
+            const msg = winnerIds.has(p.telegram_id)
+                ? ` Marathon *${escapeMd(m.title)}* has ended — you're a top winner! The admin will contact you shortly.`
+                : `◆ Marathon *${escapeMd(m.title)}* has ended. Thanks for competing! Top ${m.max_winners} won.`;
+            try {
+                await telegram.sendMessage(p.telegram_id, msg, { parse_mode: 'Markdown' });
+            }
+            catch { }
+        }
+        deleteMarathonFabricants(m.id);
+    }
+}
+export async function processUpdateQueue(telegram) {
+    const updates = getPendingGiveawayUpdates();
+    for (const update of updates) {
+        try {
+            await telegram.sendMessage(update.telegram_id, update.update_text ?? '', { parse_mode: 'Markdown' });
+        }
+        catch {
+            // ignore send failures
+        }
+        finally {
+            markGiveawayUpdateSent(update.id);
+        }
+    }
+}
+export async function tickPromoFabrication() {
+    const promos = getActivePromosDueForFabTick();
+    for (const event of promos) {
+        const max = event.max_winners ?? 0;
+        if (max === 0)
+            continue;
+        const targetMax = Math.floor(max * 0.92);
+        if (event.fabricated_claims >= targetMax)
+            continue;
+        // Pace: spread remaining fabricated claims across remaining time
+        let increment = 1;
+        const remaining_to_add = targetMax - event.fabricated_claims;
+        if (event.ends_at) {
+            const now = Date.now();
+            const remaining_ms = Math.max(0, new Date(event.ends_at).getTime() - now);
+            if (remaining_ms > 0) {
+                const ticks_left = Math.max(1, remaining_ms / (12.5 * 60_000));
+                increment = Math.max(1, Math.min(5, Math.ceil(remaining_to_add / ticks_left)));
+            }
+        }
+        const newFab = Math.min(targetMax, event.fabricated_claims + increment);
+        const nextTickMs = (10 + Math.floor(Math.random() * 6)) * 60_000;
+        const nextTickAt = new Date(Date.now() + nextTickMs).toISOString().replace('T', ' ').split('.')[0];
+        incrementPromoFabricatedClaims(event.id, newFab - event.fabricated_claims, nextTickAt);
+        // Urgency notifications — each threshold fires only once
+        const realClaims = getGiveawayParticipantCount(event.id);
+        const remaining = max - realClaims - newFab;
+        const testUserId = getTestUserId();
+        if (testUserId)
+            console.log(`[test-mode] promo urgency sending only to test user ${testUserId}`);
+        const audience = testUserId
+            ? [{ telegram_id: testUserId }]
+            : getApprovedUsersWithTier();
+        const claimBtn = (label) => JSON.stringify({
+            inline_keyboard: [[{ text: label, callback_data: `promo:claim:${event.id}` }]],
+        });
+        if (remaining <= 1 && !event.urgency_1_sent) {
+            markPromoUrgencySent(event.id, 1);
+            for (const u of audience) {
+                insertNotification(u.telegram_id, ` *Last promo code — grab it now!*\n\n*${event.title}*\n\nOnly 1 left!`, { replyMarkup: claimBtn(' Grab It Now') });
+            }
+        }
+        else if (remaining <= 5 && !event.urgency_5_sent) {
+            markPromoUrgencySent(event.id, 5);
+            for (const u of audience) {
+                insertNotification(u.telegram_id, ` *Only 5 promo codes remaining!*\n\n*${event.title}*\n\nGrab yours before they're gone!`, { replyMarkup: claimBtn(' Claim Now') });
+            }
+        }
+        else if (remaining <= 10 && !event.urgency_10_sent) {
+            markPromoUrgencySent(event.id, 10);
+            for (const u of audience) {
+                insertNotification(u.telegram_id, `⚠️ *Only 10 promo codes left!*\n\n*${event.title}*\n\nRunning out fast — claim yours now!`, { replyMarkup: claimBtn('⚠️ Claim Code') });
+            }
+        }
+    }
+}
+export async function processNotificationsQueue(telegram) {
+    const testUserId = getTestUserId();
+    if (testUserId)
+        console.log(`[test-mode] sending only to test user ${testUserId}`);
+    const notifications = getPendingNotifications(20);
+    for (const n of notifications) {
+        if (testUserId && n.telegram_id !== testUserId)
+            continue;
+        try {
+            const markup = n.reply_markup ? JSON.parse(n.reply_markup) : undefined;
+            const opts = { parse_mode: 'Markdown' };
+            if (markup)
+                opts.reply_markup = markup;
+            if (n.image_file_id) {
+                await telegram.sendPhoto(n.telegram_id, n.image_file_id, {
+                    caption: n.message,
+                    parse_mode: 'Markdown',
+                    ...(markup ? { reply_markup: markup } : {}),
+                });
+            }
+            else {
+                await telegram.sendMessage(n.telegram_id, n.message, opts);
+            }
+            markNotificationSent(n.id);
+        }
+        catch {
+            markNotificationFailed(n.id);
+        }
+    }
+}

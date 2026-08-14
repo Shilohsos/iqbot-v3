@@ -1,13 +1,9 @@
 import Database from 'better-sqlite3';
 import path from 'node:path';
 import { readFileSync } from 'node:fs';
-import { createHash } from 'node:crypto';
-
 const DB_PATH = process.env.DB_PATH ?? path.resolve('iqbot-v3.db');
-
-export const db = new Database(DB_PATH) as any;
+export const db = new Database(DB_PATH);
 db.pragma('journal_mode = WAL');
-
 db.exec(`
   CREATE TABLE IF NOT EXISTS trades (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -23,9 +19,8 @@ db.exec(`
     created_at      TEXT    NOT NULL DEFAULT (datetime('now'))
   )
 `);
-
 // Migrations for the trades table
-const existingCols = (db.prepare('PRAGMA table_info(trades)').all() as { name: string }[]).map(c => c.name);
+const existingCols = db.prepare('PRAGMA table_info(trades)').all().map(c => c.name);
 if (!existingCols.includes('martingale_run')) {
     db.exec('ALTER TABLE trades ADD COLUMN martingale_run TEXT');
 }
@@ -35,14 +30,6 @@ if (!existingCols.includes('telegram_id')) {
 if (!existingCols.includes('external_id')) {
     db.exec('ALTER TABLE trades ADD COLUMN external_id INTEGER');
 }
-// trade-core.ts writes timeframe_sec on every INSERT and tradeRecovery.ts reads
-// it, but the column was never in the CREATE above — on a fresh DB every trade
-// insert failed with "table trades has no column named timeframe_sec". Smart
-// Flow also reads it for the most-used-timeframe suggestion.
-if (!existingCols.includes('timeframe_sec')) {
-    db.exec('ALTER TABLE trades ADD COLUMN timeframe_sec INTEGER');
-}
-
 // Users table with full onboarding columns (ssid nullable — user may onboard before /connect)
 db.exec(`
   CREATE TABLE IF NOT EXISTS users (
@@ -57,12 +44,10 @@ db.exec(`
     last_used       TEXT    NOT NULL DEFAULT (datetime('now'))
   )
 `);
-
 // Migration: recreate users table if ssid column is NOT NULL (old schema)
-const userColInfo = db.prepare('PRAGMA table_info(users)').all() as { name: string; notnull: number }[];
+const userColInfo = db.prepare('PRAGMA table_info(users)').all();
 const userColNames = userColInfo.map(c => c.name);
 const ssidColNotNull = userColInfo.find(c => c.name === 'ssid')?.notnull === 1;
-
 if (ssidColNotNull) {
     // Recreate with nullable ssid and new onboarding columns
     db.exec(`
@@ -82,7 +67,8 @@ if (ssidColNotNull) {
             SELECT telegram_id, ssid, created_at, last_used FROM _users_v7;
         DROP TABLE _users_v7;
     `);
-} else {
+}
+else {
     // Nullable ssid already — just add any missing onboarding columns
     if (!userColNames.includes('iq_user_id'))
         db.exec('ALTER TABLE users ADD COLUMN iq_user_id INTEGER');
@@ -95,9 +81,8 @@ if (ssidColNotNull) {
     if (!userColNames.includes('tier'))
         db.exec("ALTER TABLE users ADD COLUMN tier TEXT NOT NULL DEFAULT 'DEMO'");
 }
-
 // Additional column migrations (run after main table setup to get final state)
-const finalUserCols = (db.prepare('PRAGMA table_info(users)').all() as { name: string }[]).map(c => c.name);
+const finalUserCols = db.prepare('PRAGMA table_info(users)').all().map(c => c.name);
 if (!finalUserCols.includes('username'))
     db.exec('ALTER TABLE users ADD COLUMN username TEXT');
 if (!finalUserCols.includes('currency'))
@@ -106,7 +91,6 @@ if (!finalUserCols.includes('simultaneous_trades'))
     db.exec('ALTER TABLE users ADD COLUMN simultaneous_trades INTEGER NOT NULL DEFAULT 1');
 if (!finalUserCols.includes('gale_disabled'))
     db.exec('ALTER TABLE users ADD COLUMN gale_disabled INTEGER NOT NULL DEFAULT 0');
-
 // V4 Phase 6: session persistence columns
 if (!finalUserCols.includes('mg_enabled'))
     db.exec('ALTER TABLE users ADD COLUMN mg_enabled INTEGER NOT NULL DEFAULT 1');
@@ -136,7 +120,6 @@ if (!finalUserCols.includes('onboarding_state'))
     db.exec('ALTER TABLE users ADD COLUMN onboarding_state TEXT DEFAULT NULL');
 if (!finalUserCols.includes('pidgin_enabled'))
     db.exec('ALTER TABLE users ADD COLUMN pidgin_enabled INTEGER NOT NULL DEFAULT 0');
-
 // Product access model (replaces tier system — directive: product restructure)
 if (!finalUserCols.includes('access_level'))
     db.exec("ALTER TABLE users ADD COLUMN access_level TEXT NOT NULL DEFAULT 'signals'");
@@ -152,23 +135,15 @@ if (!finalUserCols.includes('total_signals_used'))
     db.exec('ALTER TABLE users ADD COLUMN total_signals_used INTEGER NOT NULL DEFAULT 0');
 if (!finalUserCols.includes('live_signals_used'))
     db.exec('ALTER TABLE users ADD COLUMN live_signals_used INTEGER NOT NULL DEFAULT 0');
-
-// Bot A limited-time spot promo: promo_product + promo_access_until grant
-// 14-day product access to users who fund during an active window.
-if (!finalUserCols.includes('promo_access_until'))
-    db.exec('ALTER TABLE users ADD COLUMN promo_access_until TEXT');
-if (!finalUserCols.includes('promo_product'))
-    db.exec('ALTER TABLE users ADD COLUMN promo_product TEXT');
-
 // onboarding_tracking lazy migration — add last_followup_msg_id for existing DBs
 try {
-    const otCols = (db.prepare("PRAGMA table_info(onboarding_tracking)").all() as { name: string }[]).map(r => r.name);
+    const otCols = db.prepare("PRAGMA table_info(onboarding_tracking)").all().map(r => r.name);
     if (!otCols.includes('last_followup_msg_id'))
         db.exec('ALTER TABLE onboarding_tracking ADD COLUMN last_followup_msg_id INTEGER');
     if (!otCols.includes('user_id_fail_count'))
         db.exec('ALTER TABLE onboarding_tracking ADD COLUMN user_id_fail_count INTEGER NOT NULL DEFAULT 0');
-} catch {}
-
+}
+catch { }
 // Clean [link] placeholders from follow-up templates (idempotent)
 try {
     db.exec(`
@@ -178,20 +153,17 @@ try {
             '─  Tap below. First trade is on the house.', ''))
         WHERE key IN ('followup_never_traded', 'reengage_never_traded');
     `);
-} catch {}
-
+}
+catch { }
 // V4 tier migration: NEWBIE → DEMO (run-once, idempotent)
 db.prepare("UPDATE users SET tier = 'DEMO' WHERE tier = 'NEWBIE'").run();
-
 // Product-restructure migration: map legacy tiers onto access levels (directive §7).
 // Idempotent — only touches rows still sitting at the default 'signals' so we never
 // stomp an access level that a balance check or token grant has since raised.
 try {
-    db.prepare(
-        "UPDATE users SET access_level = 'ai_trading' WHERE tier IN ('PRO','MASTER','ADMIN') AND access_level = 'signals'"
-    ).run();
-} catch {}
-
+    db.prepare("UPDATE users SET access_level = 'ai_trading' WHERE tier IN ('PRO','MASTER','ADMIN') AND access_level = 'signals'").run();
+}
+catch { }
 // Auto Trading session persistence (directive §5.5). One active session per user.
 db.exec(`
   CREATE TABLE IF NOT EXISTS auto_trading_sessions (
@@ -216,12 +188,11 @@ db.exec(`
     last_trade_at       TEXT
   )
 `);
-
 // auto_trading_sessions lazy migration — bring older DBs up to the current schema.
 // Every column added after the original DDL MUST have an ALTER here, or a fresh
 // deploy that later upgrades breaks with "no such column" (audit C1).
 try {
-    const atsCols = (db.prepare("PRAGMA table_info(auto_trading_sessions)").all() as { name: string }[]).map(r => r.name);
+    const atsCols = db.prepare("PRAGMA table_info(auto_trading_sessions)").all().map(r => r.name);
     if (!atsCols.includes('evaluations'))
         db.exec('ALTER TABLE auto_trading_sessions ADD COLUMN evaluations INTEGER NOT NULL DEFAULT 0');
     if (!atsCols.includes('mode'))
@@ -232,29 +203,27 @@ try {
         db.exec('ALTER TABLE auto_trading_sessions ADD COLUMN mg_next_amount REAL NOT NULL DEFAULT 0');
     if (!atsCols.includes('status_msg_id'))
         db.exec('ALTER TABLE auto_trading_sessions ADD COLUMN status_msg_id INTEGER');
-} catch (e) {
+}
+catch (e) {
     console.error('[db] auto_trading_sessions migration failed:', e instanceof Error ? e.message : e);
 }
-
 // Clear orphaned martingale state on any non-running session at startup. A
 // stopped/paused session with mg_active=1 would otherwise fire a large recovery
 // trade if resumed (audit C3 — e.g. a 40,000 NGN pending stake).
 try {
     db.exec("UPDATE auto_trading_sessions SET mg_active = 0, mg_next_amount = 0 WHERE status != 'running' AND mg_active = 1");
-} catch (e) {
+}
+catch (e) {
     console.error('[db] orphaned-martingale cleanup failed:', e instanceof Error ? e.message : e);
 }
-
 // Prune long-dead 'stopped' auto-trading sessions (terminal; a new run upserts a
 // fresh row). Paused sessions are kept — the user may resume them (audit M2).
 try {
     db.exec("DELETE FROM auto_trading_sessions WHERE status = 'stopped' AND COALESCE(last_trade_at, started_at) < datetime('now', '-7 days')");
-} catch (e) {
+}
+catch (e) {
     console.error('[db] stale auto-session cleanup failed:', e instanceof Error ? e.message : e);
 }
-
-
-
 // Signal tracking — result checking at expiry, martingale progression
 db.exec(`
   CREATE TABLE IF NOT EXISTS signal_tracking (
@@ -268,23 +237,22 @@ db.exec(`
     round        INTEGER NOT NULL DEFAULT 0,
     max_rounds   INTEGER NOT NULL DEFAULT 3,
     entry_price  REAL,
-    status       TEXT    NOT NULL DEFAULT 'active',   -- active | won | lost | expired
+    status       TEXT    NOT NULL DEFAULT 'active',   -- active | won | lost
     result       TEXT,
     card_chat_id INTEGER,                              -- chat where the signal card lives
     card_msg_id  INTEGER,                              -- message_id of the signal card
     created_at   TEXT    NOT NULL DEFAULT (datetime('now'))
   )
 `);
-
 // signal_tracking lazy migration — add card message columns for existing DBs
 try {
-    const stCols = (db.prepare("PRAGMA table_info(signal_tracking)").all() as { name: string }[]).map(r => r.name);
+    const stCols = db.prepare("PRAGMA table_info(signal_tracking)").all().map(r => r.name);
     if (!stCols.includes('card_chat_id'))
         db.exec('ALTER TABLE signal_tracking ADD COLUMN card_chat_id INTEGER');
     if (!stCols.includes('card_msg_id'))
         db.exec('ALTER TABLE signal_tracking ADD COLUMN card_msg_id INTEGER');
-} catch {}
-
+}
+catch { }
 // Indexes for the hot query paths (audit M1). Created after the tables exist —
 // each in its own exec so one failure doesn't skip the rest.
 for (const idx of [
@@ -294,11 +262,14 @@ for (const idx of [
     'CREATE INDEX IF NOT EXISTS idx_users_ssid_valid ON users(ssid_valid)',
     'CREATE INDEX IF NOT EXISTS idx_users_access_level ON users(access_level)',
 ]) {
-    try { db.exec(idx); } catch (e) { console.error('[db] index failed:', idx, e instanceof Error ? e.message : e); }
+    try {
+        db.exec(idx);
+    }
+    catch (e) {
+        console.error('[db] index failed:', idx, e instanceof Error ? e.message : e);
+    }
 }
-
 // ─── Templates, media library, onboarding tracking ───────────────────────────
-
 db.exec(`
   CREATE TABLE IF NOT EXISTS templates (
     key           TEXT PRIMARY KEY,
@@ -313,7 +284,6 @@ db.exec(`
     created_at    TEXT NOT NULL DEFAULT (datetime('now'))
   )
 `);
-
 db.exec(`
   CREATE TABLE IF NOT EXISTS sequence_media (
     template_key TEXT PRIMARY KEY,
@@ -322,7 +292,6 @@ db.exec(`
     updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
   )
 `);
-
 db.exec(`
   CREATE TABLE IF NOT EXISTS funding_cycle (
     telegram_id   INTEGER PRIMARY KEY,
@@ -331,7 +300,6 @@ db.exec(`
     next_run_at   TEXT
   )
 `);
-
 db.exec(`
   CREATE TABLE IF NOT EXISTS reconnect_cycle (
     telegram_id   INTEGER PRIMARY KEY,
@@ -340,7 +308,6 @@ db.exec(`
     next_run_at   TEXT
   )
 `);
-
 db.exec(`
   CREATE TABLE IF NOT EXISTS pending_prompt (
     telegram_id   INTEGER PRIMARY KEY,
@@ -349,7 +316,6 @@ db.exec(`
     variant       INTEGER NOT NULL DEFAULT 0
   )
 `);
-
 db.exec(`
   CREATE TABLE IF NOT EXISTS onboarding_tracking (
     telegram_id       INTEGER PRIMARY KEY,
@@ -364,7 +330,6 @@ db.exec(`
     FOREIGN KEY (telegram_id) REFERENCES users(telegram_id)
   )
 `);
-
 db.exec(`
   CREATE TABLE IF NOT EXISTS reengage_tracking (
     telegram_id INTEGER PRIMARY KEY,
@@ -373,15 +338,13 @@ db.exec(`
     updated_at TEXT DEFAULT (datetime('now'))
   )
 `);
-
 // Migration: add variant column for 3-message cycling
 {
-    const rtCols = (db.prepare('PRAGMA table_info(reengage_tracking)').all() as { name: string }[]).map(c => c.name);
+    const rtCols = db.prepare('PRAGMA table_info(reengage_tracking)').all().map(c => c.name);
     if (!rtCols.includes('variant')) {
         db.exec('ALTER TABLE reengage_tracking ADD COLUMN variant INTEGER NOT NULL DEFAULT 0');
     }
 }
-
 db.exec(`
   CREATE TABLE IF NOT EXISTS daily_demo_tracking (
     telegram_id INTEGER,
@@ -390,7 +353,6 @@ db.exec(`
     PRIMARY KEY (telegram_id, date)
   )
 `);
-
 db.exec(`
   CREATE TABLE IF NOT EXISTS daily_product_usage (
     telegram_id INTEGER,
@@ -401,26 +363,24 @@ db.exec(`
     PRIMARY KEY (telegram_id, date, product)
   )
 `);
-
-export function seedTemplates(): void {
+export function seedTemplates() {
     // Guard: skip re-seed if templates already exist
-    const cnt = (db.prepare('SELECT COUNT(*) AS cnt FROM templates').get() as { cnt: number }).cnt;
+    const cnt = db.prepare('SELECT COUNT(*) AS cnt FROM templates').get().cnt;
     if (cnt > 0) {
         console.log(`[db] templates: ${cnt} rows (skipping re-seed)`);
         return;
     }
-
     const sqlDir = path.resolve('db');
     for (const file of ['templates-seed.sql', 'templates-brain-seed.sql']) {
         try {
             const sql = readFileSync(path.join(sqlDir, file), 'utf-8');
             const cleaned = sql.split('\n').filter(l => !l.trim().startsWith('PRAGMA')).join('\n');
             db.exec(cleaned);
-        } catch (err) {
+        }
+        catch (err) {
             console.warn(`[db] seedTemplates: could not load ${file}:`, err instanceof Error ? err.message : err);
         }
     }
-
     // On fresh DB only: remove categories we deliberately don't use
     db.exec(`
         DELETE FROM templates WHERE category IN (
@@ -428,13 +388,10 @@ export function seedTemplates(): void {
             'withdrawal', 'scam_legit', 'risk_safety'
         )
     `);
-
-    const count = (db.prepare('SELECT COUNT(*) AS cnt FROM templates').get() as { cnt: number }).cnt;
+    const count = db.prepare('SELECT COUNT(*) AS cnt FROM templates').get().cnt;
     console.log(`[db] templates: ${count} rows after seed`);
 }
-
 // ─── Section 10 tables ────────────────────────────────────────────────────────
-
 db.exec(`
   CREATE TABLE IF NOT EXISTS tokens (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -446,7 +403,6 @@ db.exec(`
     created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
   )
 `);
-
 db.exec(`
   CREATE TABLE IF NOT EXISTS leaderboard (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -458,7 +414,6 @@ db.exec(`
     UNIQUE(telegram_id, date)
   )
 `);
-
 db.exec(`
   CREATE TABLE IF NOT EXISTS funnel_events (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -467,14 +422,12 @@ db.exec(`
     created_at TEXT    NOT NULL DEFAULT (datetime('now'))
   )
 `);
-
 // Migration: add source column if missing
 {
-    const feCols = (db.prepare('PRAGMA table_info(funnel_events)').all() as { name: string }[]).map(c => c.name);
+    const feCols = db.prepare('PRAGMA table_info(funnel_events)').all().map(c => c.name);
     if (!feCols.includes('source'))
         db.exec('ALTER TABLE funnel_events ADD COLUMN source TEXT');
 }
-
 db.exec(`
   CREATE TABLE IF NOT EXISTS config (
     key        TEXT PRIMARY KEY,
@@ -482,103 +435,18 @@ db.exec(`
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
   )
 `);
-
-// Upgrade-token grandfather reset date (DIRECTIVE-UPGRADE-TOKEN-SYSTEM.md). Seeded
-// once — Master can change the value directly in DB without a build, and this
-// INSERT OR IGNORE will never clobber that override on subsequent boots.
-db.prepare("INSERT OR IGNORE INTO config (key, value) VALUES ('upgrade_token_reset_date', '2026-09-01')").run();
-
-// Smart Flow recommendation cache (DIRECTIVE-SMART-FLOW.md). One row per user;
-// refreshed only when the user opens the flow and the cache is stale (>6h) or
-// their live balance halved. Never written by a background job.
-db.exec(`
-  CREATE TABLE IF NOT EXISTS smart_flow_cache (
-    telegram_id     INTEGER PRIMARY KEY,
-    last_scan_at    TEXT,
-    balance_live    REAL,
-    balance_demo    REAL,
-    recommendations TEXT,
-    updated_at      TEXT,
-    trades_at_scan  INTEGER
-  )
-`);
-{
-    const sfCols = (db.prepare('PRAGMA table_info(smart_flow_cache)').all() as { name: string }[]).map(c => c.name);
-    if (!sfCols.includes('balance_demo'))
-        db.exec('ALTER TABLE smart_flow_cache ADD COLUMN balance_demo REAL');
-    if (!sfCols.includes('recommendations'))
-        db.exec('ALTER TABLE smart_flow_cache ADD COLUMN recommendations TEXT');
-    if (!sfCols.includes('updated_at'))
-        db.exec('ALTER TABLE smart_flow_cache ADD COLUMN updated_at TEXT');
-    if (!sfCols.includes('trades_at_scan'))
-        db.exec('ALTER TABLE smart_flow_cache ADD COLUMN trades_at_scan INTEGER');
-}
-
-// Bot A hourly smart loop (DIRECTIVE-BOT-A-HOURLY-SMART-LOOP.md). Copy, buttons
-// and placeholder pools all live in the DB so operations can edit them without a
-// code change; bot_a_sent holds per-user cancel-out + daily-cap state.
-db.exec(`
-  CREATE TABLE IF NOT EXISTS bot_a_templates (
-    key        TEXT PRIMARY KEY,
-    copy       TEXT NOT NULL,
-    buttons    TEXT NOT NULL DEFAULT '[]',
-    image_file TEXT NOT NULL DEFAULT ''
-  )
-`);
-
-db.exec(`
-  CREATE TABLE IF NOT EXISTS bot_a_pools (
-    key   TEXT PRIMARY KEY,
-    items TEXT NOT NULL,
-    bag   TEXT NOT NULL DEFAULT '',
-    bag_idx INTEGER NOT NULL DEFAULT 0
-  )
-`);
-// Migration: older installs created bot_a_pools without the no-repeat bag
-// columns — add them so the shuffle-bag state survives restarts.
-{
-    const cols = db.prepare("PRAGMA table_info(bot_a_pools)").all().map((c: any) => c.name);
-    if (!cols.includes('bag'))
-        db.exec('ALTER TABLE bot_a_pools ADD COLUMN bag TEXT NOT NULL DEFAULT \'\'');
-    if (!cols.includes('bag_idx'))
-        db.exec('ALTER TABLE bot_a_pools ADD COLUMN bag_idx INTEGER NOT NULL DEFAULT 0');
-}
-
-db.exec(`
-  CREATE TABLE IF NOT EXISTS bot_a_sent (
-    telegram_id    INTEGER PRIMARY KEY,
-    message_id     INTEGER,
-    last_archetype TEXT,
-    sent_count     INTEGER NOT NULL DEFAULT 0,
-    sent_date      TEXT NOT NULL DEFAULT '',
-    last_sent_at   TEXT
-  )
-`);
-
-// Daily-rotating values for Bot A templates (e.g. the limited-time Private
-// Trader spot price, which changes once per Lagos day).
-db.exec(`
-  CREATE TABLE IF NOT EXISTS bot_a_daily (
-    key   TEXT PRIMARY KEY,
-    date  TEXT NOT NULL,
-    value TEXT NOT NULL
-  )
-`);
-
 db.exec(`
   CREATE TABLE IF NOT EXISTS broadcast_schedule (
     id           INTEGER PRIMARY KEY CHECK (id = 1),
     next_send_at TEXT NOT NULL
   )
 `);
-
 db.exec(`
   CREATE TABLE IF NOT EXISTS broadcast_state (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
   )
 `);
-
 db.exec(`
   CREATE TABLE IF NOT EXISTS scheduled_broadcasts (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -610,7 +478,6 @@ db.exec(`CREATE INDEX IF NOT EXISTS idx_trades_telegram_id ON trades(telegram_id
 db.exec(`CREATE INDEX IF NOT EXISTS idx_trades_created_at ON trades(created_at)`);
 db.exec(`CREATE INDEX IF NOT EXISTS idx_trades_martingale_run ON trades(martingale_run)`);
 db.exec(`CREATE INDEX IF NOT EXISTS idx_funnel_events_type ON funnel_events(event_type, created_at)`);
-
 db.exec(`
   CREATE TABLE IF NOT EXISTS compose_tone (
     id          INTEGER PRIMARY KEY CHECK (id = 1),
@@ -622,9 +489,7 @@ db.exec(`
   )
 `);
 db.prepare('INSERT OR IGNORE INTO compose_tone (id) VALUES (1)').run();
-
 // ─── V4 tables ───────────────────────────────────────────────────────────────
-
 db.exec(`
   CREATE TABLE IF NOT EXISTS giveaway_events (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -642,17 +507,20 @@ db.exec(`
     created_at       TEXT    NOT NULL DEFAULT (datetime('now'))
   )
 `);
-
 // Promo fabrication columns (added after initial schema)
 {
-    const cols = (db.prepare('PRAGMA table_info(giveaway_events)').all() as { name: string }[]).map(c => c.name);
-    if (!cols.includes('fabricated_claims'))  db.exec('ALTER TABLE giveaway_events ADD COLUMN fabricated_claims  INTEGER NOT NULL DEFAULT 0');
-    if (!cols.includes('urgency_10_sent'))    db.exec('ALTER TABLE giveaway_events ADD COLUMN urgency_10_sent    INTEGER NOT NULL DEFAULT 0');
-    if (!cols.includes('urgency_5_sent'))     db.exec('ALTER TABLE giveaway_events ADD COLUMN urgency_5_sent     INTEGER NOT NULL DEFAULT 0');
-    if (!cols.includes('urgency_1_sent'))     db.exec('ALTER TABLE giveaway_events ADD COLUMN urgency_1_sent     INTEGER NOT NULL DEFAULT 0');
-    if (!cols.includes('fab_next_tick_at'))   db.exec('ALTER TABLE giveaway_events ADD COLUMN fab_next_tick_at   TEXT');
+    const cols = db.prepare('PRAGMA table_info(giveaway_events)').all().map(c => c.name);
+    if (!cols.includes('fabricated_claims'))
+        db.exec('ALTER TABLE giveaway_events ADD COLUMN fabricated_claims  INTEGER NOT NULL DEFAULT 0');
+    if (!cols.includes('urgency_10_sent'))
+        db.exec('ALTER TABLE giveaway_events ADD COLUMN urgency_10_sent    INTEGER NOT NULL DEFAULT 0');
+    if (!cols.includes('urgency_5_sent'))
+        db.exec('ALTER TABLE giveaway_events ADD COLUMN urgency_5_sent     INTEGER NOT NULL DEFAULT 0');
+    if (!cols.includes('urgency_1_sent'))
+        db.exec('ALTER TABLE giveaway_events ADD COLUMN urgency_1_sent     INTEGER NOT NULL DEFAULT 0');
+    if (!cols.includes('fab_next_tick_at'))
+        db.exec('ALTER TABLE giveaway_events ADD COLUMN fab_next_tick_at   TEXT');
 }
-
 db.exec(`
   CREATE TABLE IF NOT EXISTS giveaway_participants (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -663,7 +531,6 @@ db.exec(`
     joined_at    TEXT    NOT NULL DEFAULT (datetime('now'))
   )
 `);
-
 db.exec(`
   CREATE TABLE IF NOT EXISTS broadcast_messages (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -677,7 +544,6 @@ db.exec(`
     created_at    TEXT    NOT NULL DEFAULT (datetime('now'))
   )
 `);
-
 db.exec(`
   CREATE TABLE IF NOT EXISTS broadcast_user_messages (
     telegram_id INTEGER PRIMARY KEY,
@@ -685,28 +551,17 @@ db.exec(`
     sent_at     TEXT NOT NULL DEFAULT (datetime('now'))
   )
 `);
-db.exec(`
-  CREATE TABLE IF NOT EXISTS pending_deletes (
-    telegram_id INTEGER NOT NULL,
-    message_id  INTEGER NOT NULL,
-    delete_at   INTEGER NOT NULL,
-    PRIMARY KEY (telegram_id, message_id)
-  )
-`);
-
 {
-    const bmCols = (db.prepare('PRAGMA table_info(broadcast_messages)').all() as { name: string }[]).map(c => c.name);
+    const bmCols = db.prepare('PRAGMA table_info(broadcast_messages)').all().map(c => c.name);
     if (!bmCols.includes('sent_count'))
         db.exec('ALTER TABLE broadcast_messages ADD COLUMN sent_count INTEGER NOT NULL DEFAULT 0');
 }
-
 {
-    const tmplCols = (db.prepare('PRAGMA table_info(templates)').all() as { name: string }[]).map(c => c.name);
+    const tmplCols = db.prepare('PRAGMA table_info(templates)').all().map(c => c.name);
     if (!tmplCols.includes('button_callback'))
         db.exec('ALTER TABLE templates ADD COLUMN button_callback TEXT');
 }
-// ✕ KILLED 2026-08-07: auto-broadcast seed removed per Master — no automatic broadcasts.
-
+//  KILLED 2026-08-07: auto-broadcast seed removed per Master — no automatic broadcasts.
 db.exec(`
   CREATE TABLE IF NOT EXISTS channel_approvals (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -715,17 +570,14 @@ db.exec(`
     created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
   )
 `);
-
 // ─── V4.2 Giveaway table migrations ──────────────────────────────────────────
-
 {
-    const geCols = (db.prepare('PRAGMA table_info(giveaway_events)').all() as { name: string }[]).map(c => c.name);
+    const geCols = db.prepare('PRAGMA table_info(giveaway_events)').all().map(c => c.name);
     if (!geCols.includes('winner_count'))
         db.exec('ALTER TABLE giveaway_events ADD COLUMN winner_count INTEGER NOT NULL DEFAULT 0');
 }
-
 {
-    const gpCols = (db.prepare('PRAGMA table_info(giveaway_participants)').all() as { name: string }[]).map(c => c.name);
+    const gpCols = db.prepare('PRAGMA table_info(giveaway_participants)').all().map(c => c.name);
     if (!gpCols.includes('disqualify_reason'))
         db.exec('ALTER TABLE giveaway_participants ADD COLUMN disqualify_reason TEXT');
     if (!gpCols.includes('winner'))
@@ -735,22 +587,9 @@ db.exec(`
     if (!gpCols.includes('won_at'))
         db.exec('ALTER TABLE giveaway_participants ADD COLUMN won_at TEXT');
 }
-
-{
-    // Sequence-level outcomes for the Autopilot card: a LOSS is a full gale
-    // chain exhausted (all rounds lost) — recorded as ONE loss. Wins are
-    // chains that settled WIN at any round. Ties count as neither.
-    const atsCols = (db.prepare('PRAGMA table_info(auto_trading_sessions)').all() as { name: string }[]).map(c => c.name);
-    if (!atsCols.includes('seq_wins'))
-        db.exec('ALTER TABLE auto_trading_sessions ADD COLUMN seq_wins INTEGER NOT NULL DEFAULT 0');
-    if (!atsCols.includes('seq_losses'))
-        db.exec('ALTER TABLE auto_trading_sessions ADD COLUMN seq_losses INTEGER NOT NULL DEFAULT 0');
-}
-
 db.exec(`
   CREATE UNIQUE INDEX IF NOT EXISTS idx_gp_unique ON giveaway_participants(giveaway_id, telegram_id);
 `);
-
 db.exec(`
   CREATE TABLE IF NOT EXISTS giveaway_updates (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -764,7 +603,6 @@ db.exec(`
     created_at      TEXT    NOT NULL DEFAULT (datetime('now'))
   )
 `);
-
 db.exec(`
   CREATE TABLE IF NOT EXISTS motivational_messages (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -774,7 +612,6 @@ db.exec(`
     created_at TEXT    NOT NULL DEFAULT (datetime('now'))
   )
 `);
-
 db.exec(`
   CREATE TABLE IF NOT EXISTS notifications_queue (
     id                   INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -789,64 +626,35 @@ db.exec(`
     created_at           TEXT    NOT NULL DEFAULT (datetime('now'))
   )
 `);
-
 db.exec(`
   CREATE INDEX IF NOT EXISTS idx_gp_giveaway_id ON giveaway_participants(giveaway_id);
   CREATE INDEX IF NOT EXISTS idx_gp_telegram_id ON giveaway_participants(telegram_id);
   CREATE INDEX IF NOT EXISTS idx_gu_send_at ON giveaway_updates(send_at, sent);
   CREATE INDEX IF NOT EXISTS idx_nq_status ON notifications_queue(status, send_after);
 `);
-
 {
-    const motCount = (db.prepare('SELECT COUNT(*) AS cnt FROM motivational_messages').get() as { cnt: number }).cnt;
+    const motCount = db.prepare('SELECT COUNT(*) AS cnt FROM motivational_messages').get().cnt;
     if (motCount === 0) {
-        const templates: [string, string][] = [
+        const templates = [
             ['persuasion', "Giveaway is still on — you still have a chance to win *${prize_per_winner}*. Don't sit this one out ─ "],
-            ['urgency',    "··· Winners will be selected soon. You can still participate and claim your share of *${prize_pool}*."],
-            ['social_proof', "✦ *${count}* traders already joined this giveaway. Every second you wait = less chance to win."],
+            ['urgency', "··· Winners will be selected soon. You can still participate and claim your share of *${prize_pool}*."],
+            ['social_proof', " *${count}* traders already joined this giveaway. Every second you wait = less chance to win."],
             ['persuasion', "Someone's going to win *${prize_per_winner}*. Why not you? Join now ─ "],
-            ['urgency',    "⚠️ Last chance! Winners picked in *${time_left}*. Tap Participate now."],
-            ['social_proof', "✦ *${recent_winner}* just claimed a prize last giveaway. This could be you next."],
-            ['persuasion', "Trade more, win more. The *${title}* giveaway rewards the most active traders 1."],
-            ['urgency',    "Not in yet? *${spots_left}* winners will split *${prize_pool}*. Your move ─ "],
+            ['urgency', "⚠️ Last chance! Winners picked in *${time_left}*. Tap Participate now."],
+            ['social_proof', " *${recent_winner}* just claimed a prize last giveaway. This could be you next."],
+            ['persuasion', "Trade more, win more. The *${title}* giveaway rewards the most active traders "],
+            ['urgency', "Not in yet? *${spots_left}* winners will split *${prize_pool}*. Your move ─ "],
         ];
         const ins = db.prepare('INSERT INTO motivational_messages (category, content) VALUES (?, ?)');
-        for (const [cat, content] of templates) ins.run(cat, content);
+        for (const [cat, content] of templates)
+            ins.run(cat, content);
     }
 }
-
-// ─── Trades ──────────────────────────────────────────────────────────────────
-
-export interface TradeRecord {
-    id?: number;
-    telegram_id?: number;
-    pair: string;
-    direction: string;
-    amount: number;
-    status: 'WIN' | 'LOSS' | 'TIE' | 'TIMEOUT' | 'ERROR' | 'in_flight';
-    pnl: number;
-    trade_id?: number;
-    error?: string;
-    martingale_run?: string;
-    external_id?: number;
-    created_at?: string;
-    rounds?: number;   // martingale depth (1 = no recovery, 2+ = had recoveries)
-}
-
-export interface TradeStats {
-    total: number;
-    wins: number;
-    losses: number;
-    ties: number;
-    totalPnl: number;
-}
-
 const insertStmt = db.prepare(`
     INSERT INTO trades (telegram_id, pair, direction, amount, status, pnl, trade_id, error, martingale_run, external_id)
     VALUES (@telegram_id, @pair, @direction, @amount, @status, @pnl, @trade_id, @error, @martingale_run, @external_id)
 `);
-
-export function insertTrade(t: TradeRecord): void {
+export function insertTrade(t) {
     if (t.telegram_id != null) {
         db.prepare(`INSERT OR IGNORE INTO users (telegram_id, created_at, last_used) VALUES (?, datetime('now'), datetime('now'))`)
             .run(t.telegram_id);
@@ -864,8 +672,7 @@ export function insertTrade(t: TradeRecord): void {
         external_id: t.external_id ?? null,
     });
 }
-
-export function getRecentTrades(limit = 10, telegramId?: number): TradeRecord[] {
+export function getRecentTrades(limit = 10, telegramId) {
     const whereClause = telegramId !== undefined ? 'WHERE telegram_id = ?' : '';
     const sql = `
         WITH circles AS (
@@ -893,13 +700,12 @@ export function getRecentTrades(limit = 10, telegramId?: number): TradeRecord[] 
         LIMIT ?
     `;
     if (telegramId !== undefined) {
-        return db.prepare(sql).all(telegramId, limit) as TradeRecord[];
+        return db.prepare(sql).all(telegramId, limit);
     }
-    return db.prepare(sql).all(limit) as TradeRecord[];
+    return db.prepare(sql).all(limit);
 }
-
-export function getTradeStats(telegramId?: number): TradeStats {
-    const pnlWhere  = telegramId !== undefined ? 'WHERE telegram_id = ?' : '';
+export function getTradeStats(telegramId) {
+    const pnlWhere = telegramId !== undefined ? 'WHERE telegram_id = ?' : '';
     const circleWhere = telegramId !== undefined ? 'WHERE cr.telegram_id = ?' : '';
     const sql = `
         WITH circle_results AS (
@@ -927,9 +733,7 @@ export function getTradeStats(telegramId?: number): TradeStats {
     `;
     const row = (telegramId !== undefined
         ? db.prepare(sql).get(telegramId, telegramId)
-        : db.prepare(sql).get()
-    ) as { total: number; wins: number; losses: number; ties: number; totalPnl: number };
-
+        : db.prepare(sql).get());
     return {
         total: row.total ?? 0,
         wins: row.wins ?? 0,
@@ -938,8 +742,7 @@ export function getTradeStats(telegramId?: number): TradeStats {
         totalPnl: row.totalPnl ?? 0,
     };
 }
-
-export function getTopTradersToday(limit = 20): Array<{ telegram_id: number; username: string | null; trade_count: number }> {
+export function getTopTradersToday(limit = 20) {
     return db.prepare(`
         SELECT t.telegram_id, u.username, COUNT(*) AS trade_count
         FROM trades t
@@ -949,144 +752,53 @@ export function getTopTradersToday(limit = 20): Array<{ telegram_id: number; use
         GROUP BY t.telegram_id
         ORDER BY trade_count DESC
         LIMIT ?
-    `).all(limit) as Array<{ telegram_id: number; username: string | null; trade_count: number }>;
+    `).all(limit);
 }
-
-// ─── Users ───────────────────────────────────────────────────────────────────
-
-export type ApprovalStatus = 'pending' | 'approved' | 'rejected' | 'paused';
-
-export interface UserRecord {
-    telegram_id: number;
-    username?: string | null;
-    ssid?: string | null;
-    iq_user_id?: number | null;
-    approval_status: ApprovalStatus;
-    approved_at?: string | null;
-    affiliate_data?: string | null;
-    tier?: string | null;
-    currency?: string | null;
-    created_at?: string;
-    last_used?: string;
-    cred?: string | null;
-    email?: string | null;
-    ssid_valid?: number | null;
-    ssid_last_checked?: string | null;
-    reconnect_prompt_msg_id?: number | null;
-    reconnect_prompt_at?: string | null;
-    onboarding_state?: string | null;
-    pidgin_enabled?: number;
-    analysis_candles?: number | null;
-    display_confidence_min?: number | null;
-    access_level?: string | null;
-    access_expires_at?: string | null;
-    signals_used_today?: number | null;
-    signals_date?: string | null;
-    funded_balance_usd?: number | null;
-    total_signals_used?: number | null;
-    ui_disabled?: number | null;
-}
-
-export interface AutoTradingSession {
-    id: number;
-    telegram_id: number;
-    currency: string;
-    amount: number;
-    assets: string;            // JSON array
-    timeframe: number;
-    gale_rounds: number;
-    status: 'running' | 'paused' | 'stopped';
-    current_asset_index: number;
-    trades_done: number;
-    evaluations: number;
-    pnl: number;
-    mode?: 'demo' | 'live';
-    last_error?: string | null;
-    started_at?: string;
-    last_trade_at?: string | null;
-    mg_active: number;
-    mg_next_amount: number;
-    status_msg_id?: number | null;
-    seq_wins?: number | null;
-    seq_losses?: number | null;
-}
-
-export interface SignalTrackRecord {
-    id: number;
-    telegram_id: number;
-    pair: string;
-    direction: string;
-    timeframe: number;
-    entry_time: string;
-    expiry_time: string;
-    round: number;
-    max_rounds: number;
-    entry_price: number | null;
-    status: 'active' | 'won' | 'lost';
-    result: string | null;
-    card_chat_id?: number | null;
-    card_msg_id?: number | null;
-    created_at?: string;
-}
-
-export function saveUserCurrency(telegramId: number, currency: string): void {
+export function saveUserCurrency(telegramId, currency) {
     db.prepare('UPDATE users SET currency = ? WHERE telegram_id = ?').run(currency, telegramId);
 }
-
-export function maskUserId(id: number): string {
+export function maskUserId(id) {
     const s = String(id);
     const half = Math.ceil(s.length / 2);
     return s.slice(0, half) + 'X'.repeat(s.length - half);
 }
-
-export function getUser(telegramId: number): UserRecord | undefined {
-    return db.prepare('SELECT * FROM users WHERE telegram_id = ?').get(telegramId) as UserRecord | undefined;
+export function getUser(telegramId) {
+    return db.prepare('SELECT * FROM users WHERE telegram_id = ?').get(telegramId);
 }
-
-export function findUsersByUsername(username: string): UserRecord[] {
-    return db.prepare(
-        'SELECT * FROM users WHERE username LIKE ? ORDER BY last_used DESC LIMIT 10'
-    ).all(`%${username}%`) as UserRecord[];
+export function findUsersByUsername(username) {
+    return db.prepare('SELECT * FROM users WHERE username LIKE ? ORDER BY last_used DESC LIMIT 10').all(`%${username}%`);
 }
-
-export function findUsersByIqUserId(iqUserId: number): UserRecord[] {
-    return db.prepare(
-        'SELECT * FROM users WHERE iq_user_id = ? ORDER BY last_used DESC LIMIT 10'
-    ).all(iqUserId) as UserRecord[];
+export function findUsersByIqUserId(iqUserId) {
+    return db.prepare('SELECT * FROM users WHERE iq_user_id = ? ORDER BY last_used DESC LIMIT 10').all(iqUserId);
 }
-
-export function saveUserIqUserId(telegramId: number, iqUserId: string): void {
+export function saveUserIqUserId(telegramId, iqUserId) {
     db.prepare('UPDATE users SET iq_user_id = ? WHERE telegram_id = ?').run(iqUserId, telegramId);
 }
-
-export function saveUser(user: Pick<UserRecord, 'telegram_id' | 'ssid'>): void {
+export function saveUser(user) {
     db.prepare(`
         INSERT INTO users (telegram_id, ssid, last_used)
         VALUES (@telegram_id, @ssid, datetime('now'))
         ON CONFLICT(telegram_id) DO UPDATE SET ssid = @ssid, last_used = datetime('now')
     `).run(user);
 }
-
-export function saveUserCred(telegramId: number, cred: string, email: string): void {
+export function saveUserCred(telegramId, cred, email) {
     db.prepare('UPDATE users SET cred = ?, email = ? WHERE telegram_id = ?').run(cred, email, telegramId);
 }
-
-export function saveUsername(telegramId: number, username: string | undefined): void {
-    if (!username) return;
+export function saveUsername(telegramId, username) {
+    if (!username)
+        return;
     db.prepare(`
         UPDATE users SET username = ?, last_used = datetime('now') WHERE telegram_id = ?
     `).run(username, telegramId);
 }
-
-export function upsertOnboardingUser(telegramId: number, iqUserId: number): void {
+export function upsertOnboardingUser(telegramId, iqUserId) {
     db.prepare(`
         INSERT INTO users (telegram_id, iq_user_id, approval_status)
         VALUES (?, ?, 'pending')
         ON CONFLICT(telegram_id) DO UPDATE SET iq_user_id = excluded.iq_user_id, last_used = datetime('now')
     `).run(telegramId, iqUserId);
 }
-
-export function approveUser(telegramId: number, affiliateData?: string): void {
+export function approveUser(telegramId, affiliateData) {
     db.prepare(`
         UPDATE users
         SET approval_status = 'approved',
@@ -1095,112 +807,93 @@ export function approveUser(telegramId: number, affiliateData?: string): void {
         WHERE telegram_id = ?
     `).run(affiliateData ?? null, telegramId);
 }
-
-export function rejectUser(telegramId: number): void {
+export function rejectUser(telegramId) {
     db.prepare(`UPDATE users SET approval_status = 'rejected' WHERE telegram_id = ?`).run(telegramId);
 }
-
-export function resetUser(telegramId: number): void {
+export function resetUser(telegramId) {
     db.prepare(`UPDATE users SET ssid = NULL, iq_user_id = NULL, approval_status = 'pending', onboarding_state = NULL WHERE telegram_id = ?`).run(telegramId);
     db.prepare(`DELETE FROM onboarding_tracking WHERE telegram_id = ?`).run(telegramId);
     db.prepare(`DELETE FROM daily_demo_tracking WHERE telegram_id = ?`).run(telegramId);
 }
-
-export function pauseUser(telegramId: number): void {
+export function pauseUser(telegramId) {
     db.prepare(`UPDATE users SET approval_status = 'paused' WHERE telegram_id = ?`).run(telegramId);
 }
-
-export function resumeUser(telegramId: number): void {
+export function resumeUser(telegramId) {
     db.prepare(`UPDATE users SET approval_status = 'approved' WHERE telegram_id = ?`).run(telegramId);
 }
-
-export function deleteUser(telegramId: number): void {
+export function deleteUser(telegramId) {
     db.prepare('DELETE FROM users WHERE telegram_id = ?').run(telegramId);
 }
-
-export function clearUserSsid(telegramId: number): void {
+export function clearUserSsid(telegramId) {
     db.prepare('UPDATE users SET ssid = NULL WHERE telegram_id = ?').run(telegramId);
 }
-
 /** Mark a user's SSID validity (1 = valid, 0 = expired) and stamp the check time. */
-export function setSsidValid(telegramId: number, valid: 0 | 1): void {
+export function setSsidValid(telegramId, valid) {
     db.prepare("UPDATE users SET ssid_valid = ?, ssid_last_checked = datetime('now') WHERE telegram_id = ?")
         .run(valid, telegramId);
 }
-
 /** Users who have an SSID stored — candidates for the health check. */
-export function getUsersWithSsid(): UserRecord[] {
-    return db.prepare('SELECT * FROM users WHERE ssid IS NOT NULL').all() as UserRecord[];
+export function getUsersWithSsid() {
+    return db.prepare('SELECT * FROM users WHERE ssid IS NOT NULL').all();
 }
-
 /** Broadcast targets: only funded users (PRO/MASTER with SSID), excluding admin. */
-export function getBroadcastTargetIds(): number[] {
+export function getBroadcastTargetIds() {
     const adminId = parseInt(process.env.ADMIN_USER_ID ?? '1615652240', 10);
-    return (db.prepare(
-        "SELECT telegram_id FROM users WHERE ssid IS NOT NULL AND ssid != '' AND (funded_balance_usd > 0 OR access_level IN ('ai_trading','auto_trading')) AND telegram_id != ?"
-    ).all(adminId) as { telegram_id: number }[]).map(r => r.telegram_id);
+    return db.prepare("SELECT telegram_id FROM users WHERE ssid IS NOT NULL AND ssid != '' AND (funded_balance_usd > 0 OR access_level IN ('ai_trading','auto_trading')) AND telegram_id != ?").all(adminId).map(r => r.telegram_id);
 }
-
 /** Expired-SSID users due for a reconnect follow-up (never prompted, or last prompt older than `hours`). */
-export function getUsersDueForReconnectPrompt(hours: number): UserRecord[] {
-    return db.prepare(
-        `SELECT * FROM users WHERE ssid_valid = 0 AND (reconnect_prompt_at IS NULL OR reconnect_prompt_at <= datetime('now', ?))`
-    ).all(`-${hours} hours`) as UserRecord[];
+export function getUsersDueForReconnectPrompt(hours) {
+    return db.prepare(`SELECT * FROM users WHERE ssid_valid = 0 AND (reconnect_prompt_at IS NULL OR reconnect_prompt_at <= datetime('now', ?))`).all(`-${hours} hours`);
 }
-
 /** Record the currently-visible reconnect prompt message (so the next one can delete it). */
-export function setReconnectPrompt(telegramId: number, msgId: number | null): void {
+export function setReconnectPrompt(telegramId, msgId) {
     db.prepare("UPDATE users SET reconnect_prompt_msg_id = ?, reconnect_prompt_at = datetime('now') WHERE telegram_id = ?")
         .run(msgId, telegramId);
 }
-
-export function clearReconnectPrompt(telegramId: number): void {
+export function clearReconnectPrompt(telegramId) {
     db.prepare('UPDATE users SET reconnect_prompt_msg_id = NULL, reconnect_prompt_at = NULL WHERE telegram_id = ?')
         .run(telegramId);
 }
-
 // ── Product access model ───────────────────────────────────────────────────────
-
-export function setUserAccessLevel(telegramId: number, accessLevel: string, expiresAt?: string | null): void {
+export function setUserAccessLevel(telegramId, accessLevel, expiresAt) {
     if (expiresAt) {
         db.prepare('UPDATE users SET access_level = ?, access_expires_at = ? WHERE telegram_id = ?').run(accessLevel, expiresAt, telegramId);
-    } else {
+    }
+    else {
         db.prepare('UPDATE users SET access_level = ? WHERE telegram_id = ?').run(accessLevel, telegramId);
     }
 }
-
 /** Downgrade users whose token-granted access has expired. Returns count of downgraded. */
-export function downgradeExpiredAccess(): number {
+export function downgradeExpiredAccess() {
     const result = db.prepare(`        UPDATE users SET access_level = 'signals', access_expires_at = NULL
         WHERE access_expires_at IS NOT NULL
           AND access_expires_at < datetime('now')
           AND access_level IN ('ai_trading','auto_trading')
     `).run();
-    return (result as { changes: number }).changes;
+    return result.changes;
 }
-
 /** Cache the user's funded USD balance and (optionally) bump their access level.
  *  When accessLevel is provided, access_expires_at is also written: callers pass
  *  the token expiry to preserve it, or omit it to clear a stale expiry (the common
  *  balance-derived case). */
-export function setUserFundedBalance(telegramId: number, fundedUsd: number, accessLevel?: string, accessExpiresAt?: string | null): void {
+export function setUserFundedBalance(telegramId, fundedUsd, accessLevel, accessExpiresAt) {
     if (accessLevel) {
         db.prepare('UPDATE users SET funded_balance_usd = ?, access_level = ?, access_expires_at = ? WHERE telegram_id = ?')
             .run(fundedUsd, accessLevel, accessExpiresAt ?? null, telegramId);
-    } else {
+    }
+    else {
         db.prepare('UPDATE users SET funded_balance_usd = ? WHERE telegram_id = ?').run(fundedUsd, telegramId);
     }
 }
-
 /**
  * Returns the user's signal usage for today, resetting the counter when the
  * stored date is not today. `used` is post-reset, so callers can compare against
  * the daily cap directly.
  */
-export function getSignalUsage(telegramId: number): { used: number; date: string } {
+export function getSignalUsage(telegramId) {
     const today = new Date().toISOString().slice(0, 10);
     const row = db.prepare('SELECT signals_used_today, signals_date FROM users WHERE telegram_id = ?')
-        .get(telegramId) as { signals_used_today?: number; signals_date?: string } | undefined;
+        .get(telegramId);
     if (!row || row.signals_date !== today) {
         db.prepare("UPDATE users SET signals_used_today = 0, signals_date = ? WHERE telegram_id = ?")
             .run(today, telegramId);
@@ -1208,42 +901,33 @@ export function getSignalUsage(telegramId: number): { used: number; date: string
     }
     return { used: row.signals_used_today ?? 0, date: today };
 }
-
 /** Increment today's signal counter (resetting first if the date rolled over). */
-export function incrementSignalUsage(telegramId: number): number {
+export function incrementSignalUsage(telegramId) {
     const { used } = getSignalUsage(telegramId);
     const next = used + 1;
     db.prepare('UPDATE users SET signals_used_today = ? WHERE telegram_id = ?').run(next, telegramId);
     return next;
 }
-
 /** Lifetime total signals a user has generated (never resets). */
-export function getTotalSignalCount(telegramId: number): number {
+export function getTotalSignalCount(telegramId) {
     const row = db.prepare('SELECT total_signals_used FROM users WHERE telegram_id = ?')
-        .get(telegramId) as { total_signals_used: number } | undefined;
+        .get(telegramId);
     return row?.total_signals_used ?? 0;
 }
-
-export function incrementTotalSignalCount(telegramId: number): number {
+export function incrementTotalSignalCount(telegramId) {
     const next = getTotalSignalCount(telegramId) + 1;
     db.prepare('UPDATE users SET total_signals_used = ? WHERE telegram_id = ?').run(next, telegramId);
     return next;
 }
-
 /** Total signals consumed across all users today — for the admin panel. */
-export function getTotalSignalsToday(): number {
+export function getTotalSignalsToday() {
     const today = new Date().toISOString().slice(0, 10);
     const row = db.prepare('SELECT COALESCE(SUM(signals_used_today), 0) AS n FROM users WHERE signals_date = ?')
-        .get(today) as { n: number };
+        .get(today);
     return row.n;
 }
-
 // ── Auto Trading sessions ──────────────────────────────────────────────────────
-
-export function upsertAutoSession(s: {
-    telegram_id: number; currency: string; amount: number; assets: string[];
-    timeframe: number; gale_rounds: number; mode?: 'demo' | 'live';
-}): void {
+export function upsertAutoSession(s) {
     const mode = s.mode ?? 'live';
     db.prepare(`
         INSERT INTO auto_trading_sessions
@@ -1255,44 +939,34 @@ export function upsertAutoSession(s: {
             currency = excluded.currency, amount = excluded.amount, assets = excluded.assets,
             timeframe = excluded.timeframe, gale_rounds = excluded.gale_rounds,
             status = 'running', current_asset_index = 0, trades_done = 0, evaluations = 0, pnl = 0,
-            seq_wins = 0, seq_losses = 0,
             last_error = NULL, started_at = datetime('now'), last_trade_at = NULL, mode = excluded.mode,
             status_msg_id = NULL
     `).run({ ...s, assets: JSON.stringify(s.assets), mode });
 }
-
-export function getAutoSession(telegramId: number): AutoTradingSession | undefined {
+export function getAutoSession(telegramId) {
     return db.prepare('SELECT * FROM auto_trading_sessions WHERE telegram_id = ?')
-        .get(telegramId) as AutoTradingSession | undefined;
+        .get(telegramId);
 }
-
-export function getRunningAutoSessions(): AutoTradingSession[] {
+export function getRunningAutoSessions() {
     return db.prepare("SELECT * FROM auto_trading_sessions WHERE status = 'running'")
-        .all() as AutoTradingSession[];
+        .all();
 }
-
-export function setAutoSessionStatus(telegramId: number, status: 'running' | 'paused' | 'stopped', lastError?: string | null): void {
+export function setAutoSessionStatus(telegramId, status, lastError) {
     db.prepare('UPDATE auto_trading_sessions SET status = ?, last_error = ? WHERE telegram_id = ?')
         .run(status, lastError ?? null, telegramId);
 }
-
 /** Persist progress after a settled run: advance the asset cursor and accumulate stats. */
-export function recordAutoSessionTrade(telegramId: number, nextAssetIndex: number, pnlDelta: number, outcomeStatus?: string): void {
-    let winInc = 0, lossInc = 0;
-    if (outcomeStatus === 'WIN') winInc = 1;
-    else if (outcomeStatus === 'LOSS') lossInc = 1;
+export function recordAutoSessionTrade(telegramId, nextAssetIndex, pnlDelta) {
     db.prepare(`
         UPDATE auto_trading_sessions
         SET current_asset_index = ?, trades_done = trades_done + 1,
-            pnl = pnl + ?, last_trade_at = datetime('now'),
-            seq_wins = seq_wins + ?, seq_losses = seq_losses + ?
+            pnl = pnl + ?, last_trade_at = datetime('now')
         WHERE telegram_id = ?
-    `).run(nextAssetIndex, pnlDelta, winInc, lossInc, telegramId);
+    `).run(nextAssetIndex, pnlDelta, telegramId);
 }
-
 /** A market check that did NOT place a trade (e.g. low confidence): advance the
  *  asset cursor and bump the evaluations counter — never trades_done. */
-export function recordAutoSessionEvaluation(telegramId: number, nextAssetIndex: number): void {
+export function recordAutoSessionEvaluation(telegramId, nextAssetIndex) {
     db.prepare(`
         UPDATE auto_trading_sessions
         SET current_asset_index = ?, evaluations = evaluations + 1,
@@ -1300,9 +974,8 @@ export function recordAutoSessionEvaluation(telegramId: number, nextAssetIndex: 
         WHERE telegram_id = ?
     `).run(nextAssetIndex, telegramId);
 }
-
 /** Persist martingale gale state so a restart can resume mid-sequence. */
-export function setAutoSessionMgState(telegramId: number, active: boolean, nextAmount?: number): void {
+export function setAutoSessionMgState(telegramId, active, nextAmount) {
     // Never throw: this is called from inside the auto-trading error handler, and a
     // DB error here must not bypass reconnect/notify/circuit-breaker logic (audit C4).
     try {
@@ -1311,131 +984,86 @@ export function setAutoSessionMgState(telegramId: number, active: boolean, nextA
             SET mg_active = ?, mg_next_amount = ?
             WHERE telegram_id = ?
         `).run(active ? 1 : 0, nextAmount ?? 0, telegramId);
-    } catch (e) {
+    }
+    catch (e) {
         console.error(`[db] setAutoSessionMgState failed for ${telegramId}:`, e instanceof Error ? e.message : e);
     }
 }
-
 // ── Signal tracking ──────────────────────────────────────────────────────────
-
-export function insertSignalTrack(r: {
-    telegram_id: number; pair: string; direction: string;
-    timeframe: number; entry_time: string; expiry_time: string;
-    round: number; max_rounds: number; entry_price: number | null;
-    card_chat_id?: number; card_msg_id?: number;
-}): number {
+export function insertSignalTrack(r) {
     const info = db.prepare(`
         INSERT INTO signal_tracking
             (telegram_id, pair, direction, timeframe, entry_time, expiry_time,
              round, max_rounds, entry_price, card_chat_id, card_msg_id)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(r.telegram_id, r.pair, r.direction, r.timeframe, r.entry_time,
-           r.expiry_time, r.round, r.max_rounds, r.entry_price,
-           r.card_chat_id ?? null, r.card_msg_id ?? null);
+    `).run(r.telegram_id, r.pair, r.direction, r.timeframe, r.entry_time, r.expiry_time, r.round, r.max_rounds, r.entry_price, r.card_chat_id ?? null, r.card_msg_id ?? null);
     return Number(info.lastInsertRowid);
 }
-
-export function getExpiredActiveSignals(): SignalTrackRecord[] {
-    return db.prepare(
-        "SELECT * FROM signal_tracking WHERE status = 'active' AND expiry_time <= datetime('now')"
-    ).all() as SignalTrackRecord[];
+export function getExpiredActiveSignals() {
+    return db.prepare("SELECT * FROM signal_tracking WHERE status = 'active' AND expiry_time <= datetime('now')").all();
 }
-
-/** 'expired' = indeterminate outcome (no market data / unresolvable) — settlement
- *  law: never stored as 'lost', so stats can't be polluted by invented losses. */
-export function updateSignalTrackResult(id: number, status: 'won' | 'lost' | 'expired', result: string): void {
+export function updateSignalTrackResult(id, status, result) {
     db.prepare('UPDATE signal_tracking SET status = ?, result = ? WHERE id = ?')
         .run(status, result, id);
 }
-
 /** Repoint a tracking record at a freshly-sent card message (dedup fallback). */
-export function updateSignalTrackCard(id: number, chatId: number, msgId: number): void {
+export function updateSignalTrackCard(id, chatId, msgId) {
     db.prepare('UPDATE signal_tracking SET card_chat_id = ?, card_msg_id = ? WHERE id = ?')
         .run(chatId, msgId, id);
 }
-
-export function getActiveSignalTrack(telegramId: number): SignalTrackRecord | undefined {
-    return db.prepare(
-        "SELECT * FROM signal_tracking WHERE telegram_id = ? AND status = 'active' ORDER BY id DESC LIMIT 1"
-    ).get(telegramId) as SignalTrackRecord | undefined;
+export function getActiveSignalTrack(telegramId) {
+    return db.prepare("SELECT * FROM signal_tracking WHERE telegram_id = ? AND status = 'active' ORDER BY id DESC LIMIT 1").get(telegramId);
 }
-
-export function cancelActiveSignalTracks(telegramId: number): void {
+export function cancelActiveSignalTracks(telegramId) {
     db.prepare("UPDATE signal_tracking SET status = 'lost', result = 'cancelled' WHERE telegram_id = ? AND status = 'active'")
         .run(telegramId);
 }
-
-export function getAllActiveSignalTracks(): SignalTrackRecord[] {
-    return db.prepare(
-        "SELECT * FROM signal_tracking WHERE status = 'active' ORDER BY expiry_time ASC"
-    ).all() as SignalTrackRecord[];
+export function getAllActiveSignalTracks() {
+    return db.prepare("SELECT * FROM signal_tracking WHERE status = 'active' ORDER BY expiry_time ASC").all();
 }
-
-export function getAllUsers(): UserRecord[] {
-    return db.prepare('SELECT * FROM users ORDER BY last_used DESC').all() as UserRecord[];
+export function getAllUsers() {
+    return db.prepare('SELECT * FROM users ORDER BY last_used DESC').all();
 }
-
-export function getAllUserIds(): number[] {
+export function getAllUserIds() {
     const adminId = parseInt(process.env.ADMIN_USER_ID ?? '1615652240', 10);
-    return (db.prepare(
-        'SELECT telegram_id FROM users WHERE telegram_id != ?'
-    ).all(adminId) as { telegram_id: number }[]).map(r => r.telegram_id);
+    return db.prepare('SELECT telegram_id FROM users WHERE telegram_id != ?').all(adminId).map(r => r.telegram_id);
 }
-
 /** Users who have connected an IQ Option account (ssid set) */
-export function getActivatedUserIds(): number[] {
-    return (db.prepare(
-        "SELECT telegram_id FROM users WHERE ssid IS NOT NULL AND ssid != ''"
-    ).all() as { telegram_id: number }[]).map(r => r.telegram_id);
+export function getActivatedUserIds() {
+    return db.prepare("SELECT telegram_id FROM users WHERE ssid IS NOT NULL AND ssid != ''").all().map(r => r.telegram_id);
 }
-
 /** Users who have NOT connected an IQ Option account OR were rejected */
-export function getNonActivatedUserIds(): number[] {
-    return (db.prepare(
-        "SELECT telegram_id FROM users WHERE ssid IS NULL OR ssid = '' OR approval_status = 'rejected'"
-    ).all() as { telegram_id: number }[]).map(r => r.telegram_id);
+export function getNonActivatedUserIds() {
+    return db.prepare("SELECT telegram_id FROM users WHERE ssid IS NULL OR ssid = '' OR approval_status = 'rejected'").all().map(r => r.telegram_id);
 }
-
-export function getActiveTraderIds(hours = 5): number[] {
-    return (db.prepare(`
+export function getActiveTraderIds(hours = 5) {
+    return db.prepare(`
         SELECT DISTINCT telegram_id FROM trades
         WHERE created_at >= datetime('now', ? || ' hours')
           AND telegram_id IS NOT NULL
-    `).all(`-${hours}`) as { telegram_id: number }[]).map(r => r.telegram_id);
+    `).all(`-${hours}`).map(r => r.telegram_id);
 }
-
-export function getInactiveTraderIds(hours = 5): number[] {
+export function getInactiveTraderIds(hours = 5) {
     const activeIds = getActiveTraderIds(hours);
-    if (activeIds.length === 0) return getAllUserIds();
+    if (activeIds.length === 0)
+        return getAllUserIds();
     const placeholders = activeIds.map(() => '?').join(',');
-    return (db.prepare(
-        `SELECT telegram_id FROM users WHERE telegram_id NOT IN (${placeholders})`
-    ).all(...activeIds) as { telegram_id: number }[]).map(r => r.telegram_id);
+    return db.prepare(`SELECT telegram_id FROM users WHERE telegram_id NOT IN (${placeholders})`).all(...activeIds).map(r => r.telegram_id);
 }
-
-export function getRecentApprovals(hours = 24): UserRecord[] {
+export function getRecentApprovals(hours = 24) {
     return db.prepare(`
         SELECT * FROM users
         WHERE approval_status = 'approved'
           AND approved_at >= datetime('now', ? || ' hours')
         ORDER BY approved_at DESC
-    `).all(`-${hours}`) as UserRecord[];
+    `).all(`-${hours}`);
 }
-
-export function getPendingManualUsers(): UserRecord[] {
+export function getPendingManualUsers() {
     return db.prepare(`
         SELECT * FROM users WHERE approval_status IN ('pending') ORDER BY created_at DESC
-    `).all() as UserRecord[];
+    `).all();
 }
-
-export interface ApprovalStats {
-    approved: number;
-    pending: number;
-    rejected: number;
-    total: number;
-}
-
-export function getApprovalStats(): ApprovalStats {
+export function getApprovalStats() {
     const row = db.prepare(`
         SELECT
             SUM(CASE WHEN approval_status = 'approved'  THEN 1 ELSE 0 END) AS approved,
@@ -1443,92 +1071,72 @@ export function getApprovalStats(): ApprovalStats {
             SUM(CASE WHEN approval_status = 'rejected'  THEN 1 ELSE 0 END) AS rejected,
             COUNT(*)                                                         AS total
         FROM users
-    `).get() as ApprovalStats;
+    `).get();
     return {
         approved: row.approved ?? 0,
-        pending:  row.pending  ?? 0,
+        pending: row.pending ?? 0,
         rejected: row.rejected ?? 0,
-        total:    row.total    ?? 0,
+        total: row.total ?? 0,
     };
 }
-
-export function getUserMartingaleSettings(telegramId: number): { enabled: boolean; maxRounds: number } {
-    const row = db.prepare('SELECT mg_enabled, mg_max_rounds FROM users WHERE telegram_id = ?').get(telegramId) as { mg_enabled: number; mg_max_rounds: number } | undefined;
+export function getUserMartingaleSettings(telegramId) {
+    const row = db.prepare('SELECT mg_enabled, mg_max_rounds FROM users WHERE telegram_id = ?').get(telegramId);
     return { enabled: row?.mg_enabled !== 0, maxRounds: row?.mg_max_rounds ?? 6 };
 }
-
-export function setUserMartingaleSettings(telegramId: number, enabled: boolean, maxRounds: number): void {
+export function setUserMartingaleSettings(telegramId, enabled, maxRounds) {
     db.prepare('UPDATE users SET mg_enabled = ?, mg_max_rounds = ? WHERE telegram_id = ?').run(enabled ? 1 : 0, maxRounds, telegramId);
 }
-
-export function getUserSessionStats(telegramId: number): { trades: number; pnl: number } {
-    const row = db.prepare('SELECT session_trades, session_pnl FROM users WHERE telegram_id = ?').get(telegramId) as { session_trades: number; session_pnl: number } | undefined;
+export function getUserSessionStats(telegramId) {
+    const row = db.prepare('SELECT session_trades, session_pnl FROM users WHERE telegram_id = ?').get(telegramId);
     return { trades: row?.session_trades ?? 0, pnl: row?.session_pnl ?? 0 };
 }
-
-export function addUserSessionStats(telegramId: number, tradeDelta: number, pnlDelta: number): void {
+export function addUserSessionStats(telegramId, tradeDelta, pnlDelta) {
     db.prepare('UPDATE users SET session_trades = session_trades + ?, session_pnl = session_pnl + ? WHERE telegram_id = ?').run(tradeDelta, pnlDelta, telegramId);
 }
-
-export function getUserBalanceCache(telegramId: number): { line: string; ts: number } | undefined {
-    const row = db.prepare('SELECT balance_cache, balance_cache_ts FROM users WHERE telegram_id = ?').get(telegramId) as { balance_cache: string | null; balance_cache_ts: string | null } | undefined;
-    if (!row?.balance_cache || !row.balance_cache_ts) return undefined;
+export function getUserBalanceCache(telegramId) {
+    const row = db.prepare('SELECT balance_cache, balance_cache_ts FROM users WHERE telegram_id = ?').get(telegramId);
+    if (!row?.balance_cache || !row.balance_cache_ts)
+        return undefined;
     return { line: row.balance_cache, ts: new Date(row.balance_cache_ts).getTime() };
 }
-
-export function setUserBalanceCache(telegramId: number, line: string): void {
+export function setUserBalanceCache(telegramId, line) {
     db.prepare("UPDATE users SET balance_cache = ?, balance_cache_ts = datetime('now') WHERE telegram_id = ?").run(line, telegramId);
 }
-
-export function clearUserBalanceCache(telegramId: number): void {
+export function clearUserBalanceCache(telegramId) {
     db.prepare('UPDATE users SET balance_cache = NULL, balance_cache_ts = NULL WHERE telegram_id = ?').run(telegramId);
 }
-
-// ─── Tokens ───────────────────────────────────────────────────────────────────
-
-export interface TokenRecord {
-    id: number;
-    token: string;
-    tier: string;
-    used_by?: number | null;
-    used_at?: string | null;
-    expires_at: string;
-    created_at: string;
-}
-
-export function generateToken(tier: string): string {
+export function generateToken(tier) {
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-    const rand = (n: number) => Array.from({ length: n }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+    const rand = (n) => Array.from({ length: n }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
     const token = `10X-${rand(4)}-${rand(4)}`;
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
     db.prepare('INSERT INTO tokens (token, tier, expires_at) VALUES (?, ?, ?)').run(token, tier, expiresAt);
     return token;
 }
-
-export function validateToken(token: string): { valid: boolean; tier?: string; error?: string } {
-    const rec = db.prepare('SELECT * FROM tokens WHERE token = ?').get(token) as TokenRecord | undefined;
-    if (!rec) return { valid: false, error: 'Invalid token' };
-    if (rec.used_by) return { valid: false, error: 'Token already used' };
-    if (new Date(rec.expires_at) < new Date()) return { valid: false, error: 'Token expired' };
+export function validateToken(token) {
+    const rec = db.prepare('SELECT * FROM tokens WHERE token = ?').get(token);
+    if (!rec)
+        return { valid: false, error: 'Invalid token' };
+    if (rec.used_by)
+        return { valid: false, error: 'Token already used' };
+    if (new Date(rec.expires_at) < new Date())
+        return { valid: false, error: 'Token expired' };
     return { valid: true, tier: rec.tier };
 }
-
-export function useToken(token: string, telegramId: number): boolean {
+export function useToken(token, telegramId) {
     const result = db.prepare(`
         UPDATE tokens SET used_by = ?, used_at = datetime('now')
         WHERE token = ? AND used_by IS NULL AND expires_at > datetime('now')
     `).run(telegramId, token);
-    return (result as { changes: number }).changes > 0;
+    return result.changes > 0;
 }
-
-export function getTokens(): TokenRecord[] {
-    return db.prepare('SELECT * FROM tokens ORDER BY created_at DESC LIMIT 50').all() as TokenRecord[];
+export function getTokens() {
+    return db.prepare('SELECT * FROM tokens ORDER BY created_at DESC LIMIT 50').all();
 }
-
 // ─── Leaderboard ──────────────────────────────────────────────────────────────
-
-export function updateLeaderboardAuto(telegramId: number, pnl: number): void {
-    if (pnl <= 0) return;
+export function updateLeaderboardAuto(telegramId, pnl) {
+    if (pnl <= 0)
+        return;
     // All users can appear on the leaderboard now (directive §8.2) — no tier gate.
     const today = new Date().toISOString().split('T')[0];
     db.prepare(`
@@ -1539,20 +1147,16 @@ export function updateLeaderboardAuto(telegramId: number, pnl: number): void {
         WHERE manual_profit IS NULL
     `).run(telegramId, pnl, today);
 }
-
-export function addLeaderboardManual(telegramId: number, profit: number): boolean {
+export function addLeaderboardManual(telegramId, profit) {
     const today = new Date().toISOString().split('T')[0];
-    return db.transaction((): boolean => {
+    return db.transaction(() => {
         // ON CONFLICT updates an existing row instead of creating a new one,
         // so the cap only applies when this telegram_id is brand-new today.
-        const existing = db.prepare(
-            'SELECT 1 FROM leaderboard WHERE telegram_id = ? AND date = ?'
-        ).get(telegramId, today);
+        const existing = db.prepare('SELECT 1 FROM leaderboard WHERE telegram_id = ? AND date = ?').get(telegramId, today);
         if (!existing) {
-            const count = (db.prepare(
-                'SELECT COUNT(*) AS cnt FROM leaderboard WHERE date = ?'
-            ).get(today) as { cnt: number }).cnt;
-            if (count >= 10) return false;
+            const count = db.prepare('SELECT COUNT(*) AS cnt FROM leaderboard WHERE date = ?').get(today).cnt;
+            if (count >= 10)
+                return false;
         }
         db.prepare(`
             INSERT INTO leaderboard (telegram_id, auto_profit, manual_profit, date)
@@ -1562,8 +1166,7 @@ export function addLeaderboardManual(telegramId: number, profit: number): boolea
         return true;
     })();
 }
-
-export function getLeaderboard(date?: string): Array<{ telegram_id: number; profit: number }> {
+export function getLeaderboard(date) {
     const d = date ?? new Date().toISOString().split('T')[0];
     return db.prepare(`
         SELECT telegram_id,
@@ -1572,18 +1175,9 @@ export function getLeaderboard(date?: string): Array<{ telegram_id: number; prof
         WHERE date = ?
         ORDER BY profit DESC
         LIMIT 10
-    `).all(d) as Array<{ telegram_id: number; profit: number }>;
+    `).all(d);
 }
-
-export interface LeaderboardDetailedEntry {
-    id: number;
-    telegram_id: number;
-    auto_profit: number;
-    manual_profit: number | null;
-    date: string;
-}
-
-export function getLeaderboardDetailed(date?: string): LeaderboardDetailedEntry[] {
+export function getLeaderboardDetailed(date) {
     const d = date ?? new Date().toISOString().split('T')[0];
     return db.prepare(`
         SELECT id, telegram_id, auto_profit, manual_profit, date
@@ -1591,112 +1185,77 @@ export function getLeaderboardDetailed(date?: string): LeaderboardDetailedEntry[
         WHERE date = ?
         ORDER BY COALESCE(manual_profit, auto_profit) DESC
         LIMIT 10
-    `).all(d) as LeaderboardDetailedEntry[];
+    `).all(d);
 }
-
-export function updateLeaderboardManual(telegramId: number, profit: number): boolean {
+export function updateLeaderboardManual(telegramId, profit) {
     const today = new Date().toISOString().split('T')[0];
     const result = db.prepare(`
         UPDATE leaderboard SET manual_profit = ?
         WHERE telegram_id = ? AND date = ? AND manual_profit IS NOT NULL
     `).run(profit, telegramId, today);
-    return (result as { changes: number }).changes > 0;
+    return result.changes > 0;
 }
-
 // ─── Funnel ───────────────────────────────────────────────────────────────────
-
-export function insertFunnelEvent(eventType: string, metadata?: string): void {
+export function insertFunnelEvent(eventType, metadata) {
     db.prepare('INSERT INTO funnel_events (event_type, metadata) VALUES (?, ?)').run(eventType, metadata ?? null);
 }
-
-export function getFunnelStats(): { events: number; byType: Array<{ event_type: string; cnt: number }> } {
-    const events = (db.prepare(
-        `SELECT COUNT(*) AS cnt FROM funnel_events WHERE date(created_at) = date('now')`
-    ).get() as { cnt: number }).cnt;
-    const byType = db.prepare(
-        `SELECT event_type, COUNT(*) AS cnt FROM funnel_events WHERE date(created_at) = date('now') GROUP BY event_type`
-    ).all() as Array<{ event_type: string; cnt: number }>;
+export function getFunnelStats() {
+    const events = db.prepare(`SELECT COUNT(*) AS cnt FROM funnel_events WHERE date(created_at) = date('now')`).get().cnt;
+    const byType = db.prepare(`SELECT event_type, COUNT(*) AS cnt FROM funnel_events WHERE date(created_at) = date('now') GROUP BY event_type`).all();
     return { events, byType };
 }
-
-export function logPageVisit(source?: string): void {
+export function logPageVisit(source) {
     db.prepare('INSERT INTO funnel_events (event_type, source) VALUES (?, ?)').run('page_visit', source ?? null);
 }
-
-export interface FunnelPipeline {
-    page_views_today: number;
-    page_views_this_week: number;
-    channel_joins_today: number;
-    channel_joins_this_week: number;
-    connects_today: number;
-    connects_this_week: number;
-    funded_today: number;
-    funded_this_week: number;
-    recent_events: Array<{ event_type: string; created_at: string; source: string | null }>;
-}
-
-export function getFunnelPipeline(): FunnelPipeline {
+export function getFunnelPipeline() {
     const weekAgo = new Date(Date.now() - 7 * 86400_000).toISOString();
-
-    const count = (sql: string, param?: string): number => {
+    const count = (sql, param) => {
         const row = param !== undefined
-            ? (db.prepare(sql).get(param) as { cnt: number })
-            : (db.prepare(sql).get() as { cnt: number });
+            ? db.prepare(sql).get(param)
+            : db.prepare(sql).get();
         return row?.cnt ?? 0;
     };
-
-    const recent = db.prepare(
-        `SELECT event_type, created_at, source FROM funnel_events ORDER BY created_at DESC LIMIT 20`
-    ).all() as Array<{ event_type: string; created_at: string; source: string | null }>;
-
+    const recent = db.prepare(`SELECT event_type, created_at, source FROM funnel_events ORDER BY created_at DESC LIMIT 20`).all();
     return {
-        page_views_today:        count(`SELECT COUNT(*) AS cnt FROM funnel_events WHERE event_type = 'page_visit' AND date(created_at) = date('now')`),
-        page_views_this_week:    count(`SELECT COUNT(*) AS cnt FROM funnel_events WHERE event_type = 'page_visit' AND created_at >= ?`, weekAgo),
-        channel_joins_today:     count(`SELECT COUNT(*) AS cnt FROM funnel_events WHERE event_type = 'channel_join_approved' AND date(created_at) = date('now')`),
+        page_views_today: count(`SELECT COUNT(*) AS cnt FROM funnel_events WHERE event_type = 'page_visit' AND date(created_at) = date('now')`),
+        page_views_this_week: count(`SELECT COUNT(*) AS cnt FROM funnel_events WHERE event_type = 'page_visit' AND created_at >= ?`, weekAgo),
+        channel_joins_today: count(`SELECT COUNT(*) AS cnt FROM funnel_events WHERE event_type = 'channel_join_approved' AND date(created_at) = date('now')`),
         channel_joins_this_week: count(`SELECT COUNT(*) AS cnt FROM funnel_events WHERE event_type = 'channel_join_approved' AND created_at >= ?`, weekAgo),
-        connects_today:          count(`SELECT COUNT(*) AS cnt FROM funnel_events WHERE event_type = 'user_connected' AND date(created_at) = date('now')`),
-        connects_this_week:      count(`SELECT COUNT(*) AS cnt FROM funnel_events WHERE event_type = 'user_connected' AND created_at >= ?`, weekAgo),
-        funded_today:            count(`SELECT COUNT(*) AS cnt FROM funnel_events WHERE event_type = 'user_funded' AND date(created_at) = date('now')`),
-        funded_this_week:        count(`SELECT COUNT(*) AS cnt FROM funnel_events WHERE event_type = 'user_funded' AND created_at >= ?`, weekAgo),
+        connects_today: count(`SELECT COUNT(*) AS cnt FROM funnel_events WHERE event_type = 'user_connected' AND date(created_at) = date('now')`),
+        connects_this_week: count(`SELECT COUNT(*) AS cnt FROM funnel_events WHERE event_type = 'user_connected' AND created_at >= ?`, weekAgo),
+        funded_today: count(`SELECT COUNT(*) AS cnt FROM funnel_events WHERE event_type = 'user_funded' AND date(created_at) = date('now')`),
+        funded_this_week: count(`SELECT COUNT(*) AS cnt FROM funnel_events WHERE event_type = 'user_funded' AND created_at >= ?`, weekAgo),
         recent_events: recent,
     };
 }
-
 // ─── Config ───────────────────────────────────────────────────────────────────
-
-export function getConfig(key: string): string | null {
-    const row = db.prepare('SELECT value FROM config WHERE key = ?').get(key) as { value: string } | undefined;
+export function getConfig(key) {
+    const row = db.prepare('SELECT value FROM config WHERE key = ?').get(key);
     return row?.value ?? null;
 }
-
-export function setConfig(key: string, value: string): void {
+export function setConfig(key, value) {
     db.prepare(`
         INSERT INTO config (key, value, updated_at) VALUES (?, ?, datetime('now'))
         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')
     `).run(key, value);
 }
-
-export function getTestUserId(): number | null {
-    const row = db.prepare("SELECT value FROM config WHERE key = 'test_user'").get() as { value: string } | undefined;
+export function getTestUserId() {
+    const row = db.prepare("SELECT value FROM config WHERE key = 'test_user'").get();
     return row ? Number(row.value) || null : null;
 }
-
-export function setTestUser(id: number | null): void {
+export function setTestUser(id) {
     if (id) {
         db.prepare("REPLACE INTO config (key, value) VALUES ('test_user', ?)").run(String(id));
-    } else {
+    }
+    else {
         db.prepare("DELETE FROM config WHERE key = 'test_user'").run();
     }
 }
-
-export function getLastBroadcastMsgId(telegramId: number): number | null {
-    const row = db.prepare(
-        'SELECT message_id FROM broadcast_user_messages WHERE telegram_id = ?'
-    ).get(telegramId) as { message_id: number } | undefined;
+export function getLastBroadcastMsgId(telegramId) {
+    const row = db.prepare('SELECT message_id FROM broadcast_user_messages WHERE telegram_id = ?').get(telegramId);
     return row?.message_id ?? null;
 }
-
-export function saveLastBroadcastMsgId(telegramId: number, messageId: number): void {
+export function saveLastBroadcastMsgId(telegramId, messageId) {
     db.prepare(`
         INSERT INTO broadcast_user_messages (telegram_id, message_id, sent_at)
         VALUES (?, ?, datetime('now'))
@@ -1705,73 +1264,42 @@ export function saveLastBroadcastMsgId(telegramId: number, messageId: number): v
             sent_at = excluded.sent_at
     `).run(telegramId, messageId);
 }
-
-export function getNextBroadcastAt(): string | null {
-    const row = db.prepare('SELECT next_send_at FROM broadcast_schedule WHERE id = 1').get() as { next_send_at: string } | undefined;
+export function getNextBroadcastAt() {
+    const row = db.prepare('SELECT next_send_at FROM broadcast_schedule WHERE id = 1').get();
     return row?.next_send_at ?? null;
 }
-
-export function saveNextBroadcastAt(isoStr: string): void {
+export function saveNextBroadcastAt(isoStr) {
     db.prepare('INSERT OR REPLACE INTO broadcast_schedule (id, next_send_at) VALUES (1, ?)').run(isoStr);
 }
-
-export function getMessageIndex(): number {
-    const row = db.prepare("SELECT value FROM broadcast_state WHERE key = 'message_index'").get() as { value: string } | undefined;
+export function getMessageIndex() {
+    const row = db.prepare("SELECT value FROM broadcast_state WHERE key = 'message_index'").get();
     return row ? parseInt(row.value, 10) : 0;
 }
-
-export function saveMessageIndex(idx: number): void {
+export function saveMessageIndex(idx) {
     db.prepare("INSERT OR REPLACE INTO broadcast_state (key, value) VALUES ('message_index', ?)").run(String(idx));
 }
-
-export interface PersistedScheduledBroadcast {
-    id: number;
-    message: string;
-    targetIds: number[];
-    button?: unknown;
-    media?: unknown;
-    deleteAfterMs: number;
-    scheduledAt: string;
-    createdAt: string;
-    sent: boolean;
-}
-
-export function insertScheduledBroadcast(input: Omit<PersistedScheduledBroadcast, 'id' | 'sent'>): number {
+export function insertScheduledBroadcast(input) {
     const res = db.prepare(`
         INSERT INTO scheduled_broadcasts (message, target_ids, button, media, delete_after_ms, scheduled_at, created_at, sent)
         VALUES (?, ?, ?, ?, ?, ?, ?, 0)
-    `).run(
-        input.message,
-        JSON.stringify(input.targetIds),
-        input.button ? JSON.stringify(input.button) : null,
-        input.media ? JSON.stringify(input.media) : null,
-        input.deleteAfterMs,
-        input.scheduledAt,
-        input.createdAt,
-    );
+    `).run(input.message, JSON.stringify(input.targetIds), input.button ? JSON.stringify(input.button) : null, input.media ? JSON.stringify(input.media) : null, input.deleteAfterMs, input.scheduledAt, input.createdAt);
     return Number(res.lastInsertRowid);
 }
-
-export function markScheduledBroadcastSent(id: number): void {
+export function markScheduledBroadcastSent(id) {
     db.prepare('UPDATE scheduled_broadcasts SET sent = 1 WHERE id = ?').run(id);
 }
-
-export function deleteScheduledBroadcast(id: number): void {
+export function deleteScheduledBroadcast(id) {
     db.prepare('DELETE FROM scheduled_broadcasts WHERE id = ?').run(id);
 }
-
-export function getPendingScheduledBroadcasts(): PersistedScheduledBroadcast[] {
+export function getPendingScheduledBroadcasts() {
     const rows = db.prepare(`
         SELECT id, message, target_ids, button, media, delete_after_ms, scheduled_at, created_at, sent
         FROM scheduled_broadcasts WHERE sent = 0
-    `).all() as Array<{
-        id: number; message: string; target_ids: string; button: string | null; media: string | null;
-        delete_after_ms: number; scheduled_at: string; created_at: string; sent: number;
-    }>;
+    `).all();
     return rows.map(r => ({
         id: r.id,
         message: r.message,
-        targetIds: JSON.parse(r.target_ids) as number[],
+        targetIds: JSON.parse(r.target_ids),
         button: r.button ? JSON.parse(r.button) : undefined,
         media: r.media ? JSON.parse(r.media) : undefined,
         deleteAfterMs: r.delete_after_ms,
@@ -1780,79 +1308,34 @@ export function getPendingScheduledBroadcasts(): PersistedScheduledBroadcast[] {
         sent: r.sent === 1,
     }));
 }
-
-// ─── Pending broadcast drafts (survive restarts) ──────────────────────────────
-
-interface BroadcastButton {
-    text: string;
-    type: 'url' | 'callback';
-    value: string;
-}
-
-interface PendingBroadcastRow {
-    chat_id: number; message: string; target_ids: string; button: string | null;
-    media: string | null; delete_after_ms: number; created_at: number;
-}
-
-export function savePendingBroadcast(chatId: number, data: {
-    message: string; targetIds: number[];
-    button?: { text: string; type: string; value: string };
-    media?: Array<{ type: string; fileId: string }>;
-    deleteAfterMs?: number; createdAt?: number;
-}): void {
+export function savePendingBroadcast(chatId, data) {
     db.prepare(`
         INSERT OR REPLACE INTO pending_broadcasts (chat_id, message, target_ids, button, media, delete_after_ms, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(
-        chatId,
-        data.message,
-        JSON.stringify(data.targetIds),
-        data.button ? JSON.stringify(data.button) : null,
-        data.media ? JSON.stringify(data.media) : null,
-        data.deleteAfterMs ?? 0,
-        data.createdAt ?? Date.now(),
-    );
+    `).run(chatId, data.message, JSON.stringify(data.targetIds), data.button ? JSON.stringify(data.button) : null, data.media ? JSON.stringify(data.media) : null, data.deleteAfterMs ?? 0, data.createdAt ?? Date.now());
 }
-
-export function getPendingBroadcast(chatId: number): PendingBroadcastRow | undefined {
-    return db.prepare('SELECT * FROM pending_broadcasts WHERE chat_id = ?').get(chatId) as PendingBroadcastRow | undefined;
+export function getPendingBroadcast(chatId) {
+    return db.prepare('SELECT * FROM pending_broadcasts WHERE chat_id = ?').get(chatId);
 }
-
-export function deletePendingBroadcast(chatId: number): void {
+export function deletePendingBroadcast(chatId) {
     db.prepare('DELETE FROM pending_broadcasts WHERE chat_id = ?').run(chatId);
 }
-
-export function loadAllPendingBroadcasts(): Map<number, {
-    message: string; targetIds: number[];
-    button?: BroadcastButton;
-    media?: Array<{ type: 'photo' | 'video' | 'video_note' | 'voice'; fileId: string }>;
-    deleteAfterMs?: number; createdAt?: number;
-}> {
-    const map = new Map<number, any>();
-    const rows = db.prepare('SELECT * FROM pending_broadcasts').all() as PendingBroadcastRow[];
+export function loadAllPendingBroadcasts() {
+    const map = new Map();
+    const rows = db.prepare('SELECT * FROM pending_broadcasts').all();
     for (const r of rows) {
         map.set(r.chat_id, {
             message: r.message,
-            targetIds: JSON.parse(r.target_ids) as number[],
-            button: r.button ? (JSON.parse(r.button) as BroadcastButton) : undefined,
-            media: r.media ? (JSON.parse(r.media) as Array<{ type: 'photo' | 'video' | 'video_note' | 'voice'; fileId: string }>) : undefined,
+            targetIds: JSON.parse(r.target_ids),
+            button: r.button ? JSON.parse(r.button) : undefined,
+            media: r.media ? JSON.parse(r.media) : undefined,
             deleteAfterMs: r.delete_after_ms || undefined,
             createdAt: r.created_at || undefined,
         });
     }
     return map;
 }
-
-
-// ─── Pair win rates ───────────────────────────────────────────────────────────
-
-export interface PairWinRate {
-    pair: string;
-    winRate: number;
-    totalCircles: number;
-}
-
-export function calculatePairWinRates(): PairWinRate[] {
+export function calculatePairWinRates() {
     return db.prepare(`
         WITH circle_results AS (
             SELECT
@@ -1871,50 +1354,28 @@ export function calculatePairWinRates(): PairWinRate[] {
         WHERE pair IS NOT NULL
         GROUP BY pair
         ORDER BY winRate DESC
-    `).all() as PairWinRate[];
+    `).all();
 }
-
-export function selectTopPicks(rates: PairWinRate[]): PairWinRate[] {
-    const picks: PairWinRate[] = [];
-
+export function selectTopPicks(rates) {
+    const picks = [];
     const top90 = rates.find(r => r.winRate >= 90);
-    if (top90) picks.push(top90);
-
+    if (top90)
+        picks.push(top90);
     const top80 = rates.filter(r => !picks.includes(r) && r.winRate >= 80).slice(0, 2);
     picks.push(...top80);
-
     const top70 = rates.find(r => !picks.includes(r) && r.winRate >= 70);
-    if (top70) picks.push(top70);
-
+    if (top70)
+        picks.push(top70);
     const below70 = rates.find(r => !picks.includes(r) && r.winRate < 70);
-    if (below70) picks.push(below70);
-
+    if (below70)
+        picks.push(below70);
     const remaining = rates.filter(r => !picks.includes(r));
     while (picks.length < 5 && remaining.length > 0) {
-        picks.push(remaining.shift()!);
+        picks.push(remaining.shift());
     }
-
     return picks;
 }
-
-// ─── Audit report ─────────────────────────────────────────────────────────────
-
-export interface AuditReport {
-    newUsers: number;
-    autoApproved: number;
-    manualPending: number;
-    totalTrades: number;
-    wins: number;
-    losses: number;
-    ties: number;
-    totalPnl: number;
-    martingaleRuns: number;
-    martingaleRecovered: number;
-    topPerformerId?: number;
-    topPerformerProfit?: number;
-}
-
-export function getAuditReport(): AuditReport {
+export function getAuditReport() {
     const tradeRow = db.prepare(`
         SELECT
             COUNT(*)                                          AS total,
@@ -1924,8 +1385,7 @@ export function getAuditReport(): AuditReport {
             COALESCE(SUM(pnl), 0)                            AS totalPnl
         FROM trades
         WHERE created_at >= datetime('now', '-1 day')
-    `).get() as { total: number; wins: number; losses: number; ties: number; totalPnl: number };
-
+    `).get();
     const userRow = db.prepare(`
         SELECT
             COUNT(*) AS new_users,
@@ -1934,8 +1394,7 @@ export function getAuditReport(): AuditReport {
             0 AS manual_pending
         FROM users
         WHERE created_at >= datetime('now', '-1 day')
-    `).get() as { new_users: number; auto_approved: number; manual_pending: number };
-
+    `).get();
     const mgRow = db.prepare(`
         SELECT
             COUNT(DISTINCT martingale_run)                                         AS runs,
@@ -1943,8 +1402,7 @@ export function getAuditReport(): AuditReport {
         FROM trades
         WHERE created_at >= datetime('now', '-1 day')
           AND martingale_run IS NOT NULL AND martingale_run != ''
-    `).get() as { runs: number; recovered: number };
-
+    `).get();
     const topRow = db.prepare(`
         SELECT telegram_id, COALESCE(SUM(pnl), 0) AS total_pnl
         FROM trades
@@ -1952,8 +1410,7 @@ export function getAuditReport(): AuditReport {
         GROUP BY telegram_id
         ORDER BY total_pnl DESC
         LIMIT 1
-    `).get() as { telegram_id: number; total_pnl: number } | undefined;
-
+    `).get();
     return {
         newUsers: userRow?.new_users ?? 0,
         autoApproved: userRow?.auto_approved ?? 0,
@@ -1969,9 +1426,7 @@ export function getAuditReport(): AuditReport {
         topPerformerProfit: topRow?.total_pnl,
     };
 }
-
 // ─── Channel message tracking ────────────────────────────────────────────────
-
 db.exec(`
   CREATE TABLE IF NOT EXISTS messages (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1981,30 +1436,26 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_messages_tid ON messages(telegram_id, created_at);
 `);
-
-export function insertMessage(telegramId: number, direction: 'incoming' | 'outgoing'): void {
+export function insertMessage(telegramId, direction) {
     db.prepare('INSERT INTO messages (telegram_id, direction) VALUES (?, ?)').run(telegramId, direction);
 }
-
-export function getRecentlyApprovedUsers(minutes: number): UserRecord[] {
+export function getRecentlyApprovedUsers(minutes) {
     return db.prepare(`
         SELECT * FROM users
         WHERE approval_status = 'approved'
           AND approved_at >= datetime('now', ? || ' minutes')
         ORDER BY approved_at DESC
-    `).all(`-${minutes}`) as UserRecord[];
+    `).all(`-${minutes}`);
 }
-
-export function userHasActivity(telegramId: number): boolean {
+export function userHasActivity(telegramId) {
     const user = getUser(telegramId);
-    if (!user || !user.last_used) return false;
+    if (!user || !user.last_used)
+        return false;
     const lastUsed = new Date(user.last_used).getTime();
     const approvedAt = user.approved_at ? new Date(user.approved_at).getTime() : 0;
     return lastUsed > approvedAt;
 }
-
 // ─── Session persistence ──────────────────────────────────────────────────────
-
 db.exec(`
   CREATE TABLE IF NOT EXISTS sessions (
     key        TEXT PRIMARY KEY,
@@ -2012,38 +1463,33 @@ db.exec(`
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
   )
 `);
-
-const stmtSetSession = db.prepare(
-    `INSERT INTO sessions (key, value, updated_at)
+const stmtSetSession = db.prepare(`INSERT INTO sessions (key, value, updated_at)
      VALUES (?, ?, datetime('now'))
-     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
-);
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`);
 const stmtGetSession = db.prepare(`SELECT value FROM sessions WHERE key = ?`);
 const stmtDelSession = db.prepare(`DELETE FROM sessions WHERE key = ?`);
-const stmtCleanSessions = db.prepare(
-    `DELETE FROM sessions WHERE updated_at < datetime('now', '-7 days')`
-);
-
-export function setSession(key: string, value: unknown): void {
+const stmtCleanSessions = db.prepare(`DELETE FROM sessions WHERE updated_at < datetime('now', '-7 days')`);
+export function setSession(key, value) {
     stmtSetSession.run(key, JSON.stringify(value));
 }
-
-export function getSession<T>(key: string): T | undefined {
-    const row = stmtGetSession.get(key) as { value: string } | undefined;
-    if (!row) return undefined;
-    try { return JSON.parse(row.value) as T; } catch { return undefined; }
+export function getSession(key) {
+    const row = stmtGetSession.get(key);
+    if (!row)
+        return undefined;
+    try {
+        return JSON.parse(row.value);
+    }
+    catch {
+        return undefined;
+    }
 }
-
-export function deleteSession(key: string): void {
+export function deleteSession(key) {
     stmtDelSession.run(key);
 }
-
-export function cleanStaleSessions(): void {
+export function cleanStaleSessions() {
     stmtCleanSessions.run();
 }
-
 // ─── Giveaway ─────────────────────────────────────────────────────────────────
-
 db.exec(`
   CREATE TABLE IF NOT EXISTS giveaway_log (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2054,38 +1500,33 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_giveaway_log_generated_id ON giveaway_log(generated_id);
 `);
-
-export function saveGeneratedGiveawayId(giveawayRun: string, generatedId: string, pattern: string): void {
+export function saveGeneratedGiveawayId(giveawayRun, generatedId, pattern) {
     db.prepare(`INSERT OR IGNORE INTO giveaway_log (giveaway_run, generated_id, pattern) VALUES (?, ?, ?)`).run(giveawayRun, generatedId, pattern);
 }
-
-export function isGeneratedIdUsed(generatedId: string): boolean {
+export function isGeneratedIdUsed(generatedId) {
     const inLog = db.prepare(`SELECT 1 FROM giveaway_log WHERE generated_id = ?`).get(generatedId);
-    if (inLog) return true;
+    if (inLog)
+        return true;
     const inUsers = db.prepare(`SELECT 1 FROM users WHERE CAST(iq_user_id AS TEXT) = ?`).get(generatedId);
     return !!inUsers;
 }
-
-export function getTradersIqUserIds(hours: number): number[] {
+export function getTradersIqUserIds(hours) {
     const rows = db.prepare(`
         SELECT DISTINCT u.iq_user_id
         FROM trades t
         JOIN users u ON u.telegram_id = t.telegram_id
         WHERE t.created_at >= datetime('now', ? || ' hours')
           AND u.iq_user_id IS NOT NULL
-    `).all(`-${hours}`) as { iq_user_id: number }[];
+    `).all(`-${hours}`);
     return rows.map(r => r.iq_user_id);
 }
-
-export function getGiveawayTargetIds(target: 'all' | '24h'): number[] {
+export function getGiveawayTargetIds(target) {
     const rows = target === '24h'
-        ? db.prepare(`SELECT DISTINCT telegram_id FROM trades WHERE created_at >= datetime('now', '-24 hours') AND telegram_id IS NOT NULL`).all() as { telegram_id: number }[]
-        : db.prepare(`SELECT telegram_id FROM users WHERE approval_status = 'approved'`).all() as { telegram_id: number }[];
+        ? db.prepare(`SELECT DISTINCT telegram_id FROM trades WHERE created_at >= datetime('now', '-24 hours') AND telegram_id IS NOT NULL`).all()
+        : db.prepare(`SELECT telegram_id FROM users WHERE approval_status = 'approved'`).all();
     return rows.map(r => r.telegram_id);
 }
-
 // ─── Fabricated Traders (Dynamic Leaderboard) ─────────────────────────────────
-
 db.exec(`
   CREATE TABLE IF NOT EXISTS fabricated_traders (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2098,16 +1539,14 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_fab_next_update ON fabricated_traders(next_update_at);
 `);
-
 // Migrations for fabricated_traders winner tracking columns
 {
-    const fabCols = (db.prepare('PRAGMA table_info(fabricated_traders)').all() as { name: string }[]).map(c => c.name);
+    const fabCols = db.prepare('PRAGMA table_info(fabricated_traders)').all().map(c => c.name);
     if (!fabCols.includes('winner_use_count'))
         db.exec('ALTER TABLE fabricated_traders ADD COLUMN winner_use_count INTEGER NOT NULL DEFAULT 0');
     if (!fabCols.includes('last_used_giveaway_id'))
         db.exec('ALTER TABLE fabricated_traders ADD COLUMN last_used_giveaway_id INTEGER');
 }
-
 db.exec(`
   CREATE TABLE IF NOT EXISTS marathon_fabricated (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2121,43 +1560,28 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_mf_giveaway_id ON marathon_fabricated(giveaway_id);
   CREATE INDEX IF NOT EXISTS idx_mf_next_update  ON marathon_fabricated(next_update_at);
 `);
-
-export interface FabricatedTrader {
-    id: number;
-    fabricated_id: string;
-    display_name: string;
-    current_pnl: number;
-    next_update_at: string | null;
-    update_interval: number;
-    created_at: string;
-    winner_use_count: number;
-    last_used_giveaway_id: number | null;
+export function countFabricatedTraders() {
+    return db.prepare(`SELECT COUNT(*) AS cnt FROM fabricated_traders`).get().cnt;
 }
-
-export function countFabricatedTraders(): number {
-    return (db.prepare(`SELECT COUNT(*) AS cnt FROM fabricated_traders`).get() as { cnt: number }).cnt;
-}
-
-export function seedFabricatedTraders(): void {
+export function seedFabricatedTraders() {
     const seedIds = getTradersIqUserIds(48);
     const prefixes = seedIds.length > 0
         ? seedIds.map(id => String(id).slice(0, 3).padStart(3, '0'))
         : ['182', '511', '447', '329', '613'];
-
-    const tryCandidate = (candidate: string): boolean => {
-        const inUsers    = db.prepare(`SELECT 1 FROM users WHERE CAST(iq_user_id AS TEXT) = ?`).get(candidate);
+    const tryCandidate = (candidate) => {
+        const inUsers = db.prepare(`SELECT 1 FROM users WHERE CAST(iq_user_id AS TEXT) = ?`).get(candidate);
         const inGiveaway = db.prepare(`SELECT 1 FROM giveaway_log WHERE generated_id = ?`).get(candidate);
-        const inFab      = db.prepare(`SELECT 1 FROM fabricated_traders WHERE fabricated_id = ?`).get(candidate);
+        const inFab = db.prepare(`SELECT 1 FROM fabricated_traders WHERE fabricated_id = ?`).get(candidate);
         return !inUsers && !inGiveaway && !inFab;
     };
-
     for (let i = 0; i < 10; i++) {
-        let fabricatedId: string | null = null;
+        let fabricatedId = null;
         for (let attempt = 0; attempt < 30 && !fabricatedId; attempt++) {
             const prefix = prefixes[Math.floor(Math.random() * prefixes.length)];
             const suffix = String(Math.floor(Math.random() * 1_000_000)).padStart(6, '0');
             const candidate = prefix + suffix;
-            if (tryCandidate(candidate)) fabricatedId = candidate;
+            if (tryCandidate(candidate))
+                fabricatedId = candidate;
         }
         // Random sampling can collide repeatedly once the namespace fills.
         // Fall back to a deterministic sequential scan so seeding never
@@ -2166,16 +1590,16 @@ export function seedFabricatedTraders(): void {
             const prefix = prefixes[i % prefixes.length];
             for (let seq = 0; seq < 1_000_000 && !fabricatedId; seq++) {
                 const candidate = prefix + String(seq).padStart(6, '0');
-                if (tryCandidate(candidate)) fabricatedId = candidate;
+                if (tryCandidate(candidate))
+                    fabricatedId = candidate;
             }
         }
-        if (!fabricatedId) continue;
-
-        const displayName   = `${fabricatedId.slice(0, 3)}***${fabricatedId.slice(-3)}`;
-        const startPnl      = 10 + Math.floor(Math.random() * 4991);
-        const intervalSec   = 3600 + Math.floor(Math.random() * 32401);
-        const nextUpdateAt  = new Date(Date.now() + intervalSec * 1000).toISOString().replace('T', ' ').split('.')[0];
-
+        if (!fabricatedId)
+            continue;
+        const displayName = `${fabricatedId.slice(0, 3)}***${fabricatedId.slice(-3)}`;
+        const startPnl = 10 + Math.floor(Math.random() * 4991);
+        const intervalSec = 3600 + Math.floor(Math.random() * 32401);
+        const nextUpdateAt = new Date(Date.now() + intervalSec * 1000).toISOString().replace('T', ' ').split('.')[0];
         db.prepare(`
             INSERT OR IGNORE INTO fabricated_traders
                 (fabricated_id, display_name, current_pnl, next_update_at, update_interval)
@@ -2183,67 +1607,46 @@ export function seedFabricatedTraders(): void {
         `).run(fabricatedId, displayName, startPnl, nextUpdateAt, intervalSec);
     }
 }
-
-export function getFabricatedTradersDueForUpdate(): FabricatedTrader[] {
+export function getFabricatedTradersDueForUpdate() {
     return db.prepare(`
         SELECT * FROM fabricated_traders
         WHERE next_update_at IS NULL OR next_update_at <= datetime('now')
-    `).all() as FabricatedTrader[];
+    `).all();
 }
-
-export function updateFabricatedPnl(id: number, newPnl: number, nextUpdateAt: string): void {
+export function updateFabricatedPnl(id, newPnl, nextUpdateAt) {
     db.prepare(`
         UPDATE fabricated_traders SET current_pnl = ?, next_update_at = ? WHERE id = ?
     `).run(newPnl, nextUpdateAt, id);
 }
-
-export function getAllFabricatedTraders(): FabricatedTrader[] {
+export function getAllFabricatedTraders() {
     return db.prepare(`
         SELECT * FROM fabricated_traders ORDER BY current_pnl DESC
-    `).all() as FabricatedTrader[];
+    `).all();
 }
-
-export function resetFabricatedPnl(): void {
+export function resetFabricatedPnl() {
     db.prepare(`UPDATE fabricated_traders SET current_pnl = 0, next_update_at = NULL`).run();
 }
-
-export function getLastCompletedGiveawayId(): number | null {
-    const row = db.prepare(
-        `SELECT id FROM giveaway_events WHERE status = 'completed' ORDER BY id DESC LIMIT 1`
-    ).get() as { id: number } | undefined;
+export function getLastCompletedGiveawayId() {
+    const row = db.prepare(`SELECT id FROM giveaway_events WHERE status = 'completed' ORDER BY id DESC LIMIT 1`).get();
     return row?.id ?? null;
 }
-
-export function getEligibleFabWinnerIds(currentGiveawayId: number): string[] {
+export function getEligibleFabWinnerIds(currentGiveawayId) {
     const lastId = currentGiveawayId;
-    return (db.prepare(`
+    return db.prepare(`
         SELECT fabricated_id FROM fabricated_traders
         WHERE winner_use_count < 2
           AND (last_used_giveaway_id IS NULL OR last_used_giveaway_id != ?)
         ORDER BY RANDOM()
-    `).all(lastId ?? -1) as { fabricated_id: string }[]).map(r => r.fabricated_id);
+    `).all(lastId ?? -1).map(r => r.fabricated_id);
 }
-
-export function markFabWinnerUsed(fabricatedId: string, giveawayId: number): void {
+export function markFabWinnerUsed(fabricatedId, giveawayId) {
     db.prepare(`
         UPDATE fabricated_traders
         SET winner_use_count = winner_use_count + 1, last_used_giveaway_id = ?
         WHERE fabricated_id = ?
     `).run(giveawayId, fabricatedId);
 }
-
-// ─── Marathon fabricated participants ─────────────────────────────────────────
-
-export interface MarathonFabricant {
-    id: number;
-    giveaway_id: number;
-    display_name: string;
-    trade_count: number;
-    next_update_at: string | null;
-    update_interval: number;
-}
-
-export function seedMarathonFabricants(giveawayId: number): void {
+export function seedMarathonFabricants(giveawayId) {
     const count = 5 + Math.floor(Math.random() * 4); // 5-8
     for (let i = 0; i < count; i++) {
         const num = String(100_000_000 + Math.floor(Math.random() * 900_000_000));
@@ -2257,8 +1660,7 @@ export function seedMarathonFabricants(giveawayId: number): void {
         `).run(giveawayId, displayName, startTrades, nextUpdateAt, intervalSec);
     }
 }
-
-export function getMarathonLeaderboardRows(giveawayId: number): Array<{ telegram_id: number | null; display_name: string | null; trade_count: number }> {
+export function getMarathonLeaderboardRows(giveawayId) {
     return db.prepare(`
         SELECT telegram_id, NULL AS display_name, trade_count
         FROM giveaway_participants WHERE giveaway_id = ? AND eligible = 1
@@ -2266,27 +1668,23 @@ export function getMarathonLeaderboardRows(giveawayId: number): Array<{ telegram
         SELECT NULL AS telegram_id, display_name, trade_count
         FROM marathon_fabricated WHERE giveaway_id = ?
         ORDER BY trade_count DESC
-    `).all(giveawayId, giveawayId) as Array<{ telegram_id: number | null; display_name: string | null; trade_count: number }>;
+    `).all(giveawayId, giveawayId);
 }
-
-export function getMarathonFabricantsDueForUpdate(): MarathonFabricant[] {
+export function getMarathonFabricantsDueForUpdate() {
     return db.prepare(`
         SELECT * FROM marathon_fabricated
         WHERE next_update_at IS NULL OR next_update_at <= datetime('now')
-    `).all() as MarathonFabricant[];
+    `).all();
 }
-
-export function updateMarathonFabricantTrades(id: number, tradeCount: number, nextUpdateAt: string): void {
+export function updateMarathonFabricantTrades(id, tradeCount, nextUpdateAt) {
     db.prepare(`
         UPDATE marathon_fabricated SET trade_count = ?, next_update_at = ? WHERE id = ?
     `).run(tradeCount, nextUpdateAt, id);
 }
-
-export function deleteMarathonFabricants(giveawayId: number): void {
+export function deleteMarathonFabricants(giveawayId) {
     db.prepare(`DELETE FROM marathon_fabricated WHERE giveaway_id = ?`).run(giveawayId);
 }
-
-export function getRealTraderLeaderboard(): Array<{ telegram_id: number; username: string | null; total_pnl: number }> {
+export function getRealTraderLeaderboard() {
     const today = new Date().toISOString().split('T')[0];
     return db.prepare(`
         SELECT l.telegram_id,
@@ -2297,46 +1695,9 @@ export function getRealTraderLeaderboard(): Array<{ telegram_id: number; usernam
         WHERE l.date = ?
           AND l.telegram_id NOT IN (1615652240, 6622587977, 8986669286, 6683209485, 8471649166)
         ORDER BY total_pnl DESC
-    `).all(today) as Array<{ telegram_id: number; username: string | null; total_pnl: number }>;
+    `).all(today);
 }
-
-// ─── Giveaway V2 CRUD ─────────────────────────────────────────────────────────
-
-export interface GiveawayEvent {
-    id: number;
-    event_type: string;
-    title: string;
-    description: string | null;
-    criteria_type: string | null;
-    criteria_value: string | null;
-    prize_pool: number | null;
-    prize_per_winner: number | null;
-    max_winners: number;
-    status: string;
-    starts_at: string | null;
-    ends_at: string | null;
-    winner_count: number;
-    created_at: string;
-    fabricated_claims: number;
-    urgency_10_sent: number;
-    urgency_5_sent: number;
-    urgency_1_sent: number;
-    fab_next_tick_at: string | null;
-}
-
-export interface GiveawayEventInput {
-    event_type: 'giveaway' | 'promo_code' | 'marathon';
-    title: string;
-    description?: string;
-    criteria_type?: string;
-    criteria_value?: string;
-    prize_pool?: number;
-    max_winners: number;
-    starts_at?: string;
-    ends_at?: string;
-}
-
-export function dbCreateGiveawayEvent(input: GiveawayEventInput): number {
+export function dbCreateGiveawayEvent(input) {
     const prizePerWinner = (input.prize_pool != null && input.max_winners > 0)
         ? input.prize_pool / input.max_winners : null;
     const result = db.prepare(`
@@ -2344,37 +1705,22 @@ export function dbCreateGiveawayEvent(input: GiveawayEventInput): number {
             (event_type, title, description, criteria_type, criteria_value,
              prize_pool, prize_per_winner, max_winners, starts_at, ends_at, status)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
-    `).run(
-        input.event_type,
-        input.title,
-        input.description ?? null,
-        input.criteria_type ?? null,
-        input.criteria_value ?? null,
-        input.prize_pool ?? null,
-        prizePerWinner,
-        input.max_winners,
-        input.starts_at ?? null,
-        input.ends_at ?? null,
-    );
-    return (result as { lastInsertRowid: number }).lastInsertRowid;
+    `).run(input.event_type, input.title, input.description ?? null, input.criteria_type ?? null, input.criteria_value ?? null, input.prize_pool ?? null, prizePerWinner, input.max_winners, input.starts_at ?? null, input.ends_at ?? null);
+    return result.lastInsertRowid;
 }
-
-export function getGiveawayEvent(id: number): GiveawayEvent | undefined {
-    return db.prepare('SELECT * FROM giveaway_events WHERE id = ?').get(id) as GiveawayEvent | undefined;
+export function getGiveawayEvent(id) {
+    return db.prepare('SELECT * FROM giveaway_events WHERE id = ?').get(id);
 }
-
-export function getGiveawayEvents(status?: string): GiveawayEvent[] {
+export function getGiveawayEvents(status) {
     if (status) {
-        return db.prepare('SELECT * FROM giveaway_events WHERE status = ? ORDER BY created_at DESC').all(status) as GiveawayEvent[];
+        return db.prepare('SELECT * FROM giveaway_events WHERE status = ? ORDER BY created_at DESC').all(status);
     }
-    return db.prepare('SELECT * FROM giveaway_events ORDER BY created_at DESC LIMIT 50').all() as GiveawayEvent[];
+    return db.prepare('SELECT * FROM giveaway_events ORDER BY created_at DESC LIMIT 50').all();
 }
-
-export function getActiveGiveaways(): GiveawayEvent[] {
-    return db.prepare("SELECT * FROM giveaway_events WHERE status = 'active' ORDER BY created_at DESC").all() as GiveawayEvent[];
+export function getActiveGiveaways() {
+    return db.prepare("SELECT * FROM giveaway_events WHERE status = 'active' ORDER BY created_at DESC").all();
 }
-
-export function getPendingGiveawaysDue(): GiveawayEvent[] {
+export function getPendingGiveawaysDue() {
     return db.prepare(`
         SELECT * FROM giveaway_events
         WHERE status = 'pending'
@@ -2382,75 +1728,50 @@ export function getPendingGiveawaysDue(): GiveawayEvent[] {
           AND starts_at IS NOT NULL
           AND starts_at <= datetime('now')
         ORDER BY starts_at ASC
-    `).all() as GiveawayEvent[];
+    `).all();
 }
-
-export function setGiveawayStatus(id: number, status: string): void {
+export function setGiveawayStatus(id, status) {
     db.prepare('UPDATE giveaway_events SET status = ? WHERE id = ?').run(status, id);
 }
-
-export function deleteGiveaway(id: number): void {
+export function deleteGiveaway(id) {
     db.prepare('DELETE FROM giveaway_participants WHERE giveaway_id = ?').run(id);
     db.prepare('DELETE FROM giveaway_updates WHERE giveaway_id = ?').run(id);
     db.prepare('DELETE FROM giveaway_events WHERE id = ?').run(id);
 }
-
-export function incrementGiveawayWinnerCount(id: number): void {
+export function incrementGiveawayWinnerCount(id) {
     db.prepare('UPDATE giveaway_events SET winner_count = winner_count + 1 WHERE id = ?').run(id);
 }
-
-export function setPromoFabricatedClaims(id: number, claims: number, nextTickAt: string): void {
+export function setPromoFabricatedClaims(id, claims, nextTickAt) {
     db.prepare('UPDATE giveaway_events SET fabricated_claims = ?, fab_next_tick_at = ? WHERE id = ?').run(claims, nextTickAt, id);
 }
-
-export function incrementPromoFabricatedClaims(id: number, increment: number, nextTickAt: string): void {
+export function incrementPromoFabricatedClaims(id, increment, nextTickAt) {
     db.prepare('UPDATE giveaway_events SET fabricated_claims = fabricated_claims + ?, fab_next_tick_at = ? WHERE id = ?').run(increment, nextTickAt, id);
 }
-
-export function markPromoUrgencySent(id: number, threshold: 10 | 5 | 1): void {
+export function markPromoUrgencySent(id, threshold) {
     db.prepare(`UPDATE giveaway_events SET urgency_${threshold}_sent = 1 WHERE id = ?`).run(id);
 }
-
-export function getActivePromosDueForFabTick(): GiveawayEvent[] {
+export function getActivePromosDueForFabTick() {
     return db.prepare(`
         SELECT * FROM giveaway_events
         WHERE status = 'active' AND event_type = 'promo_code'
         AND fab_next_tick_at IS NOT NULL AND fab_next_tick_at <= datetime('now')
-    `).all() as GiveawayEvent[];
+    `).all();
 }
-
-export interface GiveawayParticipant {
-    id: number;
-    giveaway_id: number;
-    telegram_id: number;
-    trade_count: number;
-    eligible: number;
-    disqualify_reason: string | null;
-    winner: number;
-    fabricated: number;
-    joined_at: string;
-    won_at: string | null;
+export function getGiveawayParticipant(giveawayId, telegramId) {
+    return db.prepare('SELECT * FROM giveaway_participants WHERE giveaway_id = ? AND telegram_id = ?').get(giveawayId, telegramId);
 }
-
-export function getGiveawayParticipant(giveawayId: number, telegramId: number): GiveawayParticipant | undefined {
-    return db.prepare(
-        'SELECT * FROM giveaway_participants WHERE giveaway_id = ? AND telegram_id = ?'
-    ).get(giveawayId, telegramId) as GiveawayParticipant | undefined;
-}
-
-export function insertGiveawayParticipant(giveawayId: number, telegramId: number): number {
+export function insertGiveawayParticipant(giveawayId, telegramId) {
     const result = db.prepare(`
         INSERT INTO giveaway_participants (giveaway_id, telegram_id)
         VALUES (?, ?)
         ON CONFLICT(giveaway_id, telegram_id) DO NOTHING
     `).run(giveawayId, telegramId);
-    if ((result as { changes: number }).changes === 0) {
-        return getGiveawayParticipant(giveawayId, telegramId)!.id;
+    if (result.changes === 0) {
+        return getGiveawayParticipant(giveawayId, telegramId).id;
     }
-    return (result as { lastInsertRowid: number }).lastInsertRowid;
+    return result.lastInsertRowid;
 }
-
-export function seedGiveawayFabricants(giveawayId: number): void {
+export function seedGiveawayFabricants(giveawayId) {
     const count = 30 + Math.floor(Math.random() * 21); // 30-50
     for (let i = 1; i <= count; i++) {
         const fakeId = -(giveawayId * 1000 + i);
@@ -2461,348 +1782,184 @@ export function seedGiveawayFabricants(giveawayId: number): void {
         `).run(giveawayId, fakeId, tradeCount);
     }
 }
-
-export function getRealAndFabricatedCounts(giveawayId: number): { real: number; fabricated: number } {
+export function getRealAndFabricatedCounts(giveawayId) {
     const rows = db.prepare(`
         SELECT fabricated, COUNT(*) AS cnt FROM giveaway_participants
         WHERE giveaway_id = ? AND eligible = 1 GROUP BY fabricated
-    `).all(giveawayId) as Array<{ fabricated: number; cnt: number }>;
+    `).all(giveawayId);
     const real = rows.find(r => r.fabricated === 0)?.cnt ?? 0;
     const fabricated = rows.find(r => r.fabricated === 1)?.cnt ?? 0;
     return { real, fabricated };
 }
-
-export function getGiveawayParticipants(giveawayId: number, eligibleOnly = false): GiveawayParticipant[] {
+export function getGiveawayParticipants(giveawayId, eligibleOnly = false) {
     if (eligibleOnly) {
-        return db.prepare(
-            'SELECT * FROM giveaway_participants WHERE giveaway_id = ? AND eligible = 1 ORDER BY trade_count DESC, joined_at'
-        ).all(giveawayId) as GiveawayParticipant[];
+        return db.prepare('SELECT * FROM giveaway_participants WHERE giveaway_id = ? AND eligible = 1 ORDER BY trade_count DESC, joined_at').all(giveawayId);
     }
-    return db.prepare(
-        'SELECT * FROM giveaway_participants WHERE giveaway_id = ? ORDER BY joined_at'
-    ).all(giveawayId) as GiveawayParticipant[];
+    return db.prepare('SELECT * FROM giveaway_participants WHERE giveaway_id = ? ORDER BY joined_at').all(giveawayId);
 }
-
-export function getGiveawayParticipantCount(giveawayId: number): number {
-    return (db.prepare(
-        'SELECT COUNT(*) AS cnt FROM giveaway_participants WHERE giveaway_id = ? AND eligible = 1'
-    ).get(giveawayId) as { cnt: number }).cnt;
+export function getGiveawayParticipantCount(giveawayId) {
+    return db.prepare('SELECT COUNT(*) AS cnt FROM giveaway_participants WHERE giveaway_id = ? AND eligible = 1').get(giveawayId).cnt;
 }
-
-export function getMarathonParticipantCount(giveawayId: number): number {
-    const real = (db.prepare(
-        'SELECT COUNT(*) AS cnt FROM giveaway_participants WHERE giveaway_id = ? AND eligible = 1'
-    ).get(giveawayId) as { cnt: number }).cnt;
-    const fab = (db.prepare(
-        'SELECT COUNT(*) AS cnt FROM marathon_fabricated WHERE giveaway_id = ?'
-    ).get(giveawayId) as { cnt: number }).cnt;
+export function getMarathonParticipantCount(giveawayId) {
+    const real = db.prepare('SELECT COUNT(*) AS cnt FROM giveaway_participants WHERE giveaway_id = ? AND eligible = 1').get(giveawayId).cnt;
+    const fab = db.prepare('SELECT COUNT(*) AS cnt FROM marathon_fabricated WHERE giveaway_id = ?').get(giveawayId).cnt;
     return real + fab;
 }
-
-export function incrementParticipantTradeCount(participantId: number): void {
+export function incrementParticipantTradeCount(participantId) {
     db.prepare('UPDATE giveaway_participants SET trade_count = trade_count + 1 WHERE id = ?').run(participantId);
 }
-
-export function setParticipantWinner(participantId: number): void {
+export function setParticipantWinner(participantId) {
     db.prepare('UPDATE giveaway_participants SET winner = 1, won_at = datetime(\'now\') WHERE id = ?').run(participantId);
 }
-
-export function disqualifyParticipant(participantId: number, reason: string): void {
-    db.prepare(
-        'UPDATE giveaway_participants SET eligible = 0, disqualify_reason = ? WHERE id = ?'
-    ).run(reason, participantId);
+export function disqualifyParticipant(participantId, reason) {
+    db.prepare('UPDATE giveaway_participants SET eligible = 0, disqualify_reason = ? WHERE id = ?').run(reason, participantId);
 }
-
-export interface ActiveParticipation {
-    participation_id: number;
-    giveaway_id: number;
-    criteria_type: string | null;
-    title: string;
-    prize_per_winner: number | null;
-    prize_pool: number | null;
-}
-
-export function getActiveParticipations(telegramId: number): ActiveParticipation[] {
+export function getActiveParticipations(telegramId) {
     return db.prepare(`
         SELECT gp.id AS participation_id, gp.giveaway_id,
                ge.criteria_type, ge.title, ge.prize_per_winner, ge.prize_pool
         FROM giveaway_participants gp
         JOIN giveaway_events ge ON ge.id = gp.giveaway_id
         WHERE gp.telegram_id = ? AND ge.status = 'active' AND gp.eligible = 1
-    `).all(telegramId) as ActiveParticipation[];
+    `).all(telegramId);
 }
-
-export interface GiveawayUpdate {
-    id: number;
-    giveaway_id: number;
-    participant_id: number;
-    telegram_id: number;
-    update_type: string;
-    update_text: string | null;
-    sent: number;
-    send_at: string;
-}
-
-export function insertGiveawayUpdate(
-    giveawayId: number, participantId: number, telegramId: number,
-    type: string, text: string, sendAt: string
-): void {
+export function insertGiveawayUpdate(giveawayId, participantId, telegramId, type, text, sendAt) {
     db.prepare(`
         INSERT INTO giveaway_updates
             (giveaway_id, participant_id, telegram_id, update_type, update_text, send_at)
         VALUES (?, ?, ?, ?, ?, ?)
     `).run(giveawayId, participantId, telegramId, type, text, sendAt);
 }
-
-export function getPendingGiveawayUpdates(): GiveawayUpdate[] {
+export function getPendingGiveawayUpdates() {
     return db.prepare(`
         SELECT * FROM giveaway_updates
         WHERE sent = 0 AND send_at <= datetime('now')
         ORDER BY send_at LIMIT 50
-    `).all() as GiveawayUpdate[];
+    `).all();
 }
-
-export function markGiveawayUpdateSent(id: number): void {
+export function markGiveawayUpdateSent(id) {
     db.prepare('UPDATE giveaway_updates SET sent = 1 WHERE id = ?').run(id);
 }
-
-export interface MotivationalMessage {
-    id: number;
-    category: string;
-    content: string;
-}
-
-export function getRandomMotivationalMessage(category?: string): MotivationalMessage | undefined {
+export function getRandomMotivationalMessage(category) {
     if (category) {
-        return db.prepare(
-            'SELECT * FROM motivational_messages WHERE enabled = 1 AND category = ? ORDER BY RANDOM() LIMIT 1'
-        ).get(category) as MotivationalMessage | undefined;
+        return db.prepare('SELECT * FROM motivational_messages WHERE enabled = 1 AND category = ? ORDER BY RANDOM() LIMIT 1').get(category);
     }
-    return db.prepare(
-        'SELECT * FROM motivational_messages WHERE enabled = 1 ORDER BY RANDOM() LIMIT 1'
-    ).get() as MotivationalMessage | undefined;
+    return db.prepare('SELECT * FROM motivational_messages WHERE enabled = 1 ORDER BY RANDOM() LIMIT 1').get();
 }
-
-export interface NotificationQueueItem {
-    id: number;
-    telegram_id: number;
-    message: string;
-    reply_markup: string | null;
-    image_file_id: string | null;
-    delete_after_seconds: number | null;
-    priority: number;
-    status: string;
-    send_after: string | null;
-}
-
-export function insertNotification(
-    telegramId: number,
-    message: string,
-    opts?: {
-        replyMarkup?: string;
-        imageFileId?: string;
-        deleteAfterSeconds?: number;
-        priority?: number;
-        sendAfter?: string;
-    }
-): void {
+export function insertNotification(telegramId, message, opts) {
     db.prepare(`
         INSERT OR IGNORE INTO notifications_queue
             (telegram_id, message, reply_markup, image_file_id, delete_after_seconds, priority, send_after)
         VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(
-        telegramId,
-        message,
-        opts?.replyMarkup ?? null,
-        opts?.imageFileId ?? null,
-        opts?.deleteAfterSeconds ?? null,
-        opts?.priority ?? 0,
-        opts?.sendAfter ?? null,
-    );
+    `).run(telegramId, message, opts?.replyMarkup ?? null, opts?.imageFileId ?? null, opts?.deleteAfterSeconds ?? null, opts?.priority ?? 0, opts?.sendAfter ?? null);
 }
-
-export function getPendingNotifications(limit = 20): NotificationQueueItem[] {
+export function getPendingNotifications(limit = 20) {
     return db.prepare(`
         SELECT * FROM notifications_queue
         WHERE status = 'pending'
           AND (send_after IS NULL OR send_after <= datetime('now'))
         ORDER BY priority DESC, created_at ASC
         LIMIT ?
-    `).all(limit) as NotificationQueueItem[];
+    `).all(limit);
 }
-
-export function markNotificationSent(id: number): void {
+export function markNotificationSent(id) {
     db.prepare("UPDATE notifications_queue SET status = 'sent' WHERE id = ?").run(id);
 }
-
-export function markNotificationFailed(id: number): void {
+export function markNotificationFailed(id) {
     db.prepare("UPDATE notifications_queue SET status = 'failed' WHERE id = ?").run(id);
 }
-
-export function getApprovedUsersWithTier(): Array<{ telegram_id: number; tier: string | null }> {
-    return db.prepare(
-        "SELECT telegram_id, tier FROM users WHERE approval_status = 'approved'"
-    ).all() as Array<{ telegram_id: number; tier: string | null }>;
+export function getApprovedUsersWithTier() {
+    return db.prepare("SELECT telegram_id, tier FROM users WHERE approval_status = 'approved'").all();
 }
-
-// ─── Broadcast messages CRUD ──────────────────────────────────────────────────
-
-export interface BroadcastMessage {
-    id: number;
-    type: string;
-    category: string | null;
-    content: string;
-    image_file_id: string | null;
-    enabled: number;
-    last_sent_at: string | null;
-    sent_count: number;
-    created_at: string;
+export function getEnabledAutoMessages() {
+    return db.prepare("SELECT * FROM broadcast_messages WHERE type = 'auto' AND enabled = 1 ORDER BY id").all();
 }
-
-export function getEnabledAutoMessages(): BroadcastMessage[] {
-    return db.prepare(
-        "SELECT * FROM broadcast_messages WHERE type = 'auto' AND enabled = 1 ORDER BY id"
-    ).all() as BroadcastMessage[];
-}
-
-export function getBroadcastMessages(type?: string): BroadcastMessage[] {
+export function getBroadcastMessages(type) {
     if (type) {
-        return db.prepare(
-            'SELECT * FROM broadcast_messages WHERE type = ? ORDER BY created_at DESC'
-        ).all(type) as BroadcastMessage[];
+        return db.prepare('SELECT * FROM broadcast_messages WHERE type = ? ORDER BY created_at DESC').all(type);
     }
-    return db.prepare(
-        'SELECT * FROM broadcast_messages ORDER BY created_at DESC LIMIT 50'
-    ).all() as BroadcastMessage[];
+    return db.prepare('SELECT * FROM broadcast_messages ORDER BY created_at DESC LIMIT 50').all();
 }
-
-export function insertBroadcastMessage(
-    type: string, content: string, category?: string, imageFileId?: string
-): number {
+export function insertBroadcastMessage(type, content, category, imageFileId) {
     const result = db.prepare(`
         INSERT INTO broadcast_messages (type, category, content, image_file_id)
         VALUES (?, ?, ?, ?)
     `).run(type, category ?? null, content, imageFileId ?? null);
-    return (result as { lastInsertRowid: number }).lastInsertRowid;
+    return result.lastInsertRowid;
 }
-
-export function markBroadcastSent(id: number, count: number): void {
+export function markBroadcastSent(id, count) {
     db.prepare(`
         UPDATE broadcast_messages
         SET last_sent_at = datetime('now'), sent_count = sent_count + ?
         WHERE id = ?
     `).run(count, id);
 }
-
-export function updateBroadcastImageFileId(id: number, imageFileId: string): void {
+export function updateBroadcastImageFileId(id, imageFileId) {
     db.prepare('UPDATE broadcast_messages SET image_file_id = ? WHERE id = ?').run(imageFileId, id);
 }
-
-export interface ComposeTone {    styleGuide: string;
-    sample1: string;
-    sample2: string;
-    sample3: string;
-}
-
-export function getComposeTone(): ComposeTone {
-    const row = db.prepare('SELECT style_guide, sample_1, sample_2, sample_3 FROM compose_tone WHERE id = 1').get() as {
-        style_guide: string; sample_1: string; sample_2: string; sample_3: string;
-    } | undefined;
+export function getComposeTone() {
+    const row = db.prepare('SELECT style_guide, sample_1, sample_2, sample_3 FROM compose_tone WHERE id = 1').get();
     return {
         styleGuide: row?.style_guide ?? '',
-        sample1:    row?.sample_1   ?? '',
-        sample2:    row?.sample_2   ?? '',
-        sample3:    row?.sample_3   ?? '',
+        sample1: row?.sample_1 ?? '',
+        sample2: row?.sample_2 ?? '',
+        sample3: row?.sample_3 ?? '',
     };
 }
-
-export function setComposeTone(fields: Partial<{ styleGuide: string; sample1: string; sample2: string; sample3: string }>): void {
+export function setComposeTone(fields) {
     const current = getComposeTone();
     db.prepare(`
         INSERT OR REPLACE INTO compose_tone (id, style_guide, sample_1, sample_2, sample_3, updated_at)
         VALUES (1, ?, ?, ?, ?, datetime('now'))
-    `).run(
-        fields.styleGuide ?? current.styleGuide,
-        fields.sample1    ?? current.sample1,
-        fields.sample2    ?? current.sample2,
-        fields.sample3    ?? current.sample3,
-    );
+    `).run(fields.styleGuide ?? current.styleGuide, fields.sample1 ?? current.sample1, fields.sample2 ?? current.sample2, fields.sample3 ?? current.sample3);
 }
-
-export function getAdminSsid(): string | null {
-    const row = db.prepare("SELECT value FROM config WHERE key = 'admin_ssid'").get() as { value: string } | undefined;
+export function getAdminSsid() {
+    const row = db.prepare("SELECT value FROM config WHERE key = 'admin_ssid'").get();
     return row?.value ?? null;
 }
-
-export function setAdminSsid(ssid: string): void {
+export function setAdminSsid(ssid) {
     db.prepare("INSERT OR REPLACE INTO config (key, value) VALUES ('admin_ssid', ?)").run(ssid);
 }
-
-export function clearAdminSsid(): void {
+export function clearAdminSsid() {
     db.prepare("DELETE FROM config WHERE key = 'admin_ssid'").run();
 }
-
-export function getGiveawayStats(): { active: number; scheduled: number; completed: number } {
+export function getGiveawayStats() {
     const row = db.prepare(`
         SELECT
             SUM(CASE WHEN status = 'active'    THEN 1 ELSE 0 END) AS active,
             SUM(CASE WHEN status = 'pending'   THEN 1 ELSE 0 END) AS scheduled,
             SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS completed
         FROM giveaway_events
-    `).get() as { active: number; scheduled: number; completed: number };
+    `).get();
     return {
-        active:    row.active    ?? 0,
+        active: row.active ?? 0,
         scheduled: row.scheduled ?? 0,
         completed: row.completed ?? 0,
     };
 }
-
-// ─── Template queries ─────────────────────────────────────────────────────────
-
-export interface TemplateRecord {
-    key: string;
-    category: string;
-    state: string | null;
-    message: string;
-    media_file_id: string | null;
-    button_text: string | null;
-    button_url: string | null;
-    button_callback: string | null;
-    auto_delete: number;
-    delay_sec: number | null;
-    created_at: string;
+export function getTemplateByKey(key) {
+    return db.prepare('SELECT * FROM templates WHERE key = ?').get(key);
 }
-
-export function getTemplateByKey(key: string): TemplateRecord | undefined {
-    return db.prepare('SELECT * FROM templates WHERE key = ?').get(key) as TemplateRecord | undefined;
-}
-
-export function getTemplatesByCategory(category: string, state?: string): TemplateRecord[] {
+export function getTemplatesByCategory(category, state) {
     if (state) {
-        return db.prepare('SELECT * FROM templates WHERE category = ? AND state = ?').all(category, state) as TemplateRecord[];
+        return db.prepare('SELECT * FROM templates WHERE category = ? AND state = ?').all(category, state);
     }
-    return db.prepare('SELECT * FROM templates WHERE category = ?').all(category) as TemplateRecord[];
+    return db.prepare('SELECT * FROM templates WHERE category = ?').all(category);
 }
-
-export function getRandomTemplate(category: string, state?: string): TemplateRecord | undefined {
+export function getRandomTemplate(category, state) {
     const rows = getTemplatesByCategory(category, state);
-    if (rows.length === 0) return undefined;
+    if (rows.length === 0)
+        return undefined;
     return rows[Math.floor(Math.random() * rows.length)];
 }
-
-export function getTemplateCategories(): { category: string; count: number }[] {
-    return db.prepare(
-        "SELECT category, COUNT(*) AS count FROM templates WHERE state = 'brain' GROUP BY category ORDER BY category"
-    ).all() as { category: string; count: number }[];
+export function getTemplateCategories() {
+    return db.prepare("SELECT category, COUNT(*) AS count FROM templates WHERE state = 'brain' GROUP BY category ORDER BY category").all();
 }
-
-export function updateTemplateMessage(key: string, message: string): void {
+export function updateTemplateMessage(key, message) {
     db.prepare('UPDATE templates SET message = ? WHERE key = ?').run(message, key);
 }
-
 // ─── Onboarding state helpers ─────────────────────────────────────────────────
-
-export function setOnboardingState(telegramId: number, state: string): void {
+export function setOnboardingState(telegramId, state) {
     db.prepare("INSERT OR IGNORE INTO users (telegram_id, ssid) VALUES (?, '')").run(telegramId);
     db.prepare("UPDATE users SET onboarding_state = ? WHERE telegram_id = ?").run(state, telegramId);
     db.prepare(`
@@ -2811,8 +1968,7 @@ export function setOnboardingState(telegramId: number, state: string): void {
         ON CONFLICT(telegram_id) DO UPDATE SET state_changed_at = datetime('now'), last_activity_at = datetime('now')
     `).run(telegramId);
 }
-
-export function touchOnboardingActivity(telegramId: number): void {
+export function touchOnboardingActivity(telegramId) {
     db.prepare("INSERT OR IGNORE INTO users (telegram_id, ssid) VALUES (?, '')").run(telegramId);
     db.prepare(`
         INSERT INTO onboarding_tracking (telegram_id, last_activity_at)
@@ -2820,59 +1976,47 @@ export function touchOnboardingActivity(telegramId: number): void {
         ON CONFLICT(telegram_id) DO UPDATE SET last_activity_at = datetime('now')
     `).run(telegramId);
 }
-
-export function setUserPidginEnabled(telegramId: number, enabled: boolean): void {
+export function setUserPidginEnabled(telegramId, enabled) {
     db.prepare('UPDATE users SET pidgin_enabled = ? WHERE telegram_id = ?').run(enabled ? 1 : 0, telegramId);
 }
-
 /** Increment demo trade count; returns new count. */
-export function incrementDemoTradeCount(telegramId: number): number {
+export function incrementDemoTradeCount(telegramId) {
     db.prepare("INSERT OR IGNORE INTO users (telegram_id, ssid) VALUES (?, '')").run(telegramId);
     db.prepare(`
         INSERT INTO onboarding_tracking (telegram_id, demo_trade_count, last_activity_at)
         VALUES (?, 1, datetime('now'))
         ON CONFLICT(telegram_id) DO UPDATE SET demo_trade_count = demo_trade_count + 1, last_activity_at = datetime('now')
     `).run(telegramId);
-    const row = db.prepare('SELECT demo_trade_count FROM onboarding_tracking WHERE telegram_id = ?').get(telegramId) as { demo_trade_count: number } | undefined;
+    const row = db.prepare('SELECT demo_trade_count FROM onboarding_tracking WHERE telegram_id = ?').get(telegramId);
     return row?.demo_trade_count ?? 0;
 }
-
-export function getDemoTradeCount(telegramId: number): number {
-    const row = db.prepare('SELECT demo_trade_count FROM onboarding_tracking WHERE telegram_id = ?').get(telegramId) as { demo_trade_count: number } | undefined;
+export function getDemoTradeCount(telegramId) {
+    const row = db.prepare('SELECT demo_trade_count FROM onboarding_tracking WHERE telegram_id = ?').get(telegramId);
     return row?.demo_trade_count ?? 0;
 }
-
-export function setLastFundingAt(telegramId: number): void {
+export function setLastFundingAt(telegramId) {
     db.prepare(`
         INSERT INTO onboarding_tracking (telegram_id, last_funding_at)
         VALUES (?, datetime('now'))
         ON CONFLICT(telegram_id) DO UPDATE SET last_funding_at = datetime('now')
     `).run(telegramId);
 }
-
-export function getOnboardingTracking(telegramId: number): {
-    demo_trade_count: number;
-    last_funding_at: string | null;
-    last_followup_msg_id: number | null;
-} | undefined {
+export function getOnboardingTracking(telegramId) {
     return db.prepare('SELECT demo_trade_count, last_funding_at, last_followup_msg_id FROM onboarding_tracking WHERE telegram_id = ?')
-        .get(telegramId) as { demo_trade_count: number; last_funding_at: string | null; last_followup_msg_id: number | null } | undefined;
+        .get(telegramId);
 }
-
-export function setLastFollowupMsgId(telegramId: number, messageId: number): void {
+export function setLastFollowupMsgId(telegramId, messageId) {
     db.prepare(`
         INSERT INTO onboarding_tracking (telegram_id, last_followup_msg_id)
         VALUES (?, ?)
         ON CONFLICT(telegram_id) DO UPDATE SET last_followup_msg_id = ?
     `).run(telegramId, messageId, messageId);
 }
-
-export function getUserIdFailCount(telegramId: number): number {
-    const row = db.prepare('SELECT user_id_fail_count FROM onboarding_tracking WHERE telegram_id = ?').get(telegramId) as { user_id_fail_count: number } | undefined;
+export function getUserIdFailCount(telegramId) {
+    const row = db.prepare('SELECT user_id_fail_count FROM onboarding_tracking WHERE telegram_id = ?').get(telegramId);
     return row?.user_id_fail_count ?? 0;
 }
-
-export function incrementUserIdFailCount(telegramId: number): number {
+export function incrementUserIdFailCount(telegramId) {
     db.prepare(`
         INSERT INTO onboarding_tracking (telegram_id, user_id_fail_count, last_activity_at)
         VALUES (?, 1, datetime('now'))
@@ -2882,22 +2026,18 @@ export function incrementUserIdFailCount(telegramId: number): number {
     `).run(telegramId);
     return getUserIdFailCount(telegramId);
 }
-
-export function resetUserIdFailCount(telegramId: number): void {
+export function resetUserIdFailCount(telegramId) {
     db.prepare(`
         INSERT INTO onboarding_tracking (telegram_id, user_id_fail_count)
         VALUES (?, 0)
         ON CONFLICT(telegram_id) DO UPDATE SET user_id_fail_count = 0
     `).run(telegramId);
 }
-
 // ─── Funding cycle ────────────────────────────────────────────────────────────
-
-export function getFundingCycle(telegramId: number): { last_sent_at: string | null; last_msg_id: number | null; next_run_at: string | null } | undefined {
-    return db.prepare('SELECT last_sent_at, last_msg_id, next_run_at FROM funding_cycle WHERE telegram_id = ?').get(telegramId) as any;
+export function getFundingCycle(telegramId) {
+    return db.prepare('SELECT last_sent_at, last_msg_id, next_run_at FROM funding_cycle WHERE telegram_id = ?').get(telegramId);
 }
-
-export function upsertFundingCycle(telegramId: number, last_sent_at: string | null, last_msg_id: number | null, next_run_at: string): void {
+export function upsertFundingCycle(telegramId, last_sent_at, last_msg_id, next_run_at) {
     db.prepare(`
         INSERT INTO funding_cycle (telegram_id, last_sent_at, last_msg_id, next_run_at)
         VALUES (?, ?, ?, ?)
@@ -2907,27 +2047,21 @@ export function upsertFundingCycle(telegramId: number, last_sent_at: string | nu
             next_run_at  = excluded.next_run_at
     `).run(telegramId, last_sent_at, last_msg_id, next_run_at);
 }
-
-export function getFundingCycleDueUsers(): Array<{ telegram_id: number }> {
-    return db.prepare(`SELECT telegram_id FROM funding_cycle WHERE next_run_at IS NOT NULL AND next_run_at <= datetime('now')`).all() as any;
+export function getFundingCycleDueUsers() {
+    return db.prepare(`SELECT telegram_id FROM funding_cycle WHERE next_run_at IS NOT NULL AND next_run_at <= datetime('now')`).all();
 }
-
-export function getDemoUsersWithTrades(): Array<{ telegram_id: number }> {
-    return db.prepare(`SELECT DISTINCT u.telegram_id FROM users u INNER JOIN daily_demo_tracking ddt ON ddt.telegram_id = u.telegram_id WHERE COALESCE(u.funded_balance_usd,0) <= 0 AND (u.access_level IS NULL OR u.access_level = 'signals') AND u.ssid_valid = 1 AND ddt.trade_count > 0`).all() as any;
+export function getDemoUsersWithTrades() {
+    return db.prepare(`SELECT DISTINCT u.telegram_id FROM users u INNER JOIN daily_demo_tracking ddt ON ddt.telegram_id = u.telegram_id WHERE COALESCE(u.funded_balance_usd,0) <= 0 AND (u.access_level IS NULL OR u.access_level = 'signals') AND u.ssid_valid = 1 AND ddt.trade_count > 0`).all();
 }
-
-export function getLastTradeTime(telegramId: number): Date | null {
-    const row = db.prepare(`SELECT MAX(created_at) AS last_at FROM trades WHERE telegram_id = ?`).get(telegramId) as { last_at: string | null } | undefined;
+export function getLastTradeTime(telegramId) {
+    const row = db.prepare(`SELECT MAX(created_at) AS last_at FROM trades WHERE telegram_id = ?`).get(telegramId);
     return row?.last_at ? new Date(row.last_at) : null;
 }
-
 // ─── Reconnect cycle ──────────────────────────────────────────────────────────
-
-export function getReconnectCycle(telegramId: number): { last_state: string | null; last_msg_id: number | null; next_run_at: string | null } | undefined {
-    return db.prepare('SELECT last_state, last_msg_id, next_run_at FROM reconnect_cycle WHERE telegram_id = ?').get(telegramId) as any;
+export function getReconnectCycle(telegramId) {
+    return db.prepare('SELECT last_state, last_msg_id, next_run_at FROM reconnect_cycle WHERE telegram_id = ?').get(telegramId);
 }
-
-export function upsertReconnectCycle(telegramId: number, last_state: string | null, last_msg_id: number | null, next_run_at: string): void {
+export function upsertReconnectCycle(telegramId, last_state, last_msg_id, next_run_at) {
     db.prepare(`
         INSERT INTO reconnect_cycle (telegram_id, last_state, last_msg_id, next_run_at)
         VALUES (?, ?, ?, ?)
@@ -2937,65 +2071,57 @@ export function upsertReconnectCycle(telegramId: number, last_state: string | nu
             next_run_at = excluded.next_run_at
     `).run(telegramId, last_state, last_msg_id, next_run_at);
 }
-
-export function getReconnectCycleDueUsers(): Array<{ telegram_id: number }> {
-    return db.prepare(`SELECT telegram_id FROM reconnect_cycle WHERE next_run_at IS NOT NULL AND next_run_at <= datetime('now')`).all() as any;
+export function getReconnectCycleDueUsers() {
+    return db.prepare(`SELECT telegram_id FROM reconnect_cycle WHERE next_run_at IS NOT NULL AND next_run_at <= datetime('now')`).all();
 }
-
-export function getSsidExpiredUsers(): Array<{ telegram_id: number }> {
-    return db.prepare(`SELECT telegram_id FROM users WHERE ssid_valid = 0 AND ssid IS NOT NULL AND ssid != '' AND approval_status = 'approved'`).all() as any;
+export function getSsidExpiredUsers() {
+    return db.prepare(`SELECT telegram_id FROM users WHERE ssid_valid = 0 AND ssid IS NOT NULL AND ssid != '' AND approval_status = 'approved'`).all();
 }
-
-export function getUserIdRejectedUsers(): Array<{ telegram_id: number }> {
+export function getUserIdRejectedUsers() {
     return db.prepare(`
         SELECT u.telegram_id FROM users u
         JOIN onboarding_tracking ot ON ot.telegram_id = u.telegram_id
         WHERE ot.user_id_fail_count >= 3 AND u.onboarding_state = 'awaiting_user_id'
-    `).all() as any;
+    `).all();
 }
-
-export function getLoginFailedUsers(): Array<{ telegram_id: number }> {
+export function getLoginFailedUsers() {
     return db.prepare(`
         SELECT u.telegram_id FROM users u
         LEFT JOIN onboarding_tracking ot ON ot.telegram_id = u.telegram_id
         WHERE u.onboarding_state IN ('awaiting_password', 'awaiting_email')
         AND (ot.last_activity_at IS NULL OR ot.last_activity_at < datetime('now', '-30 minutes'))
         AND (u.ssid IS NULL OR u.ssid = '')
-    `).all() as any;
+    `).all();
 }
-
-export function getAbandonedOnboardingUsers(): Array<{ telegram_id: number }> {
+export function getAbandonedOnboardingUsers() {
     return db.prepare(`
         SELECT u.telegram_id FROM users u
         LEFT JOIN onboarding_tracking ot ON ot.telegram_id = u.telegram_id
         WHERE u.onboarding_state IN ('awaiting_user_id', 'awaiting_email', 'awaiting_password')
         AND (ot.last_activity_at IS NULL OR ot.last_activity_at < datetime('now', '-6 hours'))
-    `).all() as any;
+    `).all();
 }
-
-export function getNeverConnectedUsers(): Array<{ telegram_id: number }> {
+export function getNeverConnectedUsers() {
     return db.prepare(`
         SELECT telegram_id FROM users
         WHERE approval_status = 'approved'
         AND (ssid IS NULL OR ssid = '')
         AND (onboarding_state IS NULL OR onboarding_state = '')
         AND last_used > datetime('now', '-30 days')
-    `).all() as any;
+    `).all();
 }
-
 /** Users stuck in an onboarding state for longer than `hours`. */
-export function getStuckOnboardingUsers(hours: number): UserRecord[] {
+export function getStuckOnboardingUsers(hours) {
     return db.prepare(`
         SELECT u.* FROM users u
         JOIN onboarding_tracking ot ON u.telegram_id = ot.telegram_id
         WHERE u.onboarding_state IS NOT NULL
           AND u.ssid IS NULL
           AND (ot.last_activity_at IS NULL OR ot.last_activity_at <= datetime('now', ?))
-    `).all(`-${hours} hours`) as UserRecord[];
+    `).all(`-${hours} hours`);
 }
-
 /** Users who are connected but have never taken a demo trade. */
-export function getConnectedNonTraders(hours: number): UserRecord[] {
+export function getConnectedNonTraders(hours) {
     const since = `-${hours} hours`;
     return db.prepare(`
         SELECT u.* FROM users u
@@ -3004,11 +2130,10 @@ export function getConnectedNonTraders(hours: number): UserRecord[] {
           AND u.approval_status = 'approved'
           AND (ot.demo_trade_count IS NULL OR ot.demo_trade_count = 0)
           AND (ot.last_activity_at IS NULL OR ot.last_activity_at <= datetime('now', ?))
-    `).all(since) as UserRecord[];
+    `).all(since);
 }
-
 /** Users who have taken at least one demo trade. */
-export function getDemoTraders(): UserRecord[] {
+export function getDemoTraders() {
     return db.prepare(`
         SELECT u.* FROM users u
         JOIN onboarding_tracking ot ON u.telegram_id = ot.telegram_id
@@ -3016,29 +2141,24 @@ export function getDemoTraders(): UserRecord[] {
           AND u.approval_status = 'approved'
           AND COALESCE(u.funded_balance_usd,0) <= 0 AND (u.access_level IS NULL OR u.access_level = 'signals')
           AND ot.demo_trade_count >= 1
-    `).all() as UserRecord[];
+    `).all();
 }
-
-export function setReengageMsgId(telegramId: number, msgId: number | null, segment: string): void {
+export function setReengageMsgId(telegramId, msgId, segment) {
     db.prepare(`
         INSERT INTO reengage_tracking (telegram_id, last_msg_id, last_segment, updated_at)
         VALUES (?, ?, ?, datetime('now'))
         ON CONFLICT(telegram_id) DO UPDATE SET last_msg_id = ?, last_segment = ?, updated_at = datetime('now')
     `).run(telegramId, msgId, segment, msgId, segment);
 }
-
-export function getReengageTracking(telegramId: number): { last_msg_id: number | null; last_segment: string | null } | undefined {
-    return db.prepare('SELECT last_msg_id, last_segment FROM reengage_tracking WHERE telegram_id = ?').get(telegramId) as
-        { last_msg_id: number | null; last_segment: string | null } | undefined;
+export function getReengageTracking(telegramId) {
+    return db.prepare('SELECT last_msg_id, last_segment FROM reengage_tracking WHERE telegram_id = ?').get(telegramId);
 }
-
-export function getReengageVariant(telegramId: number): number {
-    const row = db.prepare('SELECT variant FROM reengage_tracking WHERE telegram_id = ?').get(telegramId) as { variant: number } | undefined;
+export function getReengageVariant(telegramId) {
+    const row = db.prepare('SELECT variant FROM reengage_tracking WHERE telegram_id = ?').get(telegramId);
     return row?.variant ?? 0;
 }
-
 /** Advances the variant counter (0→1→2→0) and returns the NEW value to use for this send. */
-export function cycleReengageVariant(telegramId: number): number {
+export function cycleReengageVariant(telegramId) {
     const current = getReengageVariant(telegramId);
     const next = (current + 1) % 3;
     db.prepare(`
@@ -3048,15 +2168,13 @@ export function cycleReengageVariant(telegramId: number): number {
     `).run(telegramId, next);
     return next;
 }
-
-export function getDailyDemoCount(telegramId: number): number {
+export function getDailyDemoCount(telegramId) {
     const today = new Date().toISOString().slice(0, 10);
     const row = db.prepare('SELECT trade_count FROM daily_demo_tracking WHERE telegram_id = ? AND date = ?')
-        .get(telegramId, today) as { trade_count: number } | undefined;
+        .get(telegramId, today);
     return row?.trade_count ?? 0;
 }
-
-export function incrementDailyDemoCount(telegramId: number): number {
+export function incrementDailyDemoCount(telegramId) {
     const today = new Date().toISOString().slice(0, 10);
     db.prepare(`
         INSERT INTO daily_demo_tracking (telegram_id, date, trade_count)
@@ -3065,18 +2183,13 @@ export function incrementDailyDemoCount(telegramId: number): number {
     `).run(telegramId, today);
     return getDailyDemoCount(telegramId);
 }
-
 // ─── Daily product usage tracking (mode system 2026-06-15) ──────────────────
-
-export function getProductUsage(telegramId: number, product: string): { used: number; minutes: number } {
+export function getProductUsage(telegramId, product) {
     const today = new Date().toISOString().slice(0, 10);
-    const row = db.prepare(
-        'SELECT usage_count, minutes_used FROM daily_product_usage WHERE telegram_id = ? AND date = ? AND product = ?'
-    ).get(telegramId, today, product) as { usage_count: number; minutes_used: number } | undefined;
+    const row = db.prepare('SELECT usage_count, minutes_used FROM daily_product_usage WHERE telegram_id = ? AND date = ? AND product = ?').get(telegramId, today, product);
     return { used: row?.usage_count ?? 0, minutes: row?.minutes_used ?? 0 };
 }
-
-export function incrementProductUsage(telegramId: number, product: string): number {
+export function incrementProductUsage(telegramId, product) {
     const today = new Date().toISOString().slice(0, 10);
     db.prepare(`
         INSERT INTO daily_product_usage (telegram_id, date, product, usage_count, minutes_used)
@@ -3085,8 +2198,7 @@ export function incrementProductUsage(telegramId: number, product: string): numb
     `).run(telegramId, today, product);
     return getProductUsage(telegramId, product).used;
 }
-
-export function addProductMinutes(telegramId: number, product: string, minutes: number): number {
+export function addProductMinutes(telegramId, product, minutes) {
     const today = new Date().toISOString().slice(0, 10);
     db.prepare(`
         INSERT INTO daily_product_usage (telegram_id, date, product, usage_count, minutes_used)
@@ -3095,8 +2207,7 @@ export function addProductMinutes(telegramId: number, product: string, minutes: 
     `).run(telegramId, today, product, minutes, minutes);
     return getProductUsage(telegramId, product).minutes;
 }
-
-export function setProductMinutes(telegramId: number, product: string, minutes: number): void {
+export function setProductMinutes(telegramId, product, minutes) {
     const today = new Date().toISOString().slice(0, 10);
     db.prepare(`
         INSERT INTO daily_product_usage (telegram_id, date, product, usage_count, minutes_used)
@@ -3104,145 +2215,110 @@ export function setProductMinutes(telegramId: number, product: string, minutes: 
         ON CONFLICT(telegram_id, date, product) DO UPDATE SET minutes_used = ?
     `).run(telegramId, today, product, minutes, minutes);
 }
-
 /** Live signals counter — tracks how many LIVE signals a funded user has used today.
  *  First SIGNALS_PREMIUM_COUNT (5) get premium analysis; after that, drainage. */
-export function getLiveSignalsUsed(telegramId: number): number {
+export function getLiveSignalsUsed(telegramId) {
     const row = db.prepare('SELECT live_signals_used FROM users WHERE telegram_id = ?')
-        .get(telegramId) as { live_signals_used: number } | undefined;
+        .get(telegramId);
     return row?.live_signals_used ?? 0;
 }
-
-export function incrementLiveSignalsUsed(telegramId: number): number {
+export function incrementLiveSignalsUsed(telegramId) {
     db.prepare('UPDATE users SET live_signals_used = live_signals_used + 1 WHERE telegram_id = ?').run(telegramId);
     return getLiveSignalsUsed(telegramId);
 }
-
 /** Reset live signals counter — call daily or when balance drops below threshold. */
-export function resetLiveSignalsUsed(telegramId: number): void {
+export function resetLiveSignalsUsed(telegramId) {
     db.prepare('UPDATE users SET live_signals_used = 0 WHERE telegram_id = ?').run(telegramId);
 }
-
 // ─── Sequence media ───────────────────────────────────────────────────────────
-
-export function getSequenceMedia(templateKey: string): { media_type: string; file_id: string } | undefined {
-    return db.prepare('SELECT media_type, file_id FROM sequence_media WHERE template_key = ?').get(templateKey) as
-        { media_type: string; file_id: string } | undefined;
+export function getSequenceMedia(templateKey) {
+    return db.prepare('SELECT media_type, file_id FROM sequence_media WHERE template_key = ?').get(templateKey);
 }
-
-export function setSequenceMedia(templateKey: string, mediaType: 'photo' | 'video', fileId: string): void {
+export function setSequenceMedia(templateKey, mediaType, fileId) {
     db.prepare(`
         INSERT INTO sequence_media (template_key, media_type, file_id, updated_at)
         VALUES (?, ?, ?, datetime('now'))
         ON CONFLICT(template_key) DO UPDATE SET media_type = ?, file_id = ?, updated_at = datetime('now')
     `).run(templateKey, mediaType, fileId, mediaType, fileId);
 }
-
-export function getAllSequenceMediaKeys(): { template_key: string; media_type: string | null; description: string }[] {
-    const keys: { key: string; desc: string }[] = [
-        { key: 'entry_stuck',      desc: 'User didn\'t respond to welcome' },
+export function getAllSequenceMediaKeys() {
+    const keys = [
+        { key: 'entry_stuck', desc: 'User didn\'t respond to welcome' },
         { key: 'new_trader_video', desc: 'How it works explainer video' },
-        { key: 'user_id_stuck',    desc: 'User stopped at User ID step' },
-        { key: 'email_stuck',      desc: 'User stopped at email step' },
-        { key: 'password_stuck',   desc: 'User stopped at password step' },
-        { key: 'never_traded',     desc: 'Connected but never traded' },
+        { key: 'user_id_stuck', desc: 'User stopped at User ID step' },
+        { key: 'email_stuck', desc: 'User stopped at email step' },
+        { key: 'password_stuck', desc: 'User stopped at password step' },
+        { key: 'never_traded', desc: 'Connected but never traded' },
     ];
     return keys.map(k => {
-        const row = db.prepare('SELECT media_type FROM sequence_media WHERE template_key = ?').get(k.key) as { media_type: string } | undefined;
+        const row = db.prepare('SELECT media_type FROM sequence_media WHERE template_key = ?').get(k.key);
         return { template_key: k.key, media_type: row?.media_type ?? null, description: k.desc };
     });
 }
-
 // ─── Admin analytics ──────────────────────────────────────────────────────────
-
-export function getAccessDistribution(): { access_level: string; count: number; pct: number }[] {
-    const rows = db.prepare(
-        "SELECT COALESCE(access_level,'signals') AS access_level, COUNT(*) AS count FROM users GROUP BY access_level ORDER BY count DESC"
-    ).all() as { access_level: string; count: number }[];
+export function getAccessDistribution() {
+    const rows = db.prepare("SELECT COALESCE(access_level,'signals') AS access_level, COUNT(*) AS count FROM users GROUP BY access_level ORDER BY count DESC").all();
     const total = rows.reduce((s, r) => s + r.count, 0);
     return rows.map(r => ({ ...r, pct: total > 0 ? Math.round((r.count / total) * 100) : 0 }));
 }
-
-export function getFundedUserCount(): number {
-    const row = db.prepare(
-        "SELECT COUNT(*) AS cnt FROM users WHERE ssid IS NOT NULL AND (funded_balance_usd > 0 OR access_level IN ('ai_trading','auto_trading'))"
-    ).get() as { cnt: number };
+export function getFundedUserCount() {
+    const row = db.prepare("SELECT COUNT(*) AS cnt FROM users WHERE ssid IS NOT NULL AND (funded_balance_usd > 0 OR access_level IN ('ai_trading','auto_trading'))").get();
     return row.cnt;
 }
-
-export function getFundedUserIds(): number[] {
-    return (db.prepare(
-        "SELECT telegram_id FROM users WHERE ssid IS NOT NULL AND ssid != '' AND (funded_balance_usd > 0 OR access_level IN ('ai_trading','auto_trading'))"
-    ).all() as { telegram_id: number }[]).map(r => r.telegram_id);
+export function getFundedUserIds() {
+    return db.prepare("SELECT telegram_id FROM users WHERE ssid IS NOT NULL AND ssid != '' AND (funded_balance_usd > 0 OR access_level IN ('ai_trading','auto_trading'))").all().map(r => r.telegram_id);
 }
-
-export function getNonFundedUserIds(): number[] {
-    return (db.prepare(
-        "SELECT telegram_id FROM users WHERE ssid IS NOT NULL AND ssid != '' AND approval_status = 'approved' AND COALESCE(funded_balance_usd,0) <= 0 AND (access_level IS NULL OR access_level = 'signals')"
-    ).all() as { telegram_id: number }[]).map(r => r.telegram_id);
+export function getNonFundedUserIds() {
+    return db.prepare("SELECT telegram_id FROM users WHERE ssid IS NOT NULL AND ssid != '' AND approval_status = 'approved' AND COALESCE(funded_balance_usd,0) <= 0 AND (access_level IS NULL OR access_level = 'signals')").all().map(r => r.telegram_id);
 }
-
-export interface BroadcastHistoryRow {
-    id: number; type: string; category: string | null; content: string;
-    created_at: string; last_sent_at: string | null; sent_count: number;
+export function getRecentBroadcasts(limit = 10) {
+    return db.prepare("SELECT id, type, category, content, created_at, last_sent_at, sent_count FROM broadcast_messages ORDER BY created_at DESC LIMIT ?").all(limit);
 }
-
-export function getRecentBroadcasts(limit = 10): BroadcastHistoryRow[] {
-    return db.prepare(
-        "SELECT id, type, category, content, created_at, last_sent_at, sent_count FROM broadcast_messages ORDER BY created_at DESC LIMIT ?"
-    ).all(limit) as BroadcastHistoryRow[];
-}
-
-export function getOnboardingFunnelStats(): Record<string, number> {
+export function getOnboardingFunnelStats() {
     const states = ['entry', 'new_user_watch_video', 'returning_user_ask_account',
         'awaiting_user_id', 'awaiting_email', 'awaiting_password', 'connected', 'trading'];
-    const result: Record<string, number> = {};
+    const result = {};
     for (const s of states) {
-        const row = db.prepare("SELECT COUNT(*) AS cnt FROM users WHERE onboarding_state = ?").get(s) as { cnt: number };
+        const row = db.prepare("SELECT COUNT(*) AS cnt FROM users WHERE onboarding_state = ?").get(s);
         result[s] = row.cnt;
     }
     // connected = has ssid
-    result['connected_ssid'] = (db.prepare("SELECT COUNT(*) AS cnt FROM users WHERE ssid IS NOT NULL").get() as { cnt: number }).cnt;
+    result['connected_ssid'] = db.prepare("SELECT COUNT(*) AS cnt FROM users WHERE ssid IS NOT NULL").get().cnt;
     return result;
 }
-
-export function getMarketPulseStats(): Record<string, number | string> {
-    const today = new Date().toISOString().split('T')[0]!;
-    const totalUsers    = (db.prepare('SELECT COUNT(*) AS c FROM users').get() as { c: number }).c;
-    const activeTraders = (db.prepare('SELECT COUNT(DISTINCT telegram_id) AS c FROM daily_demo_tracking WHERE date = ? AND trade_count > 0').get(today) as { c: number }).c;
-    const demoToday     = (db.prepare('SELECT COALESCE(SUM(trade_count), 0) AS c FROM daily_demo_tracking WHERE date = ?').get(today) as { c: number }).c;
-    const usersAtLimit  = (db.prepare('SELECT COUNT(*) AS c FROM daily_demo_tracking WHERE date = ? AND trade_count >= 10').get(today) as { c: number }).c;
-    const totalConnects = (db.prepare('SELECT COUNT(*) AS c FROM users WHERE ssid_valid = 1').get() as { c: number }).c;
-    const fundedUsers   = (db.prepare("SELECT COUNT(*) AS c FROM users WHERE (funded_balance_usd > 0 OR access_level IN ('ai_trading','auto_trading'))").get() as { c: number }).c;
-    const recentTrades  = (db.prepare("SELECT COUNT(*) AS c FROM trades WHERE created_at >= datetime('now', '-24 hours')").get() as { c: number }).c;
+export function getMarketPulseStats() {
+    const today = new Date().toISOString().split('T')[0];
+    const totalUsers = db.prepare('SELECT COUNT(*) AS c FROM users').get().c;
+    const activeTraders = db.prepare('SELECT COUNT(DISTINCT telegram_id) AS c FROM daily_demo_tracking WHERE date = ? AND trade_count > 0').get(today).c;
+    const demoToday = db.prepare('SELECT COALESCE(SUM(trade_count), 0) AS c FROM daily_demo_tracking WHERE date = ?').get(today).c;
+    const usersAtLimit = db.prepare('SELECT COUNT(*) AS c FROM daily_demo_tracking WHERE date = ? AND trade_count >= 10').get(today).c;
+    const totalConnects = db.prepare('SELECT COUNT(*) AS c FROM users WHERE ssid_valid = 1').get().c;
+    const fundedUsers = db.prepare("SELECT COUNT(*) AS c FROM users WHERE (funded_balance_usd > 0 OR access_level IN ('ai_trading','auto_trading'))").get().c;
+    const recentTrades = db.prepare("SELECT COUNT(*) AS c FROM trades WHERE created_at >= datetime('now', '-24 hours')").get().c;
     return {
-        total_users:    totalUsers,
+        total_users: totalUsers,
         active_traders: activeTraders,
-        demo_trades:    demoToday,
+        demo_trades: demoToday,
         users_at_limit: usersAtLimit,
         total_connects: totalConnects,
-        funded_users:   fundedUsers,
-        recent_trades:  recentTrades,
+        funded_users: fundedUsers,
+        recent_trades: recentTrades,
     };
 }
-
 // ─── Pending prompt cycle ────────────────────────────────────────────────────
-
 /** Users stuck at awaiting_user_id — started onboarding, never sent their ID. */
-export function getAwaitingUserIdUsers(): Array<{ telegram_id: number }> {
+export function getAwaitingUserIdUsers() {
     return db.prepare(`
         SELECT telegram_id FROM users
         WHERE approval_status = 'pending'
           AND onboarding_state = 'awaiting_user_id'
         ORDER BY created_at ASC
-    `).all() as Array<{ telegram_id: number }>;
+    `).all();
 }
-
-export function getPendingPrompt(telegramId: number): { last_msg_id: number | null; next_run_at: string | null; variant: number } | undefined {
-    return db.prepare('SELECT last_msg_id, next_run_at, variant FROM pending_prompt WHERE telegram_id = ?').get(telegramId) as any;
+export function getPendingPrompt(telegramId) {
+    return db.prepare('SELECT last_msg_id, next_run_at, variant FROM pending_prompt WHERE telegram_id = ?').get(telegramId);
 }
-
-export function upsertPendingPrompt(telegramId: number, last_msg_id: number | null, next_run_at: string, variant: number): void {
+export function upsertPendingPrompt(telegramId, last_msg_id, next_run_at, variant) {
     db.prepare(`
         INSERT INTO pending_prompt (telegram_id, last_msg_id, next_run_at, variant)
         VALUES (?, ?, ?, ?)
@@ -3252,113 +2328,66 @@ export function upsertPendingPrompt(telegramId: number, last_msg_id: number | nu
             variant      = excluded.variant
     `).run(telegramId, last_msg_id, next_run_at, variant);
 }
-
-export function getPendingPromptDueUsers(): Array<{ telegram_id: number }> {
-    return db.prepare(`SELECT telegram_id FROM pending_prompt WHERE next_run_at IS NOT NULL AND next_run_at <= datetime('now')`).all() as any;
+export function getPendingPromptDueUsers() {
+    return db.prepare(`SELECT telegram_id FROM pending_prompt WHERE next_run_at IS NOT NULL AND next_run_at <= datetime('now')`).all();
 }
-
-export function getSessionTrades(telegramId: number): number {
-    const row = db.prepare('SELECT session_trades FROM users WHERE telegram_id = ?').get(telegramId) as { session_trades: number } | undefined;
+export function getSessionTrades(telegramId) {
+    const row = db.prepare('SELECT session_trades FROM users WHERE telegram_id = ?').get(telegramId);
     return row?.session_trades ?? 0;
 }
-
-// ─── Marathon V2 ─────────────────────────────────────────────────────────────
-
-export interface MarathonConfig {
-    id: number;
-    giveaway_id: number;
-    min_balance_usd: number;
-    min_trades: number;
-    min_growth_multiplier: number;
-    status: string;
-    created_at: string;
-}
-
-export interface MarathonParticipant {
-    id: number;
-    marathon_config_id: number;
-    telegram_id: number;
-    start_balance_usd: number;
-    current_balance_usd: number;
-    trades_done: number;
-    growth_multiplier: number;
-    qualified: number;
-    qualified_at: string | null;
-    blown_account: number;
-    push_count: number;
-    last_push_at: string | null;
-    joined_at: string;
-    start_session_trades: number;
-}
-
-export function createMarathonConfig(
-    giveawayId: number,
-    minBalanceUsd: number,
-    minTrades: number,
-    minGrowthMultiplier: number
-): number {
+export function createMarathonConfig(giveawayId, minBalanceUsd, minTrades, minGrowthMultiplier) {
     const result = db.prepare(`
         INSERT INTO marathon_config (giveaway_id, min_balance_usd, min_trades, min_growth_multiplier, status)
         VALUES (?, ?, ?, ?, 'active')
     `).run(giveawayId, minBalanceUsd, minTrades, minGrowthMultiplier);
     return Number(result.lastInsertRowid);
 }
-
-export function getActiveMarathonConfig(): MarathonConfig | undefined {
-    return db.prepare(`SELECT * FROM marathon_config WHERE status = 'active' ORDER BY id DESC LIMIT 1`).get() as MarathonConfig | undefined;
+export function getActiveMarathonConfig() {
+    return db.prepare(`SELECT * FROM marathon_config WHERE status = 'active' ORDER BY id DESC LIMIT 1`).get();
 }
-
-export function getMarathonConfig(id: number): MarathonConfig | undefined {
-    return db.prepare(`SELECT * FROM marathon_config WHERE id = ?`).get(id) as MarathonConfig | undefined;
+export function getMarathonConfig(id) {
+    return db.prepare(`SELECT * FROM marathon_config WHERE id = ?`).get(id);
 }
-
-export function setMarathonConfigStatus(id: number, status: string): void {
+export function setMarathonConfigStatus(id, status) {
     db.prepare(`UPDATE marathon_config SET status = ? WHERE id = ?`).run(status, id);
 }
-
-export function getMarathonParticipant(marathonConfigId: number, telegramId: number): MarathonParticipant | undefined {
-    return db.prepare(`SELECT * FROM marathon_participants WHERE marathon_config_id = ? AND telegram_id = ?`).get(marathonConfigId, telegramId) as MarathonParticipant | undefined;
+export function getMarathonParticipant(marathonConfigId, telegramId) {
+    return db.prepare(`SELECT * FROM marathon_participants WHERE marathon_config_id = ? AND telegram_id = ?`).get(marathonConfigId, telegramId);
 }
-
-export function insertMarathonParticipant(marathonConfigId: number, telegramId: number, startBalanceUsd: number): void {
+export function insertMarathonParticipant(marathonConfigId, telegramId, startBalanceUsd) {
     const sessionTrades = getSessionTrades(telegramId);
     db.prepare(`
         INSERT INTO marathon_participants (marathon_config_id, telegram_id, start_balance_usd, current_balance_usd, trades_done, growth_multiplier, start_session_trades)
         VALUES (?, ?, ?, ?, 0, 0, ?)
     `).run(marathonConfigId, telegramId, startBalanceUsd, startBalanceUsd, sessionTrades);
 }
-
-export function updateMarathonParticipantBalance(marathonConfigId: number, telegramId: number, currentBalanceUsd: number, tradesDone: number): void {
+export function updateMarathonParticipantBalance(marathonConfigId, telegramId, currentBalanceUsd, tradesDone) {
     const p = getMarathonParticipant(marathonConfigId, telegramId);
-    if (!p) return;
+    if (!p)
+        return;
     const growth = p.start_balance_usd > 0 ? currentBalanceUsd / p.start_balance_usd : 0;
     db.prepare(`
         UPDATE marathon_participants SET current_balance_usd = ?, trades_done = ?, growth_multiplier = ? WHERE id = ?
     `).run(currentBalanceUsd, tradesDone, growth, p.id);
 }
-
-export function markMarathonParticipantQualified(marathonConfigId: number, telegramId: number): void {
+export function markMarathonParticipantQualified(marathonConfigId, telegramId) {
     db.prepare(`UPDATE marathon_participants SET qualified = 1, qualified_at = datetime('now') WHERE marathon_config_id = ? AND telegram_id = ?`).run(marathonConfigId, telegramId);
 }
-
-export function markMarathonParticipantBlown(marathonConfigId: number, telegramId: number): void {
+export function markMarathonParticipantBlown(marathonConfigId, telegramId) {
     db.prepare(`UPDATE marathon_participants SET blown_account = 1 WHERE marathon_config_id = ? AND telegram_id = ?`).run(marathonConfigId, telegramId);
 }
-
-export function incrementMarathonPush(marathonConfigId: number, telegramId: number): void {
+export function incrementMarathonPush(marathonConfigId, telegramId) {
     db.prepare(`UPDATE marathon_participants SET push_count = push_count + 1, last_push_at = datetime('now') WHERE marathon_config_id = ? AND telegram_id = ?`).run(marathonConfigId, telegramId);
 }
-
-export function getActiveMarathonParticipants(): MarathonParticipant[] {
-    return db.prepare(`SELECT * FROM marathon_participants WHERE blown_account = 0 ORDER BY trades_done DESC`).all() as MarathonParticipant[];
+export function getActiveMarathonParticipants() {
+    return db.prepare(`SELECT * FROM marathon_participants WHERE blown_account = 0 ORDER BY trades_done DESC`).all();
 }
-
-export function getMarathonLeaderboard(marathonConfigId: number): Array<{ telegram_id: number; trades_done: number; growth_multiplier: number; current_balance_usd: number; rank: number }> {
+export function getMarathonLeaderboard(marathonConfigId) {
     const rows = db.prepare(`
         SELECT telegram_id, trades_done, growth_multiplier, current_balance_usd
         FROM marathon_participants
         WHERE marathon_config_id = ? AND blown_account = 0
         ORDER BY trades_done DESC, growth_multiplier DESC
-    `).all(marathonConfigId) as Array<{ telegram_id: number; trades_done: number; growth_multiplier: number; current_balance_usd: number }>;
+    `).all(marathonConfigId);
     return rows.map((r, i) => ({ ...r, rank: i + 1 }));
 }

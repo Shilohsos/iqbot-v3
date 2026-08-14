@@ -1,0 +1,420 @@
+import { ClientSdk, SsidAuthMethod, BlitzOptionsDirection, BalanceType, } from './index.js';
+import { WS_URL, PLATFORM_ID, IQ_HOST } from './protocol.js';
+import { db } from './db.js';
+import { logger } from './logger.js';
+const normTicker = (s) => s.toUpperCase().replace(/^front\./i, '').replace(/[-/\s]/g, '');
+/**
+ * Runs a single trade on an already-authenticated SDK instance.
+ * The caller owns the SDK lifecycle (connect / shutdown).
+ * Catches SDK-internal TimeoutError and converts it to an ERROR result
+ * so the martingale loop can handle it gracefully instead of crashing.
+ *
+ * All timeframes (30s / 60s / 300s) execute via BlitzOptions.
+ */
+export async function executeTradeWithSdk(sdk, trade) {
+    let optionId;
+    try {
+        // SDK calls can hang indefinitely when the WebSocket is dead.
+        // Wrap each in a 15s timeout so the martingale chain can abort cleanly.
+        const sdkTimeout = (p, label) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(`SDK ${label} timed out`)), 15_000))]);
+        const positions = await sdkTimeout(sdk.positions(), 'positions');
+        const balances = await sdkTimeout(sdk.balances(), 'balances');
+        const wantLive = trade.balanceType === 'live';
+        let selectedBalance = balances.getBalances().find(b => b.type === (wantLive ? BalanceType.Real : BalanceType.Demo));
+        // Fallback for accounts whose balance typeId the SDK doesn't map (e.g. NGN)
+        if (!selectedBalance) {
+            selectedBalance = wantLive
+                ? balances.getBalances().find(b => b.type === undefined || b.type === BalanceType.Real)
+                : balances.getBalances().find(b => b.type === undefined || b.type === BalanceType.Demo);
+        }
+        if (!selectedBalance)
+            return errorResult(trade, wantLive ? 'No real balance found' : 'No demo balance found');
+        const currentTime = sdk.currentTime();
+        const targetSize = trade.timeframeSec ?? 60;
+        const normalizedInput = normTicker(trade.pair);
+        const blitzOptions = await sdkTimeout(sdk.blitzOptions(), 'blitzOptions');
+        const active = blitzOptions.getActives().find(a => normTicker(a.ticker) === normalizedInput ||
+            normTicker(a.localizationKey) === normalizedInput);
+        if (!active)
+            return errorResult(trade, `Unknown pair: ${trade.pair}`);
+        if (!active.canBeBoughtAt(currentTime))
+            return errorResult(trade, `${trade.pair} market is closed right now`);
+        if (!active.expirationTimes.includes(targetSize))
+            return errorResult(trade, `No ${targetSize}s instrument available for ${trade.pair}`);
+        const dir = trade.direction === 'call' ? BlitzOptionsDirection.Call : BlitzOptionsDirection.Put;
+        const option = await sdkTimeout(blitzOptions.buy(active, dir, targetSize, trade.amount, selectedBalance), 'buy');
+        optionId = option.id;
+        // Persist in-flight immediately — so a restart doesn't orphan the trade.
+        const nowSql = new Date().toISOString();
+        if (trade.telegramId != null) {
+            db.prepare(`INSERT OR IGNORE INTO users (telegram_id, created_at, last_used) VALUES (?, datetime('now'), datetime('now'))`)
+                .run(trade.telegramId);
+        }
+        db.prepare(`INSERT INTO trades (telegram_id, pair, direction, amount, status, trade_id, created_at)
+                     VALUES (?, ?, ?, ?, 'in_flight', ?, ?)`)
+            .run(trade.telegramId ?? null, trade.pair, trade.direction, trade.amount, optionId, nowSql);
+        // Save external_id as soon as the position appears so crash recovery can find it.
+        const optId = optionId; // narrowed for closure
+        const saveExtId = setInterval(() => {
+            const match = positions.getOpenedPositions().find(p => p.orderIds.includes(optId));
+            const extId = match?.externalId;
+            if (extId != null) {
+                db.prepare('UPDATE trades SET external_id = ? WHERE trade_id = ? AND status = ?')
+                    .run(extId, optId, 'in_flight');
+                clearInterval(saveExtId);
+            }
+        }, 500);
+        setTimeout(() => clearInterval(saveExtId), 15_000);
+        const result = await waitForResult(positions, option.id, targetSize + 90);
+        clearInterval(saveExtId);
+        const tradeResult = {
+            ...result,
+            tradeId: option.id,
+            pair: trade.pair,
+            direction: trade.direction,
+            amount: trade.amount,
+        };
+        // Update the in-flight row with the final outcome.
+        db.prepare(`UPDATE trades SET status = ?, pnl = ?, external_id = ?, error = NULL
+                     WHERE trade_id = ? AND status = 'in_flight'`)
+            .run(tradeResult.status, tradeResult.pnl, result.externalId ?? null, optionId);
+        return tradeResult;
+    }
+    catch (err) {
+        // Mark any in-flight row as ERROR so recovery doesn't leave it dangling.
+        if (optionId != null) {
+            db.prepare(`UPDATE trades SET status = 'ERROR', error = ? WHERE trade_id = ? AND status = 'in_flight'`)
+                .run(err instanceof Error ? err.message : String(err), optionId);
+        }
+        const msg = err instanceof Error ? err.message : String(err);
+        // CRITICAL: timeout BEFORE buy completes means NO trade was placed on IQ Option.
+        // Must NOT be treated as a LOSS / martingale double (users saw ₦900k fake losses).
+        if (optionId == null && isTimeoutError(err)) {
+            return errorResult(trade, 'Buy timed out — no trade placed');
+        }
+        if (optionId == null && /timed out|timeout|WebSocket|is closing|not open/i.test(msg)) {
+            return errorResult(trade, `Buy failed — no trade placed (${msg})`);
+        }
+        // Timeout AFTER buy (optionId set) — trade may exist; surface as TIMEOUT for recovery.
+        if (optionId != null && isTimeoutError(err)) {
+            return {
+                status: 'TIMEOUT',
+                pnl: 0,
+                tradeId: optionId,
+                pair: trade.pair,
+                direction: trade.direction,
+                amount: trade.amount,
+                error: 'Result timeout after buy',
+            };
+        }
+        if (isTimeoutError(err)) {
+            return errorResult(trade, 'IQ Option timed out');
+        }
+        return errorResult(trade, msg);
+    }
+}
+/**
+ * One-shot trade — fresh connection per call, shut down when done.
+ */
+export async function executeTrade(ssid, trade) {
+    let sdk;
+    try {
+        sdk = await Promise.race([
+            ClientSdk.create(WS_URL, PLATFORM_ID, new SsidAuthMethod(ssid), { host: IQ_HOST }),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Connection timed out')), 180_000)),
+        ]);
+    }
+    catch (err) {
+        if (isTimeoutError(err))
+            return errorResult(trade, 'Connection timed out');
+        throw err;
+    }
+    try {
+        return await executeTradeWithSdk(sdk, trade);
+    }
+    finally {
+        await sdk.shutdown();
+    }
+}
+export function createSdk(ssid) {
+    return ClientSdk.create(WS_URL, PLATFORM_ID, new SsidAuthMethod(ssid), { host: IQ_HOST });
+}
+/**
+ * UI-free martingale runner: executes a trade on an already-connected SDK and
+ * doubles the stake on loss until a win/tie, an error, or `galeRounds` recovery
+ * rounds are exhausted. Shared execution primitive (`executeTradeWithSdk`) with
+ * the Telegram-coupled runMartingale in bot.ts. The optional `onRound` callback
+ * lets callers render progress without this function knowing about Telegram.
+ */
+export async function runMartingaleCore(sdk, params, onRound) {
+    const runId = crypto.randomUUID();
+    const cooldownMs = params.cooldownMs ?? 2000;
+    let currentAmount = params.amount;
+    let totalPnl = 0;
+    let activeSdk = sdk;
+    let sdkRebuilt = false;
+    for (let round = 1; round <= params.galeRounds + 1; round++) {
+        const roundTrade = {
+            pair: params.pair,
+            direction: params.direction,
+            amount: currentAmount,
+            martingaleRunId: runId,
+            timeframeSec: params.timeframeSec,
+            balanceType: params.balanceType,
+            telegramId: params.telegramId,
+        };
+        let result = await executeTradeWithSdk(activeSdk, roundTrade);
+        // Distinguish ERROR (buy failed — no trade placed) from TIMEOUT (trade placed, result missed):
+        //
+        // ERROR (buy failed):   No trade was actually placed on IQ Option. The stake
+        //   should NOT double — retry the same round at the same amount after rebuilding
+        //   the SDK. Only retry the buy once to avoid infinite loops.
+        //
+        // TIMEOUT (result missed): The trade WAS placed on IQ Option but the WebSocket
+        //   dropped before the result arrived. Treat as a loss and continue the gale
+        //   chain (the trade likely settled, we just didn't see it).
+        let buyRetried = false;
+        if (result.status === 'ERROR' && !sdkRebuilt) {
+            const errText = result.error ?? '';
+            const isProfitRate = /4117|profit rate change|not been purchased/i.test(errText);
+            if (isProfitRate) {
+                // Root cause is stale profit_percent — SDK buy() already refreshes + retries.
+                // One more same-SDK attempt without full reconnect (fast path).
+                logger.warn('trade', `Round ${round} 4117 profit-rate on ${params.pair} — same-SDK retry`);
+                buyRetried = true;
+                try {
+                    await new Promise(r => setTimeout(r, 400));
+                    result = await executeTradeWithSdk(activeSdk, roundTrade);
+                }
+                catch (retryErr) {
+                    logger.warn('trade', `4117 same-SDK retry failed: ${retryErr instanceof Error ? retryErr.message : retryErr}`);
+                }
+            }
+            if (result.status === 'ERROR') {
+                logger.warn('trade', `Round ${round} ERROR (buy failed) on ${params.pair}: ${result.error ?? 'unknown'} — rebuilding SDK and retrying same round`);
+                sdkRebuilt = true;
+                buyRetried = true;
+                try {
+                    const { getSsidForUser } = await import('./bot.js');
+                    const { getAdminSsid } = await import('./db.js');
+                    const uid = params.telegramId ?? 0;
+                    const freshSsid = uid === 1615652240 ? getAdminSsid() : getSsidForUser(uid);
+                    if (freshSsid) {
+                        try {
+                            await activeSdk.shutdown();
+                        }
+                        catch { }
+                        activeSdk = await createSdk(freshSsid);
+                        logger.info('trade', `SDK rebuilt for ${params.pair} buy retry`);
+                        // Retry the SAME round at the SAME amount (no doubling)
+                        result = await executeTradeWithSdk(activeSdk, roundTrade);
+                    }
+                }
+                catch (rebuildErr) {
+                    logger.warn('trade', `SDK rebuild failed: ${rebuildErr instanceof Error ? rebuildErr.message : rebuildErr}`);
+                }
+            }
+        }
+        if (result.status === 'TIMEOUT') {
+            // TIMEOUT = trade was placed but result was missed. Try to recover the
+            // actual result via position history before treating as a loss.
+            logger.warn('trade', `Round ${round} TIMEOUT on ${params.pair}: ${result.error ?? 'unknown'} — attempting result recovery`);
+            if (!sdkRebuilt) {
+                sdkRebuilt = true;
+                try {
+                    const { getSsidForUser } = await import('./bot.js');
+                    const { getAdminSsid } = await import('./db.js');
+                    const uid = params.telegramId ?? 0;
+                    const freshSsid = uid === 1615652240 ? getAdminSsid() : getSsidForUser(uid);
+                    if (freshSsid) {
+                        try {
+                            await activeSdk.shutdown();
+                        }
+                        catch { }
+                        activeSdk = await createSdk(freshSsid);
+                        logger.info('trade', `SDK rebuilt for ${params.pair} timeout recovery`);
+                    }
+                }
+                catch (rebuildErr) {
+                    logger.warn('trade', `SDK rebuild failed: ${rebuildErr instanceof Error ? rebuildErr.message : rebuildErr}`);
+                }
+            }
+            // If the SDK was rebuilt (or buy was retried and still ERROR), try one more
+            // execution to get a clean result. For TIMEOUT, the original trade may still
+            // be open — check position history first.
+            if (result.tradeId > 0) {
+                try {
+                    const positions = await activeSdk.positions();
+                    const history = positions.getPositionsHistory();
+                    const historyPos = await history.getPositionHistory(result.tradeId);
+                    if (historyPos && historyPos.status === 'closed') {
+                        const pnl = historyPos.closeProfit ?? 0;
+                        const reason = historyPos.closeReason ?? '';
+                        if (reason === 'win') {
+                            result = { status: 'WIN', pnl, error: '', tradeId: result.tradeId, pair: result.pair, direction: result.direction, amount: result.amount };
+                            logger.info('trade', `Round ${round} TIMEOUT recovered as WIN ($${pnl})`);
+                        }
+                        else if (reason === 'equal') {
+                            result = { status: 'TIE', pnl: 0, error: '', tradeId: result.tradeId, pair: result.pair, direction: result.direction, amount: result.amount };
+                            logger.info('trade', `Round ${round} TIMEOUT recovered as TIE`);
+                        }
+                        else {
+                            result = { status: 'LOSS', pnl: 0, error: '', tradeId: result.tradeId, pair: result.pair, direction: result.direction, amount: result.amount };
+                            logger.info('trade', `Round ${round} TIMEOUT recovered as LOSS`);
+                        }
+                    }
+                }
+                catch (recoverErr) {
+                    logger.warn('trade', `Timeout recovery lookup failed: ${recoverErr instanceof Error ? recoverErr.message : recoverErr}`);
+                }
+            }
+        }
+        await onRound?.({ round, amount: currentAmount, result });
+        if (result.status === 'WIN' || result.status === 'TIE') {
+            totalPnl = result.status === 'WIN' ? (result.pnl - currentAmount) : 0;
+            return { status: result.status, totalPnl, rounds: round };
+        }
+        // ERROR after buy retry — buy genuinely failed twice. Don't double the stake.
+        // Skip this round entirely (no trade was placed, nothing was lost) and retry
+        // the same amount on the next gale round.
+        if (result.status === 'ERROR') {
+            logger.warn('trade', `Round ${round} ERROR on ${params.pair} after retry — buy failed, skipping without doubling`);
+            // Don't subtract from totalPnl (no trade was placed, no money was lost)
+            // Don't double currentAmount — keep the same stake for the next round
+            if (round <= params.galeRounds) {
+                if (cooldownMs > 0)
+                    await new Promise(r => setTimeout(r, cooldownMs));
+            }
+            continue;
+        }
+        // TIMEOUT after recovery attempt — trade was placed but we couldn't confirm
+        // the result. Treat as a loss and continue the gale chain.
+        if (result.status === 'TIMEOUT') {
+            logger.warn('trade', `Round ${round} TIMEOUT on ${params.pair} after recovery — treating as loss, continuing gale`);
+            totalPnl -= currentAmount;
+            if (round <= params.galeRounds) {
+                currentAmount *= 2;
+                if (cooldownMs > 0)
+                    await new Promise(r => setTimeout(r, cooldownMs));
+            }
+            continue;
+        }
+        // LOSS
+        totalPnl -= currentAmount;
+        if (round <= params.galeRounds) {
+            currentAmount *= 2;
+            if (cooldownMs > 0)
+                await new Promise(r => setTimeout(r, cooldownMs));
+        }
+    }
+    return { status: 'LOSS', totalPnl, rounds: params.galeRounds + 1 };
+}
+function isTimeoutError(err) {
+    if (!(err instanceof Error))
+        return false;
+    return err.name === 'TimeoutError' || err.message.includes('timed out') || err.message.includes('TimeoutError');
+}
+export function waitForResult(positions, optionId, timeoutSeconds) {
+    return new Promise(resolve => {
+        let externalId;
+        let done = false;
+        const finish = (result) => {
+            if (done)
+                return;
+            done = true;
+            clearTimeout(timer);
+            clearInterval(poll);
+            positions.unsubscribeOnUpdatePosition(callback);
+            resolve({ ...result, externalId });
+        };
+        const timer = setTimeout(() => {
+            finish({ status: 'TIMEOUT', pnl: 0, error: 'Result timeout' });
+        }, timeoutSeconds * 1000);
+        // Initial sync: capture externalId if the position is already in the opened list
+        const existing = positions.getOpenedPositions().find(p => p.orderIds.includes(optionId));
+        if (existing)
+            externalId = existing.externalId;
+        const callback = (pos) => {
+            if (externalId === undefined && pos.orderIds.includes(optionId)) {
+                externalId = pos.externalId;
+            }
+            if (externalId !== undefined && pos.externalId === externalId && pos.status === 'closed') {
+                const pnl = pos.closeProfit ?? 0;
+                const reason = pos.closeReason ?? '';
+                // Primary: trust closeReason from IQ Option.
+                // Fallback: if closeReason is missing/unexpected, use profit.
+                let status;
+                if (reason === 'win')
+                    status = 'WIN';
+                else if (reason === 'equal')
+                    status = 'TIE';
+                else if (reason === 'loss' || reason === 'loose')
+                    status = 'LOSS';
+                else
+                    status = pnl > 0 ? 'WIN' : 'LOSS'; // unknown reason → fallback
+                finish({ status, pnl });
+            }
+        };
+        positions.subscribeOnUpdatePosition(callback);
+        // Polling fallback every 5s:
+        // - Captures externalId if the websocket open event was missed
+        // - Detects close if the websocket close event is never delivered
+        // - Falls back to position history API for trades that left the opened list
+        const poll = setInterval(async () => {
+            const opened = positions.getOpenedPositions();
+            if (externalId === undefined) {
+                const match = opened.find(p => p.orderIds.includes(optionId));
+                if (match)
+                    externalId = match.externalId;
+            }
+            if (externalId !== undefined) {
+                const pos = opened.find(p => p.externalId === externalId);
+                if (pos?.status === 'closed') {
+                    const pnl = pos.closeProfit ?? 0;
+                    const reason = pos.closeReason ?? '';
+                    let status;
+                    if (reason === 'win')
+                        status = 'WIN';
+                    else if (reason === 'equal')
+                        status = 'TIE';
+                    else if (reason === 'loss' || reason === 'loose')
+                        status = 'LOSS';
+                    else
+                        status = pnl > 0 ? 'WIN' : 'LOSS';
+                    finish({ status, pnl });
+                    return;
+                }
+                if (!pos) {
+                    try {
+                        const histApi = positions.getPositionsHistory();
+                        let historyPos = null;
+                        try { historyPos = await histApi.getPositionHistory(externalId); } catch {}
+                        if (!historyPos || historyPos.status !== 'closed') {
+                            try { historyPos = await histApi.getPositionHistory(optionId); } catch {}
+                        }
+                        if (historyPos && historyPos.status === 'closed') {
+                            const pnl = historyPos.closeProfit ?? 0;
+                            const reason = historyPos.closeReason ?? '';
+                            let status;
+                            if (reason === 'win')
+                                status = 'WIN';
+                            else if (reason === 'equal')
+                                status = 'TIE';
+                            else if (reason === 'loss' || reason === 'loose')
+                                status = 'LOSS';
+                            else
+                                status = pnl > 0 ? 'WIN' : 'LOSS';
+                            finish({ status, pnl });
+                        }
+                    }
+                    catch {
+                        // History lookup failed — next poll will retry
+                    }
+                }
+            }
+        }, 2_000);
+    });
+}
+function errorResult(trade, error) {
+    return { status: 'ERROR', pnl: 0, tradeId: 0, pair: trade.pair, direction: trade.direction, amount: trade.amount, error };
+}
