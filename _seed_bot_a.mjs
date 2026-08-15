@@ -22,6 +22,10 @@ const templates = {
     M: { copy: '✦ Today\u2019s goal: +${goal}\n\nYou\u2019re at {progress}% of the way there.\n\nChase it \u2500', buttons: T([TRADE]), image_file: 'm-todays-goal.jpg' },
     N: { copy: '✦ LIMITED-TIME WINDOW\n\nAutopilot usually unlocks at $200 funded.\n\nRight now: {autospot} gets you in.\n\nFund & lock it in \u2500', buttons: T([[{ text: '\u2726 Fund & Unlock', url: 'https://iqoption.com/pwa/payments/deposit' }]]), image_file: 'n-giveaway-open.jpg' },
     O: { copy: '✦ Sequence done\n\nLosses don\u2019t end the story.\n\nNew setup loading — the engine already recalibrated.\n\nNext \u2500', buttons: T([TRADE]), image_file: 'o-new-setup-loading.jpg' },
+    Q1: { copy: '✦ One step away\n\nYour IQ Option account just needs linking — the door is already open.\n\nFinish it \u2500', buttons: T([[{ text: '\u27e1 Connect Account', callback: 'ui:connect' }]]), image_file: 'q1-one-step.jpg' },
+    Q2: { copy: '✦ Your access is waiting\n\nYou started the setup but never finished. Connect and it\u2019s yours.\n\nTake it \u2500', buttons: T([[{ text: '\u27e1 Connect Account', callback: 'ui:connect' }]]), image_file: 'q2-waiting.jpg' },
+    Q3: { copy: '✦ 2 minutes\n\nThat\u2019s all that sits between you and the engine.\n\nLink your account now \u2500', buttons: T([[{ text: '\u27e1 Connect Account', callback: 'ui:connect' }]]), image_file: 'q3-two-minutes.jpg' },
+    R: { copy: '✦ Almost there\n\nYour account is linked — your access is being finalized.\n\nTap below and admin will fast-track you \u2500', buttons: T([[{ text: '\u27e1 Notify Admin', url: 'https://t.me/shiloh_is_10xing' }]]), image_file: 'q2-waiting.jpg' },
     P: { copy: '✦ LIMITED-TIME WINDOW\n\nPrivate Trader usually unlocks at $50 funded.\n\nRight now: {spot} gets you in.\n\nFund & lock it in \u2500', buttons: T([[{ text: '\u2726 Fund & Unlock', url: 'https://iqoption.com/pwa/payments/deposit' }]]), image_file: 'n-giveaway-open.jpg' },
 };
 

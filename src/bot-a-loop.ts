@@ -25,8 +25,10 @@ import { logger } from './logger.js';
 /** Tick cadence. The loop is hourly PER USER; the 60s tick is just the sweep
  *  granularity — per-user pacing comes from the 60-minute activity window. */
 const TICK_MS = 60_000;
-/** Users examined per tick (mirrors the check-in scheduler's batch shape). */
-const BATCH_SIZE = 25;
+/** Users examined per tick. Sized so a full sweep of ~3,000 users completes in
+ *  ~30 minutes — this lets the PENDING segment honor its aggressive 30-min
+ *  cadence without starving the approved rotation. */
+const BATCH_SIZE = 100;
 /** Delay between sends inside a batch — Telegram rate-limit courtesy. */
 const SEND_DELAY_MS = 60;
 /** A trade within this window means the user is active → no nudge. */
@@ -318,11 +320,14 @@ interface Candidate {
     telegram_id: number;
     ssid: string | null;
     funded_balance_usd: number | null;
+    approval_status: string | null;
 }
 
-/** Approved users, admin excluded, restricted to the maintenance allowlist when
- *  the gate is on and to the test user when test mode is set. The allowlist and
- *  test filters are applied IN SQL so the batch LIMIT can never starve them. */
+/** Approved AND pending users, admin excluded, restricted to the maintenance
+ *  allowlist when the gate is on and to the test user when test mode is set.
+ *  The allowlist and test filters are applied IN SQL so the batch LIMIT can
+ *  never starve them. Pending users (never finished connect/approval) are
+ *  included so the loop can chase them with the connect nudge. */
 function getCandidates(limit: number): Candidate[] {
     const params: Array<string | number> = [];
     let extraSql = '';
@@ -339,9 +344,10 @@ function getCandidates(limit: number): Candidate[] {
 
     params.push(getAdminId(), limit);
     return db.prepare(`
-        SELECT u.telegram_id AS telegram_id, u.ssid AS ssid, u.funded_balance_usd AS funded_balance_usd
+        SELECT u.telegram_id AS telegram_id, u.ssid AS ssid, u.funded_balance_usd AS funded_balance_usd,
+               u.approval_status AS approval_status
         FROM users u
-        WHERE u.approval_status = 'approved'${extraSql}
+        WHERE u.approval_status IN ('approved', 'pending')${extraSql}
           AND u.telegram_id != ?
         ORDER BY COALESCE((SELECT s.last_sent_at FROM bot_a_sent s WHERE s.telegram_id = u.telegram_id), '')
         LIMIT ?
@@ -396,6 +402,13 @@ function daysSinceLastTrade(lastTs: string | null): number {
 
 /** Segment → archetype set (Part 5.4). */
 function eligibleArchetypes(c: Candidate): string[] {
+    // Pending (never approved) → chase them to finish the connect/approval.
+    // Connected-but-unapproved users get R (fast-track) instead of the connect
+    // chase — asking them to "link" an account they already linked is wrong.
+    if (c.approval_status === 'pending') {
+        const hasSsid = !!c.ssid && c.ssid !== '';
+        return hasSsid ? ['R'] : ['Q1', 'Q2', 'Q3'];
+    }
     const hasSsid = !!c.ssid && c.ssid !== '';
     if (!hasSsid) return ['G'];
     if ((c.funded_balance_usd ?? 0) <= 0) return ['H'];
@@ -453,11 +466,16 @@ async function tick(bot: Telegraf): Promise<void> {
             if (tradedRecently(uid)) continue;
 
             const prior = readSent(uid);
+            // Segment-aware limits: pending users get the aggressive 30-min
+            // cadence (48/day cap) — everyone else stays hourly (24/day).
+            const isPending = c.approval_status === 'pending';
+            const pacingMin = isPending ? 30 : ACTIVITY_WINDOW_MIN;
+            const cap = isPending ? 48 : DAILY_CAP;
             // Daily cap (per Lagos date — a stale date means today's count is 0).
-            if (prior && prior.sent_date === today && prior.sent_count >= DAILY_CAP) continue;
-            // Hourly pacing: this loop is hourly PER USER, so a nudge sent inside
-            // the last hour blocks the next one regardless of the tick cadence.
-            if (prior?.last_sent_at && Date.parse(prior.last_sent_at.replace(' ', 'T') + 'Z') > Date.now() - ACTIVITY_WINDOW_MIN * 60_000) continue;
+            if (prior && prior.sent_date === today && prior.sent_count >= cap) continue;
+            // Per-user pacing: a nudge sent inside the pacing window blocks the
+            // next one regardless of the tick cadence.
+            if (prior?.last_sent_at && Date.parse(prior.last_sent_at.replace(' ', 'T') + 'Z') > Date.now() - pacingMin * 60_000) continue;
             // Never stack on a fresh check-in.
             if (checkinTooFresh(uid)) continue;
 
