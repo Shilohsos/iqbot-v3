@@ -36,6 +36,12 @@ class UserSdkPool {
                 existing.healthy = false;
                 console.warn(`[pool] user ${userId} SDK is closing/not-open — marked unhealthy, rebuilding`);
             }
+            // Same for a live socket whose rate/actives feed never populated: the
+            // healthy-flag fast path below would otherwise hand it straight out.
+            if (existing.healthy && this.sdkFeedBroken(existing.sdk)) {
+                existing.healthy = false;
+                console.warn(`[pool] user ${userId} blitz actives map is empty — marked unhealthy, rebuilding (dead rate feed)`);
+            }
             const ssidMismatch = existing.ssid !== ssid;
             if (!ssidMismatch && existing.healthy) {
                 existing.inUse = true;
@@ -134,6 +140,25 @@ class UserSdkPool {
         return false;
     }
 
+    /** True when this SDK has an ALREADY-BUILT blitz facade whose actives map is
+     *  empty — a socket that reached the feed but never populated it. Buys on it
+     *  can only fail, so the pool must rebuild rather than hand it out.
+     *
+     *  Cost is one synchronous Map read: the cached facade is only inspected when
+     *  it already exists, so this never triggers the request that would create it
+     *  and never adds latency (directive §4.2). Note this is deliberately NOT a
+     *  rate-comparison probe — profit rates are stable for minutes, so "the rate
+     *  did not change" carries no information about feed health (see REPORT.md). */
+    sdkFeedBroken(sdk) {
+        try {
+            const blitz = sdk?.blitzOptionsFacade;
+            if (!blitz || typeof blitz.getActives !== 'function') return false; // not built yet — nothing to judge
+            const actives = blitz.getActives();
+            return Array.isArray(actives) && actives.length === 0;
+        } catch { /* can't check — treat as fine */ }
+        return false;
+    }
+
     /** Part C: consumers report an observed closing/not-open rejection so the
      *  next get() rebuilds instead of returning the same dying SDK. */
     markUnhealthy(userId, reason) {
@@ -160,6 +185,13 @@ class UserSdkPool {
             const client = entry.sdk?.wsApiClient;
             if (client && (client.isClosing || client.disconnecting)) {
                 entry.healthy = false;
+                return false;
+            }
+            // Rate/actives feed sanity — a live socket with an empty actives map
+            // can only produce failed buys (4117 / unknown pair).
+            if (this.sdkFeedBroken(entry.sdk)) {
+                entry.healthy = false;
+                console.warn('[pool] entry has an empty blitz actives map — marking unhealthy (dead rate feed)');
                 return false;
             }
         } catch { /* can't check — trust healthy flag */ }

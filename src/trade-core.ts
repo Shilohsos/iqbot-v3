@@ -13,6 +13,20 @@ import {
 } from './index.js';
 import { db } from './db.js';
 import { logger } from './logger.js';
+import { sdkPool } from './sdk-pool.js';
+
+/** Flag this user's pooled socket for rebuild on the NEXT get(). Used when the
+ *  rate path on this connection proves broken (refresh failure, or 4117 that
+ *  survives the whole retry ladder) so the next opportunity does not reuse it.
+ *  Best-effort: a user trading on a non-pooled SDK simply has no entry. */
+function markSocketUnhealthy(telegramId: number | undefined, reason: string): void {
+    if (telegramId == null) return;
+    try {
+        sdkPool.markUnhealthy(telegramId, reason);
+    } catch (e) {
+        logger.warn('trade-core', `markUnhealthy failed for ${telegramId}: ${e instanceof Error ? e.message : e}`);
+    }
+}
 
 export type FinalStatus = 'WIN' | 'LOSS' | 'TIE' | 'NO_FILL';
 
@@ -314,18 +328,18 @@ export async function settle(sdk: ClientSdk, order: CoreOrder): Promise<CoreFina
                 normTicker(a.ticker) === normalizedInput ||
                 normTicker(a.localizationKey) === normalizedInput
             );
-        // Rate-freshness probe: on a rebuilt connection the OTC rate feed can be
-        // dead while the socket itself is alive — refreshActives then returns the
-        // SAME stale profitPercent forever and every buy is rejected with 4117.
-        // Sample the rate before refresh; if refresh + warm-up never changes it,
-        // the feed is dead — abort BEFORE the doomed buy so the caller rebuilds.
-        const rateBeforeRefresh = readActive()?.profitPercent;
-        // refresh actives when available
+        // Refresh actives immediately before the buy so profit_percent is current.
+        // A refresh that FAILS (throws/times out) is the only sound signal that this
+        // connection's rate path is broken — an *unchanged* rate is not: payout rates
+        // hold steady for minutes at a time, so "rate did not change" is the normal
+        // case, not evidence of a dead feed. (The removed freshness probe inferred
+        // exactly that and aborted every buy — see REPORT.md.)
         try {
             const refresh = (blitzOptions as any).refreshActives?.();
             if (refresh) await sdkTimeout(refresh, 'refreshActives', 15_000);
         } catch (e) {
             logger.warn('trade-core', `refreshActives failed (using cached actives): ${e instanceof Error ? e.message : e}`);
+            markSocketUnhealthy(order.telegramId, `refreshActives failed: ${e instanceof Error ? e.message : e}`);
         }
         // Warm-up: on a fresh/rebuilt connection the actives snapshot can carry a
         // stale profit rate; IQ then rejects the first buy with 4117. Let the feed
@@ -333,20 +347,6 @@ export async function settle(sdk: ClientSdk, order: CoreOrder): Promise<CoreFina
         await new Promise(r => setTimeout(r, 1200));
         const active = readActive();
         if (!active) return noFill(`Unknown pair: ${pair}`);
-        const rateAfterWarm = active.profitPercent;
-        if (rateBeforeRefresh !== undefined && rateAfterWarm === rateBeforeRefresh) {
-            // One more refresh + sample before concluding the feed is dead.
-            try {
-                const rf2 = (blitzOptions as any).refreshActives?.();
-                if (rf2) await sdkTimeout(rf2, 'refreshActives-warm2', 10_000);
-            } catch { /* keep last sample */ }
-            await new Promise(r => setTimeout(r, 800));
-            const rateAfterRetry = readActive()?.profitPercent;
-            if (rateAfterRetry === rateBeforeRefresh) {
-                logger.warn('trade-core', `rate feed not syncing pair=${pair} before=${rateBeforeRefresh} after=${rateAfterRetry} — aborting buy (stale rate → 4117)`);
-                return noFill('Payout rate changed');
-            }
-        }
         if (!active.canBeBoughtAt(currentTime)) return noFill(`${pair} market is closed right now`);
         if (!active.expirationTimes.includes(targetSize)) return noFill(`No ${targetSize}s instrument available for ${pair}`);
 
@@ -383,8 +383,15 @@ export async function settle(sdk: ClientSdk, order: CoreOrder): Promise<CoreFina
                         return noFill(m2);
                     }
                 }
-                if (!placed)
+                if (!placed) {
+                    // The rate stayed rejected across the whole ladder — this
+                    // connection's rate path is the suspect, so flag it for rebuild
+                    // and let the NEXT opportunity open a fresh socket rather than
+                    // re-failing on this one (directive §4.3).
+                    logger.warn('trade-core', `4117 survived ${backoffs.length} retries pair=${pair} — flagging socket for rebuild`);
+                    markSocketUnhealthy(order.telegramId, '4117 survived retry ladder');
                     return noFill('Payout rate changed');
+                }
             } else if (isTimeoutError(buyErr) || /WebSocket|is closing|not open/i.test(msg)) {
                 return noFill(`Buy failed — no trade placed (${msg})`);
             } else {
