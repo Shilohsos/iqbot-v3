@@ -1,158 +1,141 @@
-# REPORT — 4117 "Payout rate changed" Permanent Fix
+# REPORT — Affiliate verification: full-history check (window-orphan fix)
 
-**Branch:** `claude/4117-permanent-fix` (from `c89e047`)
-**Files changed:** `src/trade-core.ts`, `src/sdk-pool.ts` (+ this REPORT.md)
-**Files NOT changed:** `src/bot.ts` (already correct — see §4), `src/index.ts` (no bug found — see §2)
+**Branch:** `claude/affiliate-verification-full-history` (from `d203021`)
+**Files changed:** `src/affiliate.ts`, `src/db.ts` (+ this REPORT.md)
 
----
-
-## 1. Root-cause verdict
-
-**The current total outage is not IQ Option's 4117. It is a bug in the rate-freshness probe added on 2026-08-16 — the probe aborts 100% of buys, for every user, on every pair, unconditionally.**
-
-`BlitzOptionsActive.profitPercent` is a **method** (`src/index.ts:4699`):
-
-```ts
-public profitPercent(): number { return 100 - this.profitCommissionPercent }
-```
-
-The probe in `settle()` read it **without calling it** (three places — `trade-core.ts:322/336/344`):
-
-```ts
-const rateBeforeRefresh = readActive()?.profitPercent;   // ← a Function, not a number
-const rateAfterWarm     = active.profitPercent;          // ← the same Function
-if (rateAfterRetry === rateBeforeRefresh) return noFill('Payout rate changed');
-```
-
-Both sides are the **same prototype method reference**, so the comparison is `true` on every
-execution. `updateActives()` mutates actives in place rather than replacing them, so the object
-identity never changes either — and even across two *different* actives the reference is
-identical, because methods live on the shared prototype. The guard therefore always falls
-through to `return noFill('Payout rate changed')` **before the buy is ever attempted**.
-
-That reproduces the reported symptom exactly: the caller's `buyFailRetries` cap of 2 produces
-two identical `not filled (⚠️ Payout rate changed — try again in a moment.)` lines, then
-"Trade not confirmed", with no order placed and no money lost — every single time, which is why
-one user saw the same trade fail five times in a row.
-
-Empirical before/after on identical healthy-market inputs (mock SDK, rate stable, buy would
-succeed):
-
-| | buys attempted | settle result |
-|---|---|---|
-| **Before** (master `c89e047`) | **0** | `NO_FILL — "Payout rate changed"` |
-| **After** (this branch) | **1** | buy placed, awaiting settlement |
-
-### Why the probe cannot be repaired, only removed
-
-Adding the missing `()` would fix the type error but not the logic. The probe infers
-"the rate did not change ⇒ the feed is dead". **Payout rates are stable for minutes at a time**,
-so "unchanged across two refreshes ~2s apart" is the *normal, healthy* case. A corrected probe
-would still abort a large share of legitimate trades. The inference is unsound at the premise,
-so the probe is removed rather than patched.
-
-### The directive's "dead subscription" hypothesis is disproved
-
-Directive §4.1 asked whether an actives/rate **subscription** fails to re-arm after reconnect.
-It does not — there is no such subscription:
-
-- `BlitzOptions.refreshActives()` (`index.ts:4487`) is a live request/response round-trip
-  (`wsApiClient.doRequest(CallBinaryOptionsGetInitializationDataV3)`), not a cached snapshot
-  and not a push feed.
-- The only background element is a 60s `setInterval` (`index.ts:4448`) that performs the *same*
-  round-trip; it holds no subscription state to lose across a reconnect.
-- `buy()` (`index.ts:4500`) already refreshes immediately before sending and re-reads the
-  refreshed active on its internal retry.
-
-A rebuilt socket that can serve `balances()` can serve `getInitializationDataV3` too. **No change
-to `src/index.ts` was needed or made.** Genuine 4117s therefore come from the real race — IQ
-moves the payout between our refresh and their validation — which the existing retry ladder is
-the right tool for, and which is left intact.
+> This replaces the previous REPORT.md (the 4117 fix), per the directive's
+> "REPORT.md at branch root" convention. That report is preserved in history at
+> commit `db0fb86` — say the word if you'd rather keep both files side by side.
 
 ---
+
+## 1. What was broken
+
+`checkAffiliate()` read only the last `AFFILIATE_SCAN_LIMIT` (1000) channel
+messages and then fell back to `lead_events`, which records **deposits only**. A
+user who registered but had not yet deposited, whose registration had scrolled
+past 1000 messages, was therefore unverifiable — permanently, and by design of
+the old logic rather than by accident. That is user `195190255` (telegram
+`8381978441`): registered ~00:05, failed 5 times across the day.
+
+The window is a moving target, so this silently orphans *every* legitimate
+registration as the channel advances — the two other users the same evening are
+the same failure, not a coincidence.
 
 ## 2. What changed
 
-### `src/trade-core.ts`
+`checkAffiliate()` now consults four layers, cheapest first, and returns on the
+first hit:
 
-1. **Removed the freshness probe** (the outage). The `refreshActives()` call and the 1.2s
-   warm-up before the buy are **kept** — both are sound and were helping.
-2. **Sound dead-feed signal instead:** a `refreshActives()` that *throws or times out* is real
-   evidence the rate path is broken. That now flags the user's pooled socket for rebuild via a
-   new `markSocketUnhealthy()` helper. Zero added latency — it reuses the refresh already
-   performed. The buy still proceeds on cached actives (refusing to trade would be worse).
-3. **Escalation after the ladder (directive §4.3):** when 4117 survives all four backoff
-   retries, the socket is flagged unhealthy so the **next** opportunity opens a fresh
-   connection instead of re-failing on the same one. A 4117 that recovers mid-ladder does *not*
-   flag anything — no needless rebuilds.
+| # | Layer | Cost | Covers |
+|---|---|---|---|
+| 0 | **Local archive** (`affiliate_messages`) | no network | anything seen once before — permanently |
+| 1 | **Telegram server-side search** | 1 round-trip | the channel's **entire** history, any age |
+| 2 | **Resumable backfill** | paginated | search unavailable / rate-limited |
+| 3 | **`lead_events`** | local | depositors (unchanged) |
 
-The retry ladder itself (`[1000, 2000, 3000, 4000]`ms, same-stake, fresh active re-read each
-attempt) is byte-for-byte unchanged, as is the NO_FILL contract and the "no gale double on
-unconfirmed" law.
+**Layer 1** replaces the window: `getMessages(channelId, { search: userIdStr, limit: 10 })`
+is a server-side search across all history, so registration age stops mattering.
+Every hit is written to the archive, so it never costs a round-trip twice.
 
-### `src/sdk-pool.ts`
+**Layer 2** paginates backwards in 200-message pages, persisting every message.
+Two properties make this safe under the 15s cap:
 
-New `sdkFeedBroken(sdk)` (directive §4.2) — a socket whose **already-built** blitz facade has an
-**empty actives map** can only produce failed buys, so the pool now rebuilds instead of handing
-it out. Wired into both `isEntryHealthy()` and the `get()` healthy-flag fast path (the fast path
-matters: it returns early without consulting `isEntryHealthy`).
+- **Budget-bounded.** The whole call shares one 15s deadline. Pagination stops
+  when less than 2s remains; the user never waits longer than the pre-existing cap.
+- **Resumable, so partial work is not wasted.** The cursor is derived from the
+  archive itself (`MIN(channel_msg_id)`), so a run cut short by the budget resumes
+  exactly where it stopped on the next verification. The archive converges to the
+  full history across calls without any single user ever waiting on it.
 
-Cost is one synchronous `Map` read. It inspects `blitzOptionsFacade` **only when it already
-exists**, so it never triggers the request that would create it and adds no latency. Deliberately
-**not** a rate-comparison probe, for the reason in §1.
+A module-level guard prevents two concurrent verifications from paginating the
+same range in parallel.
 
-### `src/bot.ts` — intentionally unchanged
+**Robust matching:** IDs are extracted with `\b(19\d{7})\b` in addition to
+`includes()`, so `ID: 195190255`, `user_id:195190255,` and punctuation-wrapped
+payloads are caught and — critically — *extractable* for the archive index.
 
-The escalation §3 describes (mark unhealthy on the 2nd consecutive 4117) is already present and
-correct at `bot.ts:1864`, in plain JavaScript. Nothing needed adding, so nothing was touched —
-the file remains 100% plain JS for build-safe's verbatim copy.
+### Schema (`src/db.ts`)
 
----
+```sql
+CREATE TABLE IF NOT EXISTS affiliate_messages (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel_msg_id INTEGER NOT NULL,
+    iq_user_id     TEXT    NOT NULL DEFAULT '',
+    raw_text       TEXT    NOT NULL DEFAULT '',
+    msg_date       TEXT,
+    UNIQUE(channel_msg_id, iq_user_id)
+);
+-- + indexes on iq_user_id and channel_msg_id
+```
+
+Two deliberate choices beyond the directive's sketch:
+
+- `UNIQUE(channel_msg_id, iq_user_id)` — without it `INSERT OR IGNORE` has nothing
+  to ignore *on*, so re-scanning would duplicate every row.
+- `iq_user_id` defaults to `''` rather than NULL for messages carrying no ID.
+  SQLite treats NULLs as distinct in a UNIQUE index, so NULL would defeat the
+  dedupe; `''` also lets those rows mark how far back the archive reaches, which
+  is what makes the backfill cursor work.
+
+A message listing several IDs yields one row per ID.
+
+**Unchanged, as required:** the approval flow, `approveUser`, the 3-tier
+fail-count escalation, admin notifications, `lead_events` itself, the GramJS
+singleton, and the 15s timeout discipline.
 
 ## 3. How to verify
 
-**Type-check:** `npx tsc --noEmit` is byte-identical to the pre-change baseline — zero new errors.
-`node --check` clean on both compiled modules.
+**Automated:** 14/14 assertions against the compiled module with a mocked channel
+of 5,000 messages where the target registration sits 3,500 deep — i.e. far outside
+the old 1000-message window:
 
-**Automated:** 17/17 assertions against the compiled output cover the regression (a normal trade
-now reaches `buy()`), the ladder still retrying 1+4 times, mid-ladder recovery not flagging the
-socket, ladder exhaustion flagging it, refresh-failure flagging it, and `sdkFeedBroken`'s
-true/false/no-verdict cases including `get()` rebuilding rather than returning a broken socket.
+- search verifies the orphaned registration in **3ms**, no pagination;
+- the second check hits the archive with **zero network calls**;
+- with search forced unavailable, backfill verifies via **18 pages / 3,600 msgs in 244ms**;
+- punctuation-wrapped `user_id:195190255,` verifies;
+- an ID genuinely *not* on the channel is still **rejected** (no false positives);
+- the `lead_events` depositor path still works and keeps its `[history]` shape.
 
-**Log signatures after deploy:**
+`npx tsc --noEmit` is byte-identical to the pre-change baseline (zero new errors);
+`node --check` clean on the compiled module.
 
-- *The outage is gone* — this line must **stop** appearing:
-  `[trade-core] rate feed not syncing pair=… — aborting buy (stale rate → 4117)`
-  It is deleted with the probe; any occurrence means the old build is still running.
-- *Normal trade:* `[trade-core] SETTLE final=… pair=… source=…` at the usual rate. Users should
-  stop seeing `not filled (⚠️ Payout rate changed…)` on healthy markets.
-- *Genuine 4117, recovered:* `[trade-core] buy rejected (profit-rate/4117) … retrying same stake`
-  followed by a successful `SETTLE` — no pool churn.
-- *Genuine 4117, persistent:* `[trade-core] 4117 survived 4 retries pair=… — flagging socket for rebuild`
-  then `[pool] user … marked unhealthy: 4117 survived retry ladder`. The **next** attempt should
-  open a fresh socket and succeed; a user repeating this every time now means a real IQ-side
-  rate problem on that pair, not a stuck socket.
-- *Dead feed caught by the pool:* `[pool] user … blitz actives map is empty — marked unhealthy (dead rate feed)`.
+**Log signatures after deploy** — the miss → paginate → hit sequence:
 
-**Manual:** one live trade on a healthy OTC pair should now place. Before this branch it could not,
-regardless of pair, user, or retry count.
+```
+[affiliate] search HIT for 195190255 (msg 1500)              ← layer 1, the common case
+[affiliate] search MISS for <id> — paginating channel history ← falling to layer 2
+[affiliate] backfill HIT for <id> after 3600 msgs (18 pages)  ← layer 2 succeeded
+[affiliate] backfill budget spent after N msgs (P pages) — archive advanced, resuming next call
+[affiliate] backfill reached the start of channel history after N msgs
+[affiliate] NOT FOUND for <id> after search + backfill + lead_events  ← genuine miss
+```
 
----
+**Manual check on the live user:** `checkAffiliate(195190255)` should now return
+`found: true`. Confirm the archive is filling with:
+
+```sql
+SELECT COUNT(*) FROM affiliate_messages;
+SELECT * FROM affiliate_messages WHERE iq_user_id = '195190255';
+```
 
 ## 4. Follow-up risks
 
-1. **Genuine 4117 races still exist and are expected.** This branch removes a self-inflicted
-   100% block; it cannot remove IQ-side rate movement. Residual 4117 should now be rare and
-   self-healing via the ladder + socket rebuild. If a specific pair still fails persistently
-   after a rebuild, that is an IQ-side condition worth escalating with the log lines above.
-2. **The 1.2s warm-up is retained on faith, not evidence.** It predates this work and was not
-   part of the reported bug, so I left it. It costs 1.2s of latency on every trade. If you want
-   it measured, the `SETTLE … ms=` field before/after removing it is the experiment — I did not
-   change it because that is a behavior change outside this directive.
-3. **`markSocketUnhealthy` only affects pooled sockets.** Trades on a non-pooled SDK (e.g. the
-   admin path that builds its own connection) have no pool entry; the call is a safe no-op there.
-   Those paths already rebuild by other means.
-4. **Directive §4.5 (pinning the analyzed rate) was assessed and not implemented.** The buy must
-   send the rate IQ currently accepts; pinning an older analyzed rate would *cause* 4117 rather
-   than prevent it. The existing refresh-immediately-before-buy is already the correct
-   mitigation, so no change was low-risk enough to justify.
+1. **The `raw_text LIKE '%id%'` backstop is a table scan.** It runs only after the
+   indexed exact-match misses — i.e. on genuinely-new or unknown IDs. Cheap at
+   today's archive size; if the archive grows into the hundreds of thousands of
+   rows and verification latency becomes visible, the fix is an FTS index or
+   dropping the LIKE (the regex extraction already covers the known formats).
+2. **The `19`-prefix assumption.** `\b(19\d{7})\b` matches the observed ID format.
+   If IQ Option ever issues IDs outside that prefix, extraction misses them —
+   though layer 1's `includes()` search and the LIKE backstop would still verify
+   them, so the failure mode is a slower check, not a false rejection.
+3. **First backfill on a large channel spans several verifications.** By design:
+   each call advances the archive within its budget. Nothing is lost, but the very
+   first users after deploy may fall through to layer 3 while the archive is still
+   filling. Layer 1 covers them in the meantime, so this only bites if server-side
+   search is also unavailable.
+4. **Backfill archives the whole channel, including non-registration messages.**
+   That is intentional (it is what makes the cursor resumable), but the table will
+   grow to roughly one row per channel message. Bounded by channel size, not by
+   user count.

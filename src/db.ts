@@ -558,6 +558,30 @@ db.exec(`
   )
 `);
 
+// Durable archive of affiliate-channel messages
+// (DIRECTIVE-AFFILIATE-VERIFICATION-FULL-HISTORY.md). The old check scanned only
+// the last N channel messages, so a registration that scrolled out of that window
+// could never be verified again. Every scanned message is persisted here, so once
+// an ID is archived it verifies instantly and permanently — no window, no network.
+// iq_user_id is '' for messages carrying no extractable ID; those rows still mark
+// how far back the archive reaches, which drives resumable backfill.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS affiliate_messages (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel_msg_id INTEGER NOT NULL,
+    iq_user_id     TEXT    NOT NULL DEFAULT '',
+    raw_text       TEXT    NOT NULL DEFAULT '',
+    msg_date       TEXT,
+    UNIQUE(channel_msg_id, iq_user_id)
+  )
+`);
+for (const idx of [
+    'CREATE INDEX IF NOT EXISTS idx_affiliate_messages_user ON affiliate_messages(iq_user_id)',
+    'CREATE INDEX IF NOT EXISTS idx_affiliate_messages_msgid ON affiliate_messages(channel_msg_id)',
+]) {
+    try { db.exec(idx); } catch (e) { console.error('[db] index failed:', idx, e instanceof Error ? e.message : e); }
+}
+
 // Daily-rotating values for Bot A templates (e.g. the limited-time Private
 // Trader spot price, which changes once per Lagos day).
 db.exec(`
