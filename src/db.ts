@@ -153,7 +153,10 @@ if (!finalUserCols.includes('total_signals_used'))
 if (!finalUserCols.includes('live_signals_used'))
     db.exec('ALTER TABLE users ADD COLUMN live_signals_used INTEGER NOT NULL DEFAULT 0');
 
-// Bot A limited-time spot promo: promo_product + promo_access_until grant
+if (!finalUserCols.includes('bonus_amount'))
+    db.exec('ALTER TABLE users ADD COLUMN bonus_amount REAL NOT NULL DEFAULT 0');
+
+// Bot A limited-time spot promo: promo_product + promo_acc...
 // 14-day product access to users who fund during an active window.
 if (!finalUserCols.includes('promo_access_until'))
     db.exec('ALTER TABLE users ADD COLUMN promo_access_until TEXT');

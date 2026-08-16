@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Compounding on IQ Option with 10x AI — The Practical Guide</title>
+<style>
+  @page { size: A4; margin: 0; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Helvetica Neue', Arial, sans-serif; background: #0A0A0D; color: #E8E6E0; }
+  .page { width: 210mm; height: 297mm; page-break-after: always; position: relative; overflow: hidden; }
+  .page:last-child { page-break-after: auto; }
+
+  .cover { display: flex; flex-direction: column; justify-content: center; padding: 30mm 22mm; }
+  .cover .wordmark { font-size: 11pt; letter-spacing: 6px; color: #F5B800; font-weight: 700; margin-bottom: 24mm; }
+  .cover h1 { font-family: Georgia, serif; font-size: 40pt; line-height: 1.15; color: #FFFFFF; }
+  .cover h1 .gold { color: #F5B800; }
+  .cover .sub { margin-top: 10mm; font-size: 12.5pt; color: #8A8A8F; line-height: 1.9; }
+  .cover .rule { width: 34mm; height: 2px; background: #F5B800; margin-top: 12mm; }
+  .cover .foot { position: absolute; bottom: 18mm; left: 22mm; font-size: 9pt; color: #5A5A60; letter-spacing: 4px; }
+
+  .content { padding: 22mm 20mm; }
+  .content h2 { font-family: Georgia, serif; font-size: 20pt; color: #F5B800; margin-bottom: 6mm; }
+  .content h3 { font-size: 12.5pt; color: #FFFFFF; margin: 6mm 0 3mm; }
+  .content p { font-size: 10.5pt; line-height: 1.7; color: #C9C7C0; margin-bottom: 3.5mm; }
+  .content ul { margin: 0 0 4mm 6mm; }
+  .content li { font-size: 10.5pt; line-height: 1.65; color: #C9C7C0; margin-bottom: 2mm; }
+  .content .gold { color: #F5B800; font-weight: 700; }
+  .content .card { border: 1px solid rgba(245,184,0,0.4); border-radius: 3mm; padding: 6mm 7mm; margin: 5mm 0; }
+  .content .card h4 { color: #F5B800; font-size: 11pt; letter-spacing: 2px; margin-bottom: 2.5mm; }
+  table { width: 100%; border-collapse: collapse; margin: 5mm 0; font-size: 9.5pt; }
+  th { color: #F5B800; text-align: left; padding: 3mm 2.5mm; border-bottom: 1px solid rgba(245,184,0,0.5); letter-spacing: 1px; }
+  td { padding: 2.8mm 2.5mm; border-bottom: 1px solid #232329; color: #C9C7C0; }
+  .step { display: flex; gap: 5mm; margin-bottom: 4mm; }
+  .step .n { font-family: Georgia, serif; font-size: 15pt; color: #F5B800; min-width: 9mm; }
+  .step .t p { margin-bottom: 1.5mm; }
+  .footnote { font-size: 8.5pt; color: #6A6A70; line-height: 1.6; margin-top: 5mm; border-top: 1px solid #232329; padding-top: 3.5mm; }
+  .quote { border-left: 2px solid #F5B800; padding: 3.5mm 5mm; margin: 5mm 0; font-style: italic; color: #E8E6E0; font-size: 11pt; }
+</style>
+</head>
+<body>
+
+<!-- COVER -->
+<div class="page cover">
+  <div class="wordmark">10X AI</div>
+  <h1>The Practical Guide to<br><span class="gold">Compounding</span> on<br>IQ Option</h1>
+  <div class="rule"></div>
+  <div class="sub">WITH 10X AI · SMALL CAPITAL &amp; BIG CAPITAL<br>A real working method, step by step</div>
+  <div class="foot">· BY 10X AI ·</div>
+</div>
+
+<!-- WHAT COMPOUNDING IS -->
+<div class="page content">
+  <h2>1. What compounding actually is</h2>
+  <p>Compounding means your profits stay in the account and the next trade is sized off the <span class="gold">new, larger balance</span>. You never withdraw the winnings mid-cycle, and you never reset your stake back to the original amount.</p>
+  <p>On IQ Option binary options this works because each trade has a fixed payout. When you stake a percentage of your balance and win, the profit is a percentage of the <em>current</em> balance — so a 10% account week is always 10% of whatever the account has grown to.</p>
+  <div class="card">
+    <h4>THE COMPOUND FORMULA</h4>
+    <p>Balance after N weeks = Start × (1 + weekly return)<sup>N</sup></p>
+    <p>$100 at +10%/week → after 8 weeks: 100 × 1.1<sup>8</sup> = <span class="gold">$214</span><br>
+       $100 at +15%/week → after 8 weeks: 100 × 1.15<sup>8</sup> = <span class="gold">$306</span><br>
+       $1,000 at +10%/week → after 8 weeks: 1,000 × 1.1<sup>8</sup> = <span class="gold">$2,144</span></p>
+  </div>
+  <p>The engine (10x AI) finds the direction. The compounding method decides how much to risk and what to do with the result. <span class="gold">You control the growth; the engine controls the entries.</span></p>
+</div>
+
+<!-- HOW IQ OPTION TRADES WORK -->
+<div class="page content">
+  <h2>2. The mechanics on IQ Option</h2>
+  <p>You trade OTC pairs (EURUSD-OTC, GBPUSD-OTC, and the others) on short timeframes. Each trade is a binary option: you predict whether the price ends <span class="gold">above (Higher/BUY)</span> or <span class="gold">below (Lower/SELL)</span> the entry when the timer expires.</p>
+  <h3>Payouts</h3>
+  <p>OTC pairs pay roughly <span class="gold">86%</span> on a winning trade. If you stake $100 and win, you get your $100 back plus $86 profit. If you lose, you lose the $100.</p>
+  <h3>What that means for compounding</h3>
+  <p>A winning trade at 86% payout grows the account by <span class="gold">0.86 × stake%</span>. A losing trade shrinks it by the stake%. So the two numbers that decide everything are:</p>
+  <ul>
+    <li><span class="gold">Your win rate</span> — how often the direction is right (10x AI's job)</li>
+    <li><span class="gold">Your stake size</span> — the % of balance per trade (your job)</li>
+  </ul>
+  <div class="card">
+    <h4>WHY STAKE SIZE MATTERS MORE THAN WIN RATE</h4>
+    <p>At 86% payout and a 60% win rate, a 2% stake nets ≈ +0.23% per trade on average. A 10% stake with the same win rate nets ≈ +1.16% — but a single losing streak of 4 trades costs −34% of the balance. <span class="gold">Small stakes survive the streaks; large stakes die before the streak ends.</span></p>
+  </div>
+</div>
+
+<!-- THE CORE RULE -->
+<div class="page content">
+  <h2>3. The one rule everything hangs on</h2>
+  <div class="card">
+    <h4>NEVER RISK MORE THAN YOUR RULE ALLOWS</h4>
+    <p>Stake = a fixed percentage of the <span class="gold">current live balance</span>, recalculated after every trade. Not a fixed dollar amount. Not "what I feel like." A percentage.</p>
+  </div>
+  <table>
+    <tr><th>Capital class</th><th>Stake per trade</th><th>Daily loss stop</th><th>Weekly target</th></tr>
+    <tr><td>Small ($50 – $500)</td><td>1 – 2% of balance</td><td>−8% of balance</td><td>+8% to +15%</td></tr>
+    <tr><td>Big ($1,000+)</td><td>0.5 – 1% of balance</td><td>−5% of balance</td><td>+4% to +8%</td></tr>
+  </table>
+  <p>Small capital needs bigger percentages because the absolute amounts are tiny. Big capital must use smaller percentages because the absolute amounts are already meaningful — protecting the base matters more than speed.</p>
+  <p class="footnote">These are starting guides, not promises. Adjust the stake down, never up, until you have four straight green weeks.</p>
+</div>
+
+<!-- SMALL CAPITAL -->
+<div class="page content">
+  <h2>4. Small capital — the $50 to $500 plan</h2>
+  <h3>Your setup in 10x AI</h3>
+  <ul>
+    <li>Product: <span class="gold">Private Trader</span> (guided) or <span class="gold">Autopilot</span> (automated)</li>
+    <li>Pair: one liquid OTC pair you stay with (EURUSD-OTC is the default)</li>
+    <li>Timeframe: 1m or 2m — short enough to compound daily</li>
+    <li>Stake: <span class="gold">2% of balance</span>, never more</li>
+  </ul>
+  <h3>The daily routine</h3>
+  <div class="step"><div class="n">1</div><div class="t"><p><span class="gold">Check the balance</span> — the stake is 2% of whatever it is today, not what it was last week.</p></div></div>
+  <div class="step"><div class="n">2</div><div class="t"><p><span class="gold">Trade the engine's setups</span> — take the recommended asset/timeframe, or let Autopilot run.</p></div></div>
+  <div class="step"><div class="n">3</div><div class="t"><p><span class="gold">Stop at the daily limit</span> — −8% of balance means the session is over. Tomorrow is another session.</p></div></div>
+  <div class="step"><div class="n">4</div><div class="t"><p><span class="gold">Reinvest every win</span> — profit stays in; next stake is 2% of the new balance.</p></div></div>
+  <h3>What +10%/week looks like</h3>
+  <table>
+    <tr><th>Week</th><th>Balance ($100 start)</th><th>Balance ($500 start)</th></tr>
+    <tr><td>0</td><td>$100</td><td>$500</td></tr>
+    <tr><td>2</td><td>$121</td><td>$605</td></tr>
+    <tr><td>4</td><td>$146</td><td>$732</td></tr>
+    <tr><td>6</td><td>$177</td><td>$886</td></tr>
+    <tr><td>8</td><td>$214</td><td>$1,072</td></tr>
+  </table>
+  <p class="footnote">+10%/week is a strong but achievable target for a 1m/2m OTC routine with the engine. Some weeks will be better, some worse — the method absorbs both.</p>
+</div>
+
+<!-- BIG CAPITAL -->
+<div class="page content">
+  <h2>5. Big capital — the $1,000+ plan</h2>
+  <p>Big capital has one job: <span class="gold">do not lose it</span>. Speed is secondary. A $5,000 account growing 5% a week adds $250 in week one and $369 in week eight — the compounding works without heroics.</p>
+  <h3>Your setup</h3>
+  <ul>
+    <li>Product: <span class="gold">Autopilot</span> as the base, Private Trader for your own sessions</li>
+    <li>Pair: 2–3 OTC pairs, not one — spread the engine's reads</li>
+    <li>Timeframe: 1m / 2m / 5m mix</li>
+    <li>Stake: <span class="gold">0.5 – 1% of balance</span> per trade</li>
+    <li>Daily loss stop: <span class="gold">−5%</span> — hard stop, no exceptions</li>
+  </ul>
+  <h3>The differences from small capital</h3>
+  <ul>
+    <li>You <span class="gold">spread across pairs</span> — one pair's bad session doesn't touch the others</li>
+    <li>You <span class="gold">withdraw only the excess</span> above your base once the cycle ends — the base always stays</li>
+    <li>You <span class="gold">never double a stake to recover</span> — at this size, recovery attempts are how accounts die</li>
+  </ul>
+  <h3>What +5%/week looks like</h3>
+  <table>
+    <tr><th>Week</th><th>Balance ($5,000 start)</th><th>Balance ($10,000 start)</th></tr>
+    <tr><td>0</td><td>$5,000</td><td>$10,000</td></tr>
+    <tr><td>2</td><td>$5,512</td><td>$11,025</td></tr>
+    <tr><td>4</td><td>$6,077</td><td>$12,155</td></tr>
+    <tr><td>6</td><td>$6,701</td><td>$13,401</td></tr>
+    <tr><td>8</td><td>$7,387</td><td>$14,774</td></tr>
+  </table>
+  <p class="footnote">A 5% weekly routine on $5,000 compounds to +48% in eight weeks — with the base protected the whole way.</p>
+</div>
+
+<!-- RISK -->
+<div class="page content">
+  <h2>6. The mistakes that kill compounding</h2>
+  <ul>
+    <li><span class="gold">Raising the stake after a win.</span> The stake rises <em>with the balance</em>, never because you feel hot. Doubling the % after two wins is how a −8% day becomes a −30% day.</li>
+    <li><span class="gold">Recovering with size.</span> A lost trade is one trade. The engine's recovery rounds are designed and capped — your manual "get it back now" stake is not.</li>
+    <li><span class="gold">Withdrawing mid-cycle.</span> The moment you pull profit out, the base stops compounding. Withdrawals belong at the end of the cycle.</li>
+    <li><span class="gold">Trading every signal.</span> More trades is not more profit. The daily loss stop protects you from yourself.</li>
+    <li><span class="gold">Quitting after one bad week.</span> A −8% week is a dip, not a failure. The compounding method is measured in months.</li>
+  </ul>
+  <div class="quote">"The account that survives the bad weeks is the account that compounds."</div>
+</div>
+
+<!-- ROUTINE + FAQ -->
+<div class="page content">
+  <h2>7. Your weekly checklist</h2>
+  <table>
+    <tr><th>When</th><th>Action</th></tr>
+    <tr><td>Daily</td><td>Check balance → stake = rule% → trade engine setups → stop at loss limit</td></tr>
+    <tr><td>Friday</td><td>Log the week: wins, losses, net %. Never skip the log.</td></tr>
+    <tr><td>Monday</td><td>Recalculate stakes on the new balance. Keep the same rule.</td></tr>
+    <tr><td>Cycle end</td><td>Withdraw profit (or move rooms). Base stays.</td></tr>
+  </table>
+  <h2>8. Quick answers</h2>
+  <h3>Can I compound with $50?</h3>
+  <p>Yes. 2% of $50 is a $1 stake — tiny but real. The compounding table is the same; the absolute numbers just take longer to look impressive. Protect the account and the percentages do the work.</p>
+  <h3>What if I have a red week?</h3>
+  <p>You stop at the daily loss stop, log it, and continue next week from the new balance. The stake recalibrates automatically because it is a percentage.</p>
+  <h3>Autopilot or Private Trader?</h3>
+  <p>Autopilot compounds while you are away — best for big capital consistency. Private Trader builds the discipline — best for small capital learning the method. Most serious compounders run both.</p>
+  <h3>Is this guaranteed?</h3>
+  <p>No. Nothing is guaranteed, and no system is perfect. This guide reduces the risk of losing your base and gives growth a fair chance — it does not remove risk from trading.</p>
+  <p class="footnote">· BY 10X AI · START AT t.me/Shiloh10xbot</p>
+</div>
+
+</body>
+</html>

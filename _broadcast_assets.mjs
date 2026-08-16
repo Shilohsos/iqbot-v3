@@ -27,14 +27,23 @@ const send = (uid) => fetch(`https://api.telegram.org/bot${TOKEN}/sendMessage`, 
 }).catch(e => ({ uid, ok: false, err: String(e) }));
 
 let sent = 0, failed = 0;
-const BATCH = 10;
-for (let i = 0; i < users.length; i += BATCH) {
-    const chunk = users.slice(i, i + BATCH);
-    const results = await Promise.all(chunk.map(uid => send(uid)));
-    for (const r of results) {
-        if (r.ok) sent++; else failed++;
+// Full-parallel send — no artificial batching or pacing. Telegram's own
+// flood control is respected via 429 retry_after backoff (only retried when
+// Telegram explicitly demands it), so a genuine 429 pauses briefly then
+// continues instead of dropping messages.
+const sendWithRetry = async (uid, attempt = 0) => {
+    const r = await send(uid);
+    if (r.ok) return r;
+    if (attempt < 3 && /429|too many/i.test(r.err)) {
+        const wait = 1000 * (attempt + 1);
+        await new Promise(res => setTimeout(res, wait));
+        return sendWithRetry(uid, attempt + 1);
     }
-    if ((i / BATCH) % 20 === 0) console.log(`[broadcast-assets] progress ${Math.min(i + BATCH, users.length)}/${users.length} (ok=${sent} fail=${failed})`);
-    await new Promise(r => setTimeout(r, 60));
+    return r;
+};
+
+const results = await Promise.all(users.map(uid => sendWithRetry(uid)));
+for (const r of results) {
+    if (r.ok) sent++; else failed++;
 }
 console.log(`[broadcast-assets] DONE ok=${sent} fail=${failed} total=${users.length}`);

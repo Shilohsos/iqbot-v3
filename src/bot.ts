@@ -16,7 +16,7 @@ import { initSmartFlowDb, setSmartFlowScanner, setSmartFlowWizardStarter, setSma
 import { startUpdateWatchdog } from './watchdog.js';
 import { autoEngine, initAutoEngine } from './auto-trading.js';
 import { startSwarm, stopSwarm, getSwarmSession, getSwarmStats, setSwarmNotifier, initSwarmDb } from './swarm.js';
-import { startCopying, stopCopying, getCopyStatus, setCopyNotifier, initCopyDb } from './copy-trading.js';
+import { startCopying, stopCopying, getCopyStatus, getCopyConfig, updateCopyConfig, adminToggleTrading, setCopyNotifier, initCopyDb } from './copy-trading.js';
 import { resumeH20Sessions } from './h20.js';
 // scanChannelForLeads removed from main bot — sales-bot owns affiliate scanning.
 // Dual GramJS clients sharing TELETHON_SESSION caused Telegram stalls + RAM growth.
@@ -178,12 +178,12 @@ bot.on('channel_post', async (ctx) => {
         let cat = null;
         let nudgeText = '';
         let kb;
-        // 1) Private Trader setup — compact template: "EURUSD | 1M | Gale 3"
-        const ptMatch = text.match(/^([A-Z]{3,8}(?:\s*[A-Z]{3})?)\s*\|\s*(\d+\s*[SMm])\s*\|\s*Gale\s*(\d+)\s*$/im);
+        // 1) Private Trader setup — compact template: "EURUSD | 1M | Gale 3" or "EURUSD | 1M | 3 Gale"
+        const ptMatch = text.match(/^([A-Z]{3,8}(?:\s*[A-Z]{3})?)\s*\|\s*(\d+\s*[SMm])\s*\|\s*(?:Gale\s*(\d+)|(\d+)\s*Gale)\s*$/im);
         if (ptMatch) {
             const pair = ptMatch[1].replace(/\s+/g, '');
             const tf = ptMatch[2].toUpperCase();
-            const gale = ptMatch[3];
+            const gale = ptMatch[3] ?? ptMatch[4];
             cat = 'private';
             nudgeText = `⟡ New Private Trader setup dropped ✦ ${pair} · ${tf} · Gale ${gale} — the engine has a read. Trade it before the window closes.`;
             kb = { inline_keyboard: [[{ text: '⟡ Open Private Trader', callback_data: 'ui:trade' }]] };
@@ -876,6 +876,9 @@ async function refreshFundedBalanceFromLive(uid) {
             const real = all.find(b => b.type === BalanceType.Real);
             // No real balance → treat as $0; syncAccessFromBalance will keep them gated.
             await syncAccessFromBalance(uid, real?.amount ?? 0, real?.currency ?? 'USD', sdk);
+            // Persist the bonus balance (display-only — never tradable, never gated).
+            if (real?.bonusAmount != null)
+                db.prepare('UPDATE users SET bonus_amount = ? WHERE telegram_id = ?').run(real.bonusAmount, uid);
             liveReal = real ? { amount: real.amount, currency: real.currency } : null;
         }
         finally {
@@ -958,6 +961,8 @@ async function hasAccessLive(uid, need) {
             const until = new Date(Date.now() + TOKEN_ACCESS_DURATION_MS).toISOString();
             db.prepare('UPDATE users SET promo_product = ?, promo_access_until = ? WHERE telegram_id = ?')
                 .run(promo.product, until, uid);
+            // New grant → stale smart-flow cards must not keep showing practice.
+            try { db.prepare('DELETE FROM smart_flow_cache WHERE telegram_id = ?').run(uid); } catch { }
         }
     }
     if (hasAccess(getUser(uid)?.access_level, need))
@@ -1295,6 +1300,9 @@ async function sendStartMenu(ctx) {
                     saveUserCurrency(telegramId, real.currency);
                 else if (demo?.currency)
                     saveUserCurrency(telegramId, demo.currency);
+                // Persist the bonus for display (never tradable, never gated).
+                if (real?.bonusAmount != null)
+                    db.prepare('UPDATE users SET bonus_amount = ? WHERE telegram_id = ?').run(real.bonusAmount, telegramId);
                 // Recompute product access from the funded (real) balance in USD.
                 // Routed through syncAccessFromBalance so the token/downgrade and
                 // funnel-event logic lives in exactly one place (A3).
@@ -1311,9 +1319,11 @@ async function sendStartMenu(ctx) {
                     }
                 }
                 if (needsFetch) {
+                    const bonus = real?.bonusAmount ?? getUser(telegramId)?.bonus_amount ?? 0;
+                    const realLine = real ? `Real ${fmtBalance(real)}${bonus > 0 ? ` (+${fmtMoney(bonus, real.currency ?? 'USD')} bonus)` : ''}` : '';
                     const newLine = [
                         demo ? `Practice ${fmtBalance(demo)}` : '',
-                        real ? `Real ${fmtBalance(real)}` : '',
+                        realLine,
                     ].filter(Boolean).join(' · ');
                     if (newLine) {
                         setUserBalanceCache(telegramId, newLine);
@@ -1848,6 +1858,12 @@ async function runMartingale(ctx, ssid, pair, direction, amount, timeframeSec = 
                     sdkPool.markUnhealthy(userId, `buy rejected: ${result.error}`);
                 }
                 if (buyFailRetries >= 2) {
+                    // 4117 twice in a row = the connection's rate feed is dead/stale —
+                    // mark it unhealthy NOW so the next opportunity rebuilds a fresh
+                    // socket instead of failing on the same one repeatedly.
+                    if (!isAdminUser && /4117|profit rate|Payout rate/i.test(result.error ?? '')) {
+                        sdkPool.markUnhealthy(userId, `4117 exhausted: ${result.error}`);
+                    }
                     const abortReply = await ctx.reply(
                         '⚠️ *Trade not confirmed*\n\n' +
                         'IQ Option did not confirm this order/result. No gale double was applied.\n\n' +
@@ -3831,6 +3847,44 @@ bot.action(/^swarm:dur:(\d+)$/, async (ctx) => {
 });
 const swarmSetup = new Map();
 // ─── Copy Trading ────────────────────────────────────────────────────────────
+// ─── Copy Trading UI (luxury redesign) ───────────────────────────────────────
+
+function copyCurrencyLabel(uid) {
+    const cur = (getUser(uid)?.currency ?? 'USD') || 'USD';
+    return cur.toUpperCase();
+}
+function copyAmountPresets(cur) {
+    if (cur === 'NGN')
+        return [['₦25,000', '50'], ['₦50,000', '100'], ['₦100,000', '200'], ['₦250,000', '500'], ['₦500,000', '1000']];
+    const sym = ({ USD: '$', EUR: '€', GBP: '£' })[cur] ?? '$';
+    return [[`${sym}50`, '50'], [`${sym}100`, '100'], [`${sym}200`, '200'], [`${sym}500`, '500'], [`${sym}1000`, '1000']];
+}
+function copyAdminLine() {
+    // Deliberately NO pair list — users must never see which assets admin
+    // actually trades. LIVE/standby is all they get.
+    const cfg = getCopyConfig();
+    return cfg.trading_active ? '· Admin: LIVE — mirroring is on' : '· Admin: standby — next window soon';
+}
+function copyLastTradeLine(uid) {
+    const t = db.prepare(`SELECT status, pnl, amount FROM trades
+        WHERE telegram_id = ? AND status IN ('WIN','LOSS','TIE')
+        ORDER BY julianday(created_at) DESC LIMIT 1`).get(uid);
+    if (!t) return '· When admin trades, you trade';
+    if (t.status === 'WIN') {
+        const net = (t.pnl ?? 0) - (t.amount ?? 0);
+        return `· Last copied trade: +$${net.toFixed(2)}`;
+    }
+    if (t.status === 'LOSS') return `· Last copied trade: -$${(t.amount ?? 0).toFixed(2)}`;
+    return '· Last copied trade: $0.00';
+}
+function copyTodayStats(uid) {
+    return db.prepare(`SELECT
+        COUNT(*) AS n,
+        COALESCE(SUM(CASE WHEN status='WIN' THEN pnl - amount WHEN status='LOSS' THEN -amount ELSE 0 END), 0) AS net
+        FROM trades WHERE telegram_id = ? AND status IN ('WIN','LOSS','TIE')
+        AND julianday(created_at) >= julianday('now', 'start of day', '+1 hour')`).get(uid);
+}
+
 bot.action('ui:copy', async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
     if (!await requireApproval(ctx))
@@ -3838,53 +3892,48 @@ bot.action('ui:copy', async (ctx) => {
     const uid = ctx.from.id;
     const isPriv = isPrivilegedUser(uid);
     const user = getUser(uid);
-    const copyStatus = getCopyStatus(uid);
-    if (copyStatus.copying) {
-        await ctx.reply(`◆ *Copy Trading*\n\nYou are currently copying admin with $${copyStatus.amount}.\n\nAdmin controls when to trade, which assets, and timeframe. You'll receive notifications when trades execute on your account.`, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [
-                    [{ text: '■ Stop Copying', callback_data: 'copy:stop' }],
-                    [{ text: '⟵️ Back', callback_data: 'ui:trade_menu' }],
-                ] } });
+    const st = getCopyStatus(uid);
+
+    if (st.copying) {
+        const stats = copyTodayStats(uid);
+        const net = stats.net >= 0 ? `+$${stats.net.toFixed(2)}` : `-$${Math.abs(stats.net).toFixed(2)}`;
+        await ctx.reply(`◆ Copy Trading — ACTIVE\n\nCopying admin · $${st.amount} per trade\n\n${copyAdminLine()}\n\n· Trades today: ${stats.n} · Net ${net}\n\nYou can stop anytime.`, { reply_markup: { inline_keyboard: [
+            [{ text: '■ Stop Copying', callback_data: 'copy:stop' }],
+            [{ text: '· Today\u2019s activity', callback_data: 'copy:activity' }],
+            [{ text: '⟵ Back', callback_data: 'ui:trade_menu' }],
+        ] } });
         return;
     }
-    // Check balance gate ($1000 min)
-    if (!isPriv) {
-        const fundedUsd = user?.funded_balance_usd ?? 0;
-        if (fundedUsd < 1000) {
-            await ctx.reply(`◆ *Copy Trading*\n\nCopy Trading mirrors admin's trades directly to your account — automatically.\n\nWhen admin trades, you trade. Same pairs. Same direction. Same timing. Your capital, your profits.\n\n✦ *Requires minimum balance: $1,000*\n\nYour balance: $${fundedUsd}\n\nFund your IQ Option account to unlock Copy Trading.`, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [
-                        [{ text: '✦ Fund Account', url: DEPOSIT_URL }],
-                        [{ text: '✦ Contact Admin', url: process.env.ADMIN_CONTACT_LINK ?? 'https://t.me/shiloh_is_10xing' }],
-                        [{ text: '⟵ Back', callback_data: 'ui:start' }],
-                    ] } });
-            return;
-        }
+
+    const fundedUsd = user?.funded_balance_usd ?? 0;
+    if (!isPriv && fundedUsd < 1000) {
+        const gap = Math.max(0, 1000 - fundedUsd);
+        await ctx.reply(`◆ Copy Trading\n\nThe engine trades. Your account mirrors it.\n\n${copyAdminLine()}\n${copyLastTradeLine(uid)}\n\nTo copy: $1,000 minimum\nYour balance: $${fundedUsd.toFixed(2)} — $${gap.toFixed(2)} away\n\nClose the gap and mirroring starts.`, { reply_markup: { inline_keyboard: [
+            [{ text: '✦ Fund Account', url: DEPOSIT_URL }],
+            [{ text: '⟡ Contact Admin', url: process.env.ADMIN_CONTACT_LINK ?? 'https://t.me/shiloh_is_10xing' }],
+            [{ text: '⟵ Back', callback_data: 'ui:trade_menu' }],
+        ] } });
+        return;
     }
-    await ctx.reply(`◆ *Copy Trading*\n\nMirror admin's trades directly to your account — automatically.\n\nWhen admin opens a trade, your account opens the same trade. Same pair. Same direction. Same timing. Your capital stays yours, your profits stay yours.\n\nAdmin controls everything from the backend: which pairs, which timeframe, when to start and stop. You just set your amount and let it run.\n\n✦ *Minimum copy amount: $50*\n\nSelect your trading currency:`, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [
-                [{ text: '₦ NGN', callback_data: 'copy:cur:NGN' }, { text: '$ USD', callback_data: 'copy:cur:USD' }],
-                [{ text: '€ EUR', callback_data: 'copy:cur:EUR' }, { text: '£ GBP', callback_data: 'copy:cur:GBP' }],
-                [{ text: '❌ Cancel', callback_data: 'wizard:cancel' }],
-            ] } });
+
+    const cur = copyCurrencyLabel(uid);
+    const presetRows = copyAmountPresets(cur);
+    await ctx.reply(`◆ Copy Trading\n\nWhen admin opens a trade, your account opens the same one — same pair, same direction, same moment.\n\n${copyAdminLine()}\n\nChoose your copy amount:`, { reply_markup: { inline_keyboard: [
+        [{ text: presetRows[0][0], callback_data: `copy:amt:${presetRows[0][1]}` }, { text: presetRows[1][0], callback_data: `copy:amt:${presetRows[1][1]}` }, { text: presetRows[2][0], callback_data: `copy:amt:${presetRows[2][1]}` }],
+        [{ text: presetRows[3][0], callback_data: `copy:amt:${presetRows[3][1]}` }, { text: presetRows[4][0], callback_data: `copy:amt:${presetRows[4][1]}` }],
+        [{ text: '· How it works', callback_data: 'copy:how' }],
+        [{ text: '⟵ Back', callback_data: 'ui:trade_menu' }],
+    ] } });
 });
-bot.action(/^copy:cur:(.+)$/, async (ctx) => {
+
+bot.action('copy:how', async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
-    try {
-        await ctx.deleteMessage();
-    }
-    catch { }
-    const currency = ctx.match[1];
-    const isNGN = currency === 'NGN';
-    await ctx.reply(`✦ Currency: ${currency}\n\nSelect the amount you want to copy with:`, { reply_markup: { inline_keyboard: [
-                [
-                    { text: isNGN ? '₦25,000' : '$50', callback_data: 'copy:amt:50' },
-                    { text: isNGN ? '₦50,000' : '$100', callback_data: 'copy:amt:100' },
-                    { text: isNGN ? '₦100,000' : '$200', callback_data: 'copy:amt:200' },
-                ],
-                [
-                    { text: isNGN ? '₦250,000' : '$500', callback_data: 'copy:amt:500' },
-                    { text: isNGN ? '₦500,000' : '$1000', callback_data: 'copy:amt:1000' },
-                ],
-                [{ text: '❌ Cancel', callback_data: 'wizard:cancel' }],
-            ] } });
+    await ctx.reply(`◆ How Copy Trading works\n\nAdmin trades from the engine. Your account mirrors every move — same pair, same direction, same moment.\n\nYou choose the amount. Admin runs the strategy.\n\n· Min balance: $1,000\n· Min copy: $50\n· Stop anytime`, { reply_markup: { inline_keyboard: [
+        [{ text: '⟡ Start Copying', callback_data: 'ui:copy' }],
+        [{ text: '⟵ Back', callback_data: 'ui:trade_menu' }],
+    ] } });
 });
+
 bot.action(/^copy:amt:(.+)$/, async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
     try {
@@ -3899,19 +3948,45 @@ bot.action(/^copy:amt:(.+)$/, async (ctx) => {
     const uid = ctx.from.id;
     const result = await startCopying(uid, amount);
     if (!result.ok) {
-        await ctx.reply(`❌ ${result.error}`);
+        await ctx.reply(`⚠️ ${result.error}`);
+        return;
     }
-    else {
-        await ctx.reply(`◆ *Copy Trading Active!*\n\n✦ Copy amount: $${amount}\n\nYou are now copying admin. When admin starts trading, you'll receive trade notifications automatically.\n\nYou can stop copying anytime.`, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [
-                    [{ text: '■ Stop Copying', callback_data: 'copy:stop' }],
-                    [{ text: '⟵️ Back', callback_data: 'ui:trade_menu' }],
-                ] } });
-    }
+    const stats = copyTodayStats(uid);
+    await ctx.reply(`◆ Copy Trading — ACTIVE\n\nCopying admin · $${amount} per trade\n\n${copyAdminLine()}\n\n· Trades today: ${stats.n}\n\nYou can stop anytime.`, { reply_markup: { inline_keyboard: [
+        [{ text: '■ Stop Copying', callback_data: 'copy:stop' }],
+        [{ text: '⟵ Back', callback_data: 'ui:trade_menu' }],
+    ] } });
 });
+
+bot.action('copy:activity', async (ctx) => {
+    await ctx.answerCbQuery().catch(() => { });
+    const uid = ctx.from.id;
+    const stats = copyTodayStats(uid);
+    const net = stats.net >= 0 ? `+$${stats.net.toFixed(2)}` : `-$${Math.abs(stats.net).toFixed(2)}`;
+    const rows = db.prepare(`SELECT pair, status, pnl, amount FROM trades
+        WHERE telegram_id = ? AND status IN ('WIN','LOSS','TIE')
+        AND julianday(created_at) >= julianday('now', 'start of day', '+1 hour')
+        ORDER BY julianday(created_at) DESC LIMIT 6`).all(uid);
+    let lines = '';
+    for (const r of rows) {
+        const em = r.status === 'WIN' ? '🟢' : r.status === 'LOSS' ? '🔴' : '🟡';
+        const p = r.status === 'WIN' ? `+$${((r.pnl ?? 0) - (r.amount ?? 0)).toFixed(2)}` : r.status === 'LOSS' ? `-$${(r.amount ?? 0).toFixed(2)}` : '$0.00';
+        lines += `\n${em} ${r.pair} — ${p}`;
+    }
+    if (!lines)
+        lines = '\nNo trades yet today.';
+    await ctx.reply(`◆ Today\u2019s activity\n\n${stats.n} trades today · Net ${net}${lines}`, { reply_markup: { inline_keyboard: [
+        [{ text: '⟵ Back to Copy Trading', callback_data: 'ui:copy' }],
+    ] } });
+});
+
 bot.action('copy:stop', async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
     stopCopying(ctx.from.id);
-    await ctx.reply('✅ You have stopped copying admin. You can start again anytime.');
+    await ctx.reply(`◆ Copy Trading — stopped\n\nMirroring paused. Admin keeps trading — your account no longer follows.\n\nStart again anytime.`, { reply_markup: { inline_keyboard: [
+        [{ text: '⟡ Start Copying', callback_data: 'ui:copy' }],
+        [{ text: '⟵ Back', callback_data: 'ui:trade_menu' }],
+    ] } });
 });
 bot.action('ui:history', async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
@@ -4125,8 +4200,11 @@ bot.command('balance', async (ctx) => {
         let msg = '✦ *Balances*\n\n';
         if (demo)
             msg += `✦ Practice: ${fmtBalance(demo)}\n`;
-        if (real)
+        if (real) {
             msg += `✦ Live: ${fmtBalance(real)}\n`;
+            if ((real.bonusAmount ?? 0) > 0)
+                msg += `✦ Bonus: ${fmtMoney(real.bonusAmount, real.currency ?? 'USD')} (not tradable)\n`;
+        }
         if (!demo && !real)
             msg += 'No balances found.';
         await ctx.reply(msg, { parse_mode: 'Markdown', reply_markup: backKeyboard() });
@@ -5616,7 +5694,9 @@ bot.action('admin:copy:toggle', async (ctx) => {
         return;
     const config = db.prepare('SELECT * FROM copy_config WHERE id = 1').get();
     const newActive = config?.trading_active ? 0 : 1;
-    db.prepare('UPDATE copy_config SET trading_active = ?, updated_at = ? WHERE id = 1').run(newActive, Date.now());
+    // MUST go through adminToggleTrading — the raw flag alone never starts the
+    // in-memory loop. This was why toggles looked live but fired zero trades.
+    adminToggleTrading(!!newActive);
     await ctx.reply(`◆ Copy Trading ${newActive ? '🟢 Started — admin trades will now be copied to all active copiers' : '🔴 Stopped — no more trades will be copied'}`, {
         reply_markup: { inline_keyboard: [[{ text: '⟵ Back to Copy Trading', callback_data: 'admin:copy' }]] }
     });
@@ -5663,6 +5743,47 @@ bot.action(/^admin:copy:gr:(\d+)$/, async (ctx) => {
     await ctx.reply(`✅ Recovery set to ${gr} rounds`, {
         reply_markup: { inline_keyboard: [[{ text: '⟵ Back', callback_data: 'admin:copy' }]] }
     });
+});
+const COPY_ASSET_LIST = ['EURUSD-OTC','GBPUSD-OTC','EURJPY-OTC','GBPJPY-OTC','AUDUSD-OTC','USDCAD-OTC','EURGBP-OTC','USDCHF-OTC','XAUUSD-OTC','BTCUSD-OTC','EURCHF-OTC','AUDJPY-OTC','NZDUSD-OTC','NZDJPY-OTC','GBPCHF-OTC'];
+
+function copyAssetsKeyboard(activeSet) {
+    const rows = [];
+    for (let i = 0; i < COPY_ASSET_LIST.length; i += 3) {
+        rows.push(COPY_ASSET_LIST.slice(i, i + 3).map(p => ({
+            text: (activeSet.has(p) ? '✓ ' : '') + p.replace(/-OTC/gi, ''),
+            callback_data: `admin:copy:asset:${p}`,
+        })));
+    }
+    rows.push([{ text: '✅ Done', callback_data: 'admin:copy' }]);
+    return rows;
+}
+
+bot.action('admin:copy:assets', async (ctx) => {
+    await ctx.answerCbQuery().catch(() => { });
+    if (ctx.from?.id !== getAdminId())
+        return;
+    const cfg = getCopyConfig();
+    const active = new Set((cfg.assets ?? []).map(a => String(a)));
+    await ctx.reply('◆ Select assets to copy (tap to toggle):', { reply_markup: { inline_keyboard: copyAssetsKeyboard(active) } });
+});
+
+bot.action(/^admin:copy:asset:(.+)$/, async (ctx) => {
+    await ctx.answerCbQuery().catch(() => { });
+    if (ctx.from?.id !== getAdminId())
+        return;
+    const pair = decodeURIComponent(ctx.match[1]);
+    const cfg = getCopyConfig();
+    let assets = [...(cfg.assets ?? [])].map(String);
+    if (assets.includes(pair))
+        assets = assets.filter(a => a !== pair);
+    else
+        assets.push(pair);
+    updateCopyConfig({ assets });
+    const active = new Set(assets);
+    try {
+        await ctx.editMessageText('◆ Select assets to copy (tap to toggle):', { reply_markup: { inline_keyboard: copyAssetsKeyboard(active) } });
+    }
+    catch { }
 });
 bot.action('admin:copy:copiers', async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
@@ -5952,6 +6073,7 @@ bot.action(/^user_action:(approve|pause|reset_ssid|trades|message):(\d+)$/, asyn
                     ``,
                     `Real: ${sym}${(real?.amount ?? 0).toLocaleString('en-US', { maximumFractionDigits: 2 })}`,
                     `Practice: ${sym}${(demo?.amount ?? 0).toLocaleString('en-US', { maximumFractionDigits: 2 })}`,
+                    ...((real?.bonusAmount ?? 0) > 0 ? [`Bonus: ${sym}${real.bonusAmount.toLocaleString('en-US', { maximumFractionDigits: 2 })} (not tradable)`] : []),
                     `· DB cached (USD): ${(user.funded_balance_usd ?? 0).toLocaleString('en-US', { maximumFractionDigits: 2 })}`,
                 ];
                 await ctx.reply(lines.join('\n'), { parse_mode: 'Markdown', reply_markup: adminBackKeyboard() });
@@ -6833,6 +6955,9 @@ bot.on('text', async (ctx) => {
             const access = tokenToAccess(result.tier);
             const expiresAt = new Date(Date.now() + TOKEN_ACCESS_DURATION_MS).toISOString();
             setUserAccessLevel(ctx.from.id, access, expiresAt);
+            // A new grant must not keep showing the stale practice card — force
+            // the next smart:open to rescan fresh.
+            try { db.prepare('DELETE FROM smart_flow_cache WHERE telegram_id = ?').run(ctx.from.id); } catch { }
             const expiryDate = new Date(Date.now() + TOKEN_ACCESS_DURATION_MS).toLocaleDateString('en-GB');
             const label = getProductConfig(access).label;
             await ctx.reply(`✅ Token accepted! *${label}* is now unlocked until ${expiryDate}. ✦`, { parse_mode: 'Markdown', reply_markup: startKeyboard(access) });
@@ -6961,7 +7086,7 @@ bot.on('text', async (ctx) => {
                 if (demo)
                     parts.push(`✦ Practice: ${fmtBalance(demo)}`);
                 if (real)
-                    parts.push(`✦ Live: ${fmtBalance(real)}`);
+                    parts.push(`✦ Live: ${fmtBalance(real)}${(real.bonusAmount ?? 0) > 0 ? ` (+${fmtMoney(real.bonusAmount, real.currency ?? 'USD')} bonus)` : ''}`);
                 if (parts.length)
                     balanceText = parts.join('\n');
             }
@@ -6990,10 +7115,11 @@ bot.on('text', async (ctx) => {
         return;
     }
     if (onboardingState === 'awaiting_email') {
-        // If user has an active trade wizard, don't intercept their text input
-        // as an email — they're entering a custom trade amount.
+        // If user has an active trade wizard (AI or Autopilot), don't intercept
+        // their text input as an email — they're entering a custom amount.
         const activeWiz = wizardSessions.get(chatId);
-        if (activeWiz && activeWiz.step === 'custom_amount') {
+        const activeAutoWiz = autoWizSessions.get(chatId);
+        if ((activeWiz && activeWiz.step === 'custom_amount') || (activeAutoWiz && activeAutoWiz.step === 'custom_amount')) {
             // Fall through to wizard handler below
         }
         else {
@@ -7049,7 +7175,7 @@ bot.on('text', async (ctx) => {
                     if (demo)
                         parts.push(`✦ Practice: ${fmtBalance(demo)}`);
                     if (real)
-                        parts.push(`✦ Live: ${fmtBalance(real)}`);
+                        parts.push(`✦ Live: ${fmtBalance(real)}${(real.bonusAmount ?? 0) > 0 ? ` (+${fmtMoney(real.bonusAmount, real.currency ?? 'USD')} bonus)` : ''}`);
                     if (parts.length)
                         balanceText = parts.join('\n');
                 }
@@ -7168,7 +7294,7 @@ bot.on('text', async (ctx) => {
                     if (demo)
                         msg += `✦ Practice: ${fmtBalance(demo)}\n`;
                     if (real)
-                        msg += `✦ Live: ${fmtBalance(real)}\n`;
+                        msg += `✦ Live: ${fmtBalance(real)}${(real.bonusAmount ?? 0) > 0 ? ` (+${fmtMoney(real.bonusAmount, real.currency ?? 'USD')} bonus)` : ''}\n`;
                 }
                 finally {
                     sdk.shutdown().catch(() => { });
@@ -7215,7 +7341,7 @@ bot.on('text', async (ctx) => {
                     const real = all.find(b => b.type === BalanceType.Real);
                     const demo = all.find(b => b.type === BalanceType.Demo);
                     if (real)
-                        msg += `✦ Live: ${fmtBalance(real)}\n`;
+                        msg += `✦ Live: ${fmtBalance(real)}${(real.bonusAmount ?? 0) > 0 ? ` (+${fmtMoney(real.bonusAmount, real.currency ?? 'USD')} bonus)` : ''}\n`;
                     if (demo)
                         msg += `✦ Practice: ${fmtBalance(demo)}\n`;
                 }
@@ -7267,7 +7393,7 @@ bot.on('text', async (ctx) => {
                     if (demo)
                         msg += `✦ Practice: ${fmtBalance(demo)}\n`;
                     if (real)
-                        msg += `✦ Live: ${fmtBalance(real)}\n`;
+                        msg += `✦ Live: ${fmtBalance(real)}${(real.bonusAmount ?? 0) > 0 ? ` (+${fmtMoney(real.bonusAmount, real.currency ?? 'USD')} bonus)` : ''}\n`;
                 }
                 finally {
                     sdk.shutdown().catch(() => { });

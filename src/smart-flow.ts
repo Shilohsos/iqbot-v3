@@ -339,8 +339,15 @@ function buildRecommendation(liveUsd: number, liveNative: number, currency: stri
     const grandfatheredLevel = windowActive && (user?.access_level === 'ai_trading' || user?.access_level === 'auto_trading')
         ? user.access_level
         : null;
+    // Promo grant (token or spot-window): an active promo_product with a future
+    // expiry unlocks the product the same way hasAccessLive treats it — a
+    // token holder must never see the practice/fund card while the grant lives.
+    const promoLevel = user?.promo_product && user?.promo_access_until && !isNaN(new Date(user.promo_access_until).getTime()) && new Date(user.promo_access_until) > new Date()
+        ? (user.promo_product === 'auto_trading' ? 'auto_trading' : user.promo_product === 'ai_trading' ? 'ai_trading' : null)
+        : null;
+    const effectiveLevel = grandfatheredLevel ?? promoLevel;
 
-    if (liveUsd < AI_TRADING_MIN_USD && !grandfatheredLevel) {
+    if (liveUsd < AI_TRADING_MIN_USD && !effectiveLevel) {
         return { tier: 'practice', stake: null, stakes: [], assets, timeframeSec, timeframesSec, autopilotEligible: false, currency, scanLiveUsd: liveUsd, hotSig: privileged ? hotSig : undefined };
     }
     return {
@@ -350,7 +357,7 @@ function buildRecommendation(liveUsd: number, liveNative: number, currency: stri
         assets,
         timeframeSec,
         timeframesSec,
-        autopilotEligible: liveUsd >= AUTO_TRADING_MIN_USD || grandfatheredLevel === 'auto_trading',
+        autopilotEligible: liveUsd >= AUTO_TRADING_MIN_USD || effectiveLevel === 'auto_trading',
         currency,
         scanLiveUsd: liveUsd,
         hotSig: privileged ? hotSig : undefined,

@@ -43,6 +43,15 @@ export function initCopyDb() {
 
         INSERT OR IGNORE INTO copy_config (id) VALUES (1);
     `);
+    // Boot restore: if admin left copy trading LIVE before a restart, resume the
+    // loop automatically — the loop lives only in memory, so without this the
+    // flag says LIVE but no trades ever fire after any restart.
+    try {
+        const cfg = getCopyConfig();
+        if (cfg.trading_active && cfg.assets.length > 0)
+            startCopyLoop();
+    }
+    catch { /* config not ready yet */ }
 }
 export function getCopyConfig() {
     const row = db.prepare('SELECT * FROM copy_config WHERE id = 1').get();
@@ -91,6 +100,10 @@ export async function startCopying(telegramId, copyAmount) {
     db.prepare(`
         INSERT INTO copy_trading (telegram_id, copy_amount, status, started_at)
         VALUES (?, ?, 'active', ?)
+        ON CONFLICT(telegram_id) DO UPDATE SET
+            copy_amount = excluded.copy_amount,
+            status = 'active',
+            started_at = excluded.started_at
     `).run(telegramId, copyAmount, Date.now());
     logger.info('copy', `User ${telegramId} started copying admin with $${copyAmount}`);
     return { ok: true };
@@ -224,8 +237,13 @@ async function tradeForUser(telegramId, amount, pair, timeframe, gale) {
             balanceType: 'live',
             telegramId,
         });
-        // Notify user
-        const emoji = outcome.status === 'WIN' ? '🟢' : outcome.status === 'LOSS' ? '🔴' : outcome.status === 'NO_FILL' ? '⚠️' : '🟡';
+        // Notify user — only real outcomes. NO_FILL is a non-event (no trade was
+        // placed, nothing lost): pinging copiers with "NO_FILL +$0.00" is noise.
+        if (outcome.status === 'NO_FILL') {
+            logger.info('copy', `NO_FILL for uid=${telegramId} on ${pair} — suppressed notification`);
+            return;
+        }
+        const emoji = outcome.status === 'WIN' ? '🟢' : outcome.status === 'LOSS' ? '🔴' : '🟡';
         const tfLabel = timeframe === 30 ? '30s' : timeframe === 60 ? '1m' : timeframe === 120 ? '2m' : '5m';
         const pnlStr = outcome.totalPnl >= 0 ? `+$${Math.abs(outcome.totalPnl).toFixed(2)}` : `-$${Math.abs(outcome.totalPnl).toFixed(2)}`;
         const roundsStr = outcome.rounds > 1 ? ` (${outcome.rounds} rounds)` : '';

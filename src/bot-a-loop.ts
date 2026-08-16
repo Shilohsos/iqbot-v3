@@ -349,7 +349,7 @@ function getCandidates(limit: number): Candidate[] {
         FROM users u
         WHERE u.approval_status IN ('approved', 'pending')${extraSql}
           AND u.telegram_id != ?
-        ORDER BY COALESCE((SELECT s.last_sent_at FROM bot_a_sent s WHERE s.telegram_id = u.telegram_id), '')
+        ORDER BY COALESCE((SELECT s.last_sent_at FROM bot_a_sent s WHERE s.telegram_id = u.telegram_id), ''), u.telegram_id
         LIMIT ?
     `).all(...params) as Candidate[];
 }
@@ -493,10 +493,21 @@ async function tick(bot: Telegraf): Promise<void> {
             }
 
             const days = daysSinceLastTrade(lastTradeAt(uid));
-            const messageId = await sendNudge(bot, uid, key, tpl, days);
+            let messageId: number | null = null;
+            try {
+                messageId = await sendNudge(bot, uid, key, tpl, days);
+            }
+            catch (e) {
+                // Blocked/deactivated users and transient send errors must never
+                // break the sweep — AND must still be recorded, otherwise they
+                // sit at the front of the never-sent queue forever and starve
+                // every real user behind them.
+                logger.warn('bot-a', `send failed ${uid}: ${e instanceof Error ? e.message : e}`);
+            }
             recordSent(uid, messageId, key, today, prior);
-            sent++;
-            logger.info('bot-a', `sent ${key} to ${uid}`);
+            if (messageId !== null)
+                sent++;
+            logger.info('bot-a', `sent ${key} to ${uid}${messageId === null ? ' (failed, recorded)' : ''}`);
         } catch (e) {
             // Blocked/deactivated users and transient send errors must never
             // break the sweep for everyone behind them.

@@ -309,6 +309,17 @@ export async function settle(sdk: ClientSdk, order: CoreOrder): Promise<CoreFina
         const targetSize = order.timeframeSec ?? 60;
         const normalizedInput = normTicker(pair);
         const blitzOptions = await sdkTimeout(sdk.blitzOptions(), 'blitzOptions', 15_000);
+        const readActive = () =>
+            blitzOptions.getActives().find(a =>
+                normTicker(a.ticker) === normalizedInput ||
+                normTicker(a.localizationKey) === normalizedInput
+            );
+        // Rate-freshness probe: on a rebuilt connection the OTC rate feed can be
+        // dead while the socket itself is alive — refreshActives then returns the
+        // SAME stale profitPercent forever and every buy is rejected with 4117.
+        // Sample the rate before refresh; if refresh + warm-up never changes it,
+        // the feed is dead — abort BEFORE the doomed buy so the caller rebuilds.
+        const rateBeforeRefresh = readActive()?.profitPercent;
         // refresh actives when available
         try {
             const refresh = (blitzOptions as any).refreshActives?.();
@@ -320,11 +331,22 @@ export async function settle(sdk: ClientSdk, order: CoreOrder): Promise<CoreFina
         // stale profit rate; IQ then rejects the first buy with 4117. Let the feed
         // sync before touching canBeBoughtAt/buy.
         await new Promise(r => setTimeout(r, 1200));
-        const active = blitzOptions.getActives().find(a =>
-            normTicker(a.ticker) === normalizedInput ||
-            normTicker(a.localizationKey) === normalizedInput
-        );
+        const active = readActive();
         if (!active) return noFill(`Unknown pair: ${pair}`);
+        const rateAfterWarm = active.profitPercent;
+        if (rateBeforeRefresh !== undefined && rateAfterWarm === rateBeforeRefresh) {
+            // One more refresh + sample before concluding the feed is dead.
+            try {
+                const rf2 = (blitzOptions as any).refreshActives?.();
+                if (rf2) await sdkTimeout(rf2, 'refreshActives-warm2', 10_000);
+            } catch { /* keep last sample */ }
+            await new Promise(r => setTimeout(r, 800));
+            const rateAfterRetry = readActive()?.profitPercent;
+            if (rateAfterRetry === rateBeforeRefresh) {
+                logger.warn('trade-core', `rate feed not syncing pair=${pair} before=${rateBeforeRefresh} after=${rateAfterRetry} — aborting buy (stale rate → 4117)`);
+                return noFill('Payout rate changed');
+            }
+        }
         if (!active.canBeBoughtAt(currentTime)) return noFill(`${pair} market is closed right now`);
         if (!active.expirationTimes.includes(targetSize)) return noFill(`No ${targetSize}s instrument available for ${pair}`);
 
