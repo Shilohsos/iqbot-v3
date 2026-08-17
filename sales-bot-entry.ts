@@ -5,28 +5,15 @@
 
 import 'dotenv/config';
 import { createSalesBot } from './src/sales-bot.js';
-import { scanChannelForLeads } from './src/sales-leads.js';
 
 const SALES_BOT_TOKEN = '6461943886:AAECqdFjZUdcQtmvw2NB076IylQuEn0t6CQ';
 
 async function main() {
     console.log('[sales-bot] Starting sales lead tracker...');
 
-    // Do an initial channel scan to catch up on any events since last run
-    try {
-        await scanChannelForLeads();
-    } catch (err: any) {
-        console.error('[sales-bot] Initial channel scan failed:', err.message);
-    }
-
-    // Schedule periodic scans (every 2 minutes)
-    setInterval(async () => {
-        try {
-            await scanChannelForLeads();
-        } catch (err: any) {
-            console.error('[sales-bot] Channel scan error:', err.message);
-        }
-    }, 2 * 60_000);
+    // Scanner is owned by startLeadScanner() in src/sales-bot.ts (backoff,
+    // cursor resume, >60min admin alert). No separate loop here — a second
+    // loop would double-scan and bypass the outage alerting.
 
     // Launch the bot
     const bot = createSalesBot(SALES_BOT_TOKEN);
