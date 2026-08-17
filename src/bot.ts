@@ -2477,13 +2477,17 @@ bot.action(/^gale:(\d+)$/, async (ctx) => {
         await ctx.answerCbQuery('Session expired — start over.').catch(() => { });
         return;
     }
+    // CLAIM the wizard session BEFORE any await: Telegram can re-deliver a
+    // callback whose ack was slow, and Telegraf runs handlers concurrently —
+    // a second copy passing the guard below would execute the SAME trade twice
+    // (observed: one $800 input → two $800 NZDUSD-OTC trades, 13:47).
+    state.gale = parseInt(ctx.match[1], 10);
+    wizardSessions.delete(chatId);
+    const pair = state.pair;
+    const { amount, timeframe, mode, currency, lastImageMsgId: prevImgId, gale } = state;
     await ctx.answerCbQuery().catch(() => { });
     if (ctx.from.id === getAdminId())
         touchAdminActivity();
-    state.gale = parseInt(ctx.match[1], 10);
-    const pair = state.pair;
-    const { amount, timeframe, mode, currency, lastImageMsgId: prevImgId, gale } = state;
-    wizardSessions.delete(chatId);
     if (!amount || !timeframe) {
         await ctx.reply('❌ Session error — start over.');
         return;
@@ -3597,19 +3601,20 @@ function buildAutoConfirmText(st) {
     ].join('\n');
 }
 bot.action('aconfirm', async (ctx) => {
-    await ctx.answerCbQuery().catch(() => { });
     const uid = ctx.from.id;
     const st = autoWizSessions.get(ctx.chat.id);
     if (!st || st.assets.length !== 3 || !st.currency || !st.amount || !st.timeframe) {
         await ctx.answerCbQuery('Setup incomplete — start over.').catch(() => { });
         return;
     }
+    // Claim before any await — duplicate delivery must not double-start.
+    autoWizSessions.delete(ctx.chat.id);
+    await ctx.answerCbQuery().catch(() => { });
     upsertAutoSession({
         telegram_id: uid, currency: st.currency, amount: st.amount,
         assets: st.assets, timeframe: st.timeframe, gale_rounds: st.gale ?? 3,
         mode: st.mode,
     });
-    autoWizSessions.delete(ctx.chat.id);
     autoEngine.start(uid, st.mode);
     try {
         await ctx.editMessageText('✦ Autopilot started! You\'ll get a live status card as trades run.');
@@ -6515,7 +6520,15 @@ bot.on('text', async (ctx) => {
     // ── Admin wizard ─────────────────────────────────────────────────────────
     if (ctx.from?.id === getAdminId()) {
         const as = adminSessions.get(chatId);
-        if (as) {
+        // If a trade wizard (Private Trader / Autopilot) is waiting for a custom
+        // amount, DON'T let a stale admin session eat the input as a user ID —
+        // same class as the email-interceptor fix. The text falls through to the
+        // wizard amount handler below.
+        const adminActiveWiz = wizardSessions.get(chatId);
+        const adminActiveAutoWiz = autoWizSessions.get(chatId);
+        const adminWizWaitingAmount = (adminActiveWiz && adminActiveWiz.step === 'custom_amount') ||
+            (adminActiveAutoWiz && adminActiveAutoWiz.step === 'custom_amount');
+        if (as && !adminWizWaitingAmount) {
             try {
                 adminSessions.delete(chatId);
                 if (as.step === 'find_users') {

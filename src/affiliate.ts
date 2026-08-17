@@ -26,10 +26,22 @@ async function getClient(): Promise<TelegramClient> {
         baseLogger: undefined as never,
     });
 
-    await Promise.race([
-        _client.connect(),
-        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('GramJS connect timeout')), 15_000)),
-    ]);
+    try {
+        await Promise.race([
+            _client.connect(),
+            new Promise<never>((_, reject) => setTimeout(() => reject(new Error('GramJS connect timeout')), 15_000)),
+        ]);
+    } catch (err) {
+        // The TCP socket may already be ESTABLISHED while the MTProto handshake
+        // hangs — kill it so the session is never held by a half-open connection
+        // (that would AUTH_KEY_DUPLICATED every other client on this session).
+        try {
+            const conn = (_client as any)._connection;
+            if (conn?._socket?.destroy) conn._socket.destroy();
+        } catch { /* best-effort */ }
+        _client = null;
+        throw err;
+    }
     return _client;
 }
 
@@ -61,6 +73,41 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
         p,
         new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`${label} timeout`)), ms)),
     ]);
+}
+
+/** Release the shared Telegram session after every check. The SALES bot scans the
+ *  affiliate channel continuously with the SAME TELETHON_SESSION string — if this
+ *  client stays connected, Telegram kills the sales bot's connection with
+ *  AUTH_KEY_DUPLICATED and reps cannot claim events. Connect-per-check only. */
+function releaseClient(): void {
+    const c = _client;
+    _client = null;
+    if (!c) return;
+    const killSocket = () => {
+        try {
+            const conn = (c as any)._connection;
+            if (conn?._socket?.destroy) conn._socket.destroy();
+        } catch { /* best-effort */ }
+    };
+    try {
+        if (c.connected) {
+            // Graceful disconnect can hang on a flaky socket — force-close after 2s
+            // so the session is NEVER held hostage (AUTH_KEY_DUPLICATED for sales bot).
+            Promise.race([
+                c.disconnect(),
+                new Promise((_, rej) => setTimeout(() => rej(new Error('disconnect timeout')), 2000)),
+            ]).catch(() => {
+                try { c.destroy?.(); } catch { /* best-effort */ }
+                killSocket();
+            });
+        } else {
+            // Half-open state: `connected` is false but the TCP socket may still be
+            // ESTABLISHED — Telegram's DC still counts it and rejects everyone else.
+            // Destroy the raw socket unconditionally.
+            try { c.destroy?.(); } catch { /* best-effort */ }
+            killSocket();
+        }
+    } catch { /* best-effort */ }
 }
 
 /** GramJS exposes message text as `.text`; `.message` is the raw field. Media
@@ -207,18 +254,30 @@ export async function checkAffiliate(iqUserId: number): Promise<AffiliateResult>
         return { found: true, data: { message: cached.raw_text, date: cached.msg_date ?? new Date().toISOString() } };
     }
 
-    const client = await getClient();
-
+    let client: TelegramClient | undefined;
+    let killWatchdog: ReturnType<typeof setTimeout> | undefined;
+    try {
+        client = await getClient();
     // ── Layer 1: Telegram-side full-history search ─────────────────────────
     // Server-side search covers the channel's ENTIRE history, so a registration
     // that scrolled out of the old 1000-message window is found regardless of age.
+    // HARD WATCHDOG: even if every await hangs, never let a socket outlive the
+    // check — an ESTABLISHED socket with this session AUTH_KEY_DUPLICATEs every
+    // other client (sales bot scanner). Kill unconditionally after budget + 5s.
+    killWatchdog = setTimeout(() => {
+        try {
+            const conn = (client as any)?._connection;
+            if (conn?._socket?.destroy) conn._socket.destroy();
+            (client as any)?.destroy?.();
+        } catch { /* best-effort */ }
+    }, VERIFY_BUDGET_MS + 5_000);
     try {
         const results = await withTimeout(
             client.getMessages(channelId, { search: userIdStr, limit: 10 }),
             Math.min(Math.max(deadline - Date.now(), 1_000), 15_000),
             'GramJS search getMessages',
         );
-        for (const msg of results ?? []) {
+        for (const msg of (results ?? []) as any[]) {
             const text = msgText(msg as never);
             if (text.includes(userIdStr) || extractIds(text).includes(userIdStr)) {
                 persistMessage(msg as never); // archive it so this never costs a round-trip again
@@ -233,7 +292,7 @@ export async function checkAffiliate(iqUserId: number): Promise<AffiliateResult>
     }
 
     // ── Layer 2: resumable backfill of the channel into the local archive ──
-    const archived = await backfillArchive(client, channelId, userIdStr, deadline);
+    const archived = await backfillArchive(client!, channelId, userIdStr, deadline);
     if (archived) {
         return { found: true, data: { message: archived.raw_text, date: archived.msg_date ?? new Date().toISOString() } };
     }
@@ -266,4 +325,8 @@ export async function checkAffiliate(iqUserId: number): Promise<AffiliateResult>
 
     console.warn(`[affiliate] NOT FOUND for ${userIdStr} after search + backfill + lead_events`);
     return { found: false, data: null };
+    } finally {
+        clearTimeout(killWatchdog);
+        releaseClient();
+    }
 }

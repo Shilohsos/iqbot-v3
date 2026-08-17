@@ -83,7 +83,16 @@ async function getGramClient(): Promise<TelegramClient> {
         connectionRetries: 2,
         baseLogger: undefined as never,
     });
-    await _gramClient.connect();
+    try {
+        await Promise.race([
+            _gramClient.connect(),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('GramJS connect timeout')), 15_000)),
+        ]);
+    } catch (err) {
+        // Reset so the next scan tick retries fresh (never hold a half-open socket).
+        _gramClient = null;
+        throw err;
+    }
     return _gramClient;
 }
 
