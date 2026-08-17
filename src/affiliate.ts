@@ -1,3 +1,34 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// SESSION OWNERSHIP RULE — READ BEFORE TOUCHING THE CLIENT LIFECYCLE
+// ═══════════════════════════════════════════════════════════════════════════
+// Four bots share ONE Telegram MTProto session (`TELETHON_SESSION`):
+//   • sales-bot (@wr199_bot)  — affiliate-channel scanner, needs it CONTINUOUSLY
+//   • iqbot-v3 (this file)    — User ID verification, needs it for ~1-15s
+//   • augustus-bot            — per-check (clone of this file)
+//   • olaoluwa-bot            — per-check (clone of this file)
+//
+// Telegram permits ONE live connection per auth key. Every new connection
+// terminates the previous holder, which receives AUTH_KEY_DUPLICATED. On
+// 2026-08-16 this killed the sales scanner for ~17h and lead_events stopped
+// filling.
+//
+// THE RULE:  the SALES BOT OWNS THE SESSION.
+//            Every other consumer is connect-per-check and MUST release within
+//            a bounded time — no exceptions, no long-lived client here.
+//
+// Enforcement in this file:
+//   1. checkAffiliate() wraps ALL layers in try/finally { releaseClient() }.
+//   2. releaseClient() is idempotent (nulls the ref first) and force-closes the
+//      TCP socket even when `connected === false` — a half-open socket still
+//      holds the key on Telegram's side.
+//   3. A hard watchdog destroys the socket even if every await hangs.
+//   4. Each release emits `[affiliate] released` so the operator can confirm in
+//      the PM2 out log that the session is handed back after EVERY check.
+//
+// If you ever need a persistent client here, you must first move the sales
+// scanner onto its own session — otherwise you will take the scanner down.
+// ═══════════════════════════════════════════════════════════════════════════
+
 import { TelegramClient } from 'telegram';
 import { StringSession } from 'telegram/sessions/index.js';
 import { db } from './db.js';
@@ -81,6 +112,8 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
  *  AUTH_KEY_DUPLICATED and reps cannot claim events. Connect-per-check only. */
 function releaseClient(): void {
     const c = _client;
+    // Null the reference FIRST: this is what makes the function idempotent — a
+    // second call (watchdog racing the finally block) sees no client and returns.
     _client = null;
     if (!c) return;
     const killSocket = () => {
@@ -89,6 +122,7 @@ function releaseClient(): void {
             if (conn?._socket?.destroy) conn._socket.destroy();
         } catch { /* best-effort */ }
     };
+    const state = c.connected ? 'connected' : 'half-open';
     try {
         if (c.connected) {
             // Graceful disconnect can hang on a flaky socket — force-close after 2s
@@ -99,6 +133,7 @@ function releaseClient(): void {
             ]).catch(() => {
                 try { c.destroy?.(); } catch { /* best-effort */ }
                 killSocket();
+                console.log('[affiliate] released (forced after disconnect timeout)');
             });
         } else {
             // Half-open state: `connected` is false but the TCP socket may still be
@@ -108,6 +143,10 @@ function releaseClient(): void {
             killSocket();
         }
     } catch { /* best-effort */ }
+    // Ownership trace (directive 4a): this MUST appear after every check in the
+    // PM2 out log. Its absence means the session was never handed back and the
+    // sales scanner is about to be killed with AUTH_KEY_DUPLICATED.
+    console.log(`[affiliate] released (was ${state})`);
 }
 
 /** GramJS exposes message text as `.text`; `.message` is the raw field. Media

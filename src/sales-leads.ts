@@ -29,6 +29,31 @@ try { db.exec('CREATE INDEX IF NOT EXISTS idx_lead_events_iq ON lead_events(iq_u
 try { db.exec('CREATE INDEX IF NOT EXISTS idx_lead_events_claimed ON lead_events(claimed)'); } catch {}
 try { db.exec('CREATE INDEX IF NOT EXISTS idx_lead_events_type ON lead_events(event_type, claimed)'); } catch {}
 
+// Scanner state: the resume cursor and outage tracking. Kept in its own table so
+// the cursor survives restarts AND covers messages that matched nothing —
+// MAX(channel_msg_id) from lead_events only advances on an FTD/redep, so it would
+// re-scan every non-event message forever and could not bound an outage gap.
+db.exec(`
+    CREATE TABLE IF NOT EXISTS sales_scan_state (
+        key   TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+    )
+`);
+
+function getScanState(key: string): string | null {
+    try {
+        const row = db.prepare('SELECT value FROM sales_scan_state WHERE key = ?').get(key) as { value: string } | undefined;
+        return row?.value ?? null;
+    } catch { return null; }
+}
+
+function setScanState(key: string, value: string): void {
+    try {
+        db.prepare(`INSERT INTO sales_scan_state (key, value) VALUES (?, ?)
+                    ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(key, value);
+    } catch { /* state is best-effort — never break a scan on it */ }
+}
+
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 export interface LeadEvent {
@@ -96,9 +121,33 @@ async function getGramClient(): Promise<TelegramClient> {
     return _gramClient;
 }
 
+/** Newest message id already scanned. Everything above it is unseen. */
+function getScanCursor(): number {
+    const v = getScanState('last_scanned_msg_id');
+    const n = v ? parseInt(v, 10) : 0;
+    return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+/** Messages fetched per page while catching up after an outage. */
+const SCAN_PAGE = 100;
+/** Ceiling on pages in one scan so a long outage cannot block a tick forever.
+ *  Whatever is left is picked up on the next tick — the cursor only advances
+ *  over messages actually processed, so nothing is skipped. */
+const SCAN_MAX_PAGES = 20;
+
 /**
  * Scan the affiliate channel for new FTD/redep events.
- * Only inserts events we haven't seen before (by channel_msg_id).
+ *
+ * Resumes from the persisted cursor: pages backwards from the newest message
+ * until it reaches the last id already scanned, so an outage of ANY length is
+ * fully caught up instead of silently losing everything older than a fixed
+ * window. (The previous implementation read a flat `limit: 50` with no cursor —
+ * during the 17h outage every event beyond the newest 50 messages would have
+ * been missed permanently.) `INSERT OR IGNORE` on the unique channel_msg_id
+ * still guarantees idempotency if a page is re-read.
+ *
+ * THROWS on connect failure so the caller can apply backoff and raise the
+ * outage alarm — swallowing it is what made the scanner fail silently.
  */
 export async function scanChannelForLeads(): Promise<{ newFtd: number; newRedep: number }> {
     const channelId = process.env.AFFILIATE_CHANNEL_ID;
@@ -107,19 +156,39 @@ export async function scanChannelForLeads(): Promise<{ newFtd: number; newRedep:
         return { newFtd: 0, newRedep: 0 };
     }
 
-    let client: TelegramClient;
-    try {
-        client = await getGramClient();
-    } catch (err: any) {
-        console.error('[sales-leads] GramJS connect failed:', err.message);
-        return { newFtd: 0, newRedep: 0 };
-    }
+    // Deliberately NOT caught here: startLeadScanner() needs the failure to
+    // drive backoff + the >60min admin alert.
+    const client: TelegramClient = await getGramClient();
 
     let countFtd = 0;
     let countRedep = 0;
 
     try {
-        const messages = await client.getMessages(channelId, { limit: 50 });
+        const cursor = getScanCursor();
+        const messages: any[] = [];
+        let offsetId = 0; // 0 = newest
+        let newestSeen = 0;
+        for (let page = 0; page < SCAN_MAX_PAGES; page++) {
+            const batch: any[] = await client.getMessages(channelId, {
+                limit: cursor === 0 ? 50 : SCAN_PAGE,
+                ...(offsetId ? { offsetId } : {}),
+            }) as any;
+            if (!batch || batch.length === 0) break;
+            for (const m of batch) {
+                if (m?.id > newestSeen) newestSeen = m.id;
+                if (cursor > 0 && m?.id <= cursor) continue; // already scanned
+                messages.push(m);
+                if (m?.id != null && (offsetId === 0 || m.id < offsetId)) offsetId = m.id;
+            }
+            const oldest = batch[batch.length - 1]?.id ?? 0;
+            // First run (no cursor): one page only — do not archive all history.
+            if (cursor === 0) break;
+            if (oldest <= cursor) break; // caught up to the cursor
+            offsetId = oldest;
+            if (page === SCAN_MAX_PAGES - 1) {
+                console.warn(`[sales-leads] catch-up hit the ${SCAN_MAX_PAGES}-page cap — continuing next tick`);
+            }
+        }
 
         const insertStmt = db.prepare(`
             INSERT OR IGNORE INTO lead_events (event_type, iq_user_id, amount, country, afftrack, channel_msg_id, event_date)
@@ -158,8 +227,12 @@ export async function scanChannelForLeads(): Promise<{ newFtd: number; newRedep:
                 if (result.changes > 0) countRedep++;
             }
         }
+        // Advance the cursor ONLY after the page loop completed without throwing,
+        // so a mid-scan failure re-reads that range next tick rather than skipping it.
+        if (newestSeen > 0) setScanState('last_scanned_msg_id', String(newestSeen));
     } catch (err: any) {
         console.error('[sales-leads] Channel scan error:', err.message);
+        throw err; // let the caller back off / alarm — never fail silently
     }
 
     if (countFtd > 0 || countRedep > 0) {
@@ -167,6 +240,94 @@ export async function scanChannelForLeads(): Promise<{ newFtd: number; newRedep:
     }
 
     return { newFtd: countFtd, newRedep: countRedep };
+}
+
+// ─── Self-healing scanner loop (directive 4b) ────────────────────────────────
+//
+// The sales bot OWNS the shared Telegram session, so this client stays connected
+// between ticks by design. What it must survive is losing the session anyway —
+// AUTH_KEY_DUPLICATED from another consumer, a DC hiccup, a network blip.
+//
+//   • backoff   — 2 → 4 → 8 → 15 min, hard-capped at 15 so it always keeps trying
+//   • resume    — the cursor above replays everything missed during the outage
+//   • alarm     — one admin ping when no successful scan for >60 min, and one
+//                 recovery notice; never a repeating spam
+
+const SCAN_INTERVAL_MS = 2 * 60_000;
+const BACKOFF_MS = [2 * 60_000, 4 * 60_000, 8 * 60_000, 15 * 60_000];
+const MAX_BACKOFF_MS = 15 * 60_000;
+const OUTAGE_ALERT_MS = 60 * 60_000;
+const ADMIN_TELEGRAM_ID = 1615652240;
+
+let scannerStarted = false;
+let consecutiveFailures = 0;
+let lastSuccessAt = Date.now();
+let outageAlerted = false;
+
+/** Minutes since the last successful scan — surfaced in logs and the alert. */
+function minutesDown(): number {
+    return Math.round((Date.now() - lastSuccessAt) / 60_000);
+}
+
+async function runScanTick(notify: (text: string) => Promise<void>): Promise<number> {
+    try {
+        const { newFtd, newRedep } = await scanChannelForLeads();
+        const wasDown = consecutiveFailures > 0;
+        consecutiveFailures = 0;
+        lastSuccessAt = Date.now();
+        setScanState('last_success_at', new Date().toISOString());
+        if (wasDown) {
+            console.log(`[sales-leads] scanner RECOVERED (caught up ${newFtd} FTD / ${newRedep} redep)`);
+            if (outageAlerted) {
+                outageAlerted = false;
+                await notify(`✅ Sales scanner recovered — caught up ${newFtd} FTD / ${newRedep} redep from the outage.`);
+            }
+        }
+        return SCAN_INTERVAL_MS;
+    } catch (err: any) {
+        consecutiveFailures++;
+        const msg = err?.message ?? String(err);
+        const isDup = /AUTH_KEY_DUPLICATED/i.test(msg);
+        const delay = BACKOFF_MS[Math.min(consecutiveFailures - 1, BACKOFF_MS.length - 1)] ?? MAX_BACKOFF_MS;
+        console.error(`[sales-leads] ${new Date().toISOString()} scan FAILED (#${consecutiveFailures}${isDup ? ', AUTH_KEY_DUPLICATED' : ''}): ${msg} — retrying in ${Math.round(delay / 60_000)}min, down ${minutesDown()}min`);
+
+        if (!outageAlerted && Date.now() - lastSuccessAt > OUTAGE_ALERT_MS) {
+            outageAlerted = true;
+            await notify(
+                `⚠️ Sales scanner down ${minutesDown()} min.\n\n` +
+                `Last error: ${msg}\n` +
+                (isDup ? `Cause: another bot took the shared Telegram session (AUTH_KEY_DUPLICATED).\n` : '') +
+                `Events are NOT lost — the scanner resumes from its cursor once it reconnects.`,
+            );
+        }
+        return Math.min(delay, MAX_BACKOFF_MS);
+    }
+}
+
+/**
+ * Start the self-healing scan loop. Idempotent: a second call is a no-op, so
+ * wiring it from more than one entry point can never double-scan.
+ *
+ * `bot` is optional purely so the loop can run in environments without a
+ * Telegraf instance; without it the outage alert degrades to a log line.
+ */
+export function startLeadScanner(bot?: { telegram: { sendMessage: (id: number, text: string) => Promise<unknown> } }): void {
+    if (scannerStarted) return;
+    scannerStarted = true;
+
+    const notify = async (text: string): Promise<void> => {
+        if (!bot) { console.error(`[sales-leads] ALERT (no bot wired): ${text}`); return; }
+        try { await bot.telegram.sendMessage(ADMIN_TELEGRAM_ID, text); }
+        catch (e: any) { console.error(`[sales-leads] admin alert failed: ${e?.message ?? e}`); }
+    };
+
+    const schedule = (delay: number): void => {
+        setTimeout(() => { void runScanTick(notify).then(schedule); }, delay);
+    };
+
+    const resumeFrom = getScanCursor();
+    console.log(`[sales-leads] scanner started (2min tick, backoff to 15min, alert >60min; cursor=${resumeFrom || 'none — first run'})`);
+    schedule(0);
 }
 
 // ─── Queries for Sales Bot ────────────────────────────────────────────────────

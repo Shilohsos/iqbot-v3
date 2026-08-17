@@ -19,6 +19,7 @@ import {
     setRepTelegramId,
     getAllRepIds,
     getWeeklyClaimedEvents,
+    startLeadScanner,
     type LeadEvent,
 } from './sales-leads.js';
 
@@ -674,6 +675,12 @@ export function createSalesBot(token: string): Telegraf {
 
     // Start the Sunday reveal scheduler
     scheduleSundayReveal();
+
+    // Start the self-healing affiliate-channel scanner (directive 4b). The sales
+    // bot owns the shared Telegram session, so the scanner belongs here. The call
+    // is idempotent, so if the deployed entry file also starts a scan loop this
+    // cannot double-scan.
+    startLeadScanner(bot);
 
     return bot;
 }
