@@ -23,7 +23,7 @@ import {
     type LeadEvent,
 } from './sales-leads.js';
 
-const TEAMS = ['Team A', 'Team B', 'Team C'];
+const TEAMS = ['Eniola', 'Olivia', 'Gift', 'Uduak', 'Team'];
 
 // Store pending claim confirmations: key = `${chatId}:${eventId}`, value = teamName
 const pendingConfirmations = new Map<string, { repName: string; eventId: number; eventType: string; amount: number; iqUserId: number }>();
