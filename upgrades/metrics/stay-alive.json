@@ -1,12 +1,13 @@
 {
-  "ts": "2026-08-17T16:17:50.606Z",
-  "pid": 1441695,
-  "uptimeSec": 2291,
-  "rssMB": 314,
-  "heapUsedMB": 118,
-  "heapTotalMB": 122,
-  "externalMB": 4,
-  "poolSize": 6,
-  "pinned": 1,
-  "lastExitIntent": null
+  "ts": "2026-08-18T09:14:28.943Z",
+  "pid": 2229807,
+  "uptimeSec": 4,
+  "rssMB": 109,
+  "heapUsedMB": 36,
+  "heapTotalMB": 59,
+  "externalMB": 3,
+  "poolSize": 0,
+  "pinned": 0,
+  "lastExitIntent": null,
+  "event": "start"
 }

@@ -166,6 +166,9 @@ const YACHT_WATCH_TEMPLATES = {
     testimonial: '· A member just posted their results in the Yacht Club. See what the circle sees.',
     signal: '· New signal just dropped in the Yacht Club ✦ The scan is live — check it before the window closes.',
 };
+// Autopilot setup-block buffer (Yacht Club watcher): accumulates
+// ASSETS/TIMEFRAME/RECOVERY posts and fires one nudge when complete.
+let autoSetupBuf: { t: number; assets?: string; tf?: string; gale?: string } | null = null;
 try {
     db.exec('CREATE TABLE IF NOT EXISTS yacht_watch_sent (telegram_id INTEGER PRIMARY KEY, message_id INTEGER, sent_at INTEGER)');
 } catch { }
@@ -188,7 +191,34 @@ bot.on('channel_post', async (ctx) => {
             nudgeText = `⟡ New Private Trader setup dropped ✦ ${pair} · ${tf} · Gale ${gale} — the engine has a read. Trade it before the window closes.`;
             kb = { inline_keyboard: [[{ text: '⟡ Open Private Trader', callback_data: 'ui:trade' }]] };
         }
-        else {
+        // 2) Autopilot setup — a 4-post block Master posts to the Yacht Club:
+        //    "AUTOPILOT" → "ASSETS: EURUSD | NZDUSD | EURCHF" → "TIMEFRAME: 2M" → "RECOVERY: 6".
+        //    Buffer the components and fire ONE nudge when the block is complete.
+        if (!cat) {
+            const apHeader = /^AUTOPILOT/i.test(text);
+            const apAssets = text.match(/^ASSETS:\s*(.+)$/i);
+            const apTf = text.match(/^TIMEFRAME:\s*(\d+\s*[SMH])$/i);
+            const apRec = text.match(/^RECOVERY:\s*(\d+)$/i);
+            if (apHeader || apAssets || apTf || apRec) {
+                const now = Date.now();
+                if (apHeader || (autoSetupBuf && now - autoSetupBuf.t > 10 * 60_000)) {
+                    autoSetupBuf = { t: now };
+                }
+                if (autoSetupBuf) {
+                    if (apAssets) autoSetupBuf.assets = apAssets[1].replace(/\s+/g, ' ').trim();
+                    if (apTf) autoSetupBuf.tf = apTf[1].toUpperCase();
+                    if (apRec) autoSetupBuf.gale = apRec[1];
+                    autoSetupBuf.t = now;
+                }
+                if (autoSetupBuf && autoSetupBuf.assets && autoSetupBuf.tf && autoSetupBuf.gale) {
+                    cat = 'autopilot';
+                    nudgeText = `✦ New Autopilot setup dropped ✦ ${autoSetupBuf.assets} · ${autoSetupBuf.tf} · Recovery ${autoSetupBuf.gale} — the engine is armed. Trade it before the window closes.`;
+                    kb = { inline_keyboard: [[{ text: '✦ Open Autopilot', callback_data: 'ui:auto' }]] };
+                    autoSetupBuf = null;
+                }
+            }
+        }
+        if (!cat) {
             for (const key of Object.keys(YACHT_WATCH_KEYWORDS)) {
                 if (YACHT_WATCH_KEYWORDS[key].some((p) => p.test(text))) { cat = key; break; }
             }
