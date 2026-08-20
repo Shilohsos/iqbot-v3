@@ -55,6 +55,26 @@ export interface CoreFinal {
 
 const normTicker = (s: string) => s.toUpperCase().replace(/^front\./i, '').replace(/[-/\s]/g, '');
 
+// One-time raw 4117 error-body dump (Claude verification request 2026-08-20):
+// captures whatever fields IQ's rejection payload carries — looking for a
+// server-provided rate we could echo back on retry (echo-back strategy).
+let _raw4117Dumped = false;
+function dumpRaw4117Once(err: unknown): void {
+    if (_raw4117Dumped) return;
+    _raw4117Dumped = true;
+    try {
+        const names = err && typeof err === 'object' ? Object.getOwnPropertyNames(err) : [];
+        const body: Record<string, unknown> = {
+            name: (err as any)?.name,
+            message: (err as any)?.message,
+        };
+        for (const n of names) {
+            try { body[n] = (err as any)[n]; } catch { /* skip */ }
+        }
+        logger.warn('trade-core', `RAW 4117 error body (one-time): ${JSON.stringify(body)}`);
+    } catch { /* best-effort */ }
+}
+
 function sdkTimeout<T>(p: Promise<T>, label: string, ms = 15_000): Promise<T> {
     return Promise.race([
         p,
@@ -342,24 +362,41 @@ export async function settle(sdk: ClientSdk, order: CoreOrder): Promise<CoreFina
             markSocketUnhealthy(order.telegramId, `refreshActives failed: ${e instanceof Error ? e.message : e}`);
         }
         // Warm-up: on a fresh/rebuilt connection the actives snapshot can carry a
-        // stale profit rate; IQ then rejects the first buy with 4117. Let the feed
-        // sync before touching canBeBoughtAt/buy.
-        await new Promise(r => setTimeout(r, 1200));
+        // stale profit rate; IQ then rejects the first buy with 4117. refreshActives
+        // is a LIVE round-trip — the rate is as fresh as it gets when it resolves.
+        // The old 1200ms sleep only guaranteed the sent rate was 1.2s stale (4117
+        // root cause, Claude 2026-08-20). 50ms is kept purely as a tick cushion.
+        await new Promise(r => setTimeout(r, 50));
         const active = readActive();
+        const rateReadAt = Date.now();
         if (!active) return noFill(`Unknown pair: ${pair}`);
         if (!active.canBeBoughtAt(currentTime)) return noFill(`${pair} market is closed right now`);
         if (!active.expirationTimes.includes(targetSize)) return noFill(`No ${targetSize}s instrument available for ${pair}`);
 
         const dir = direction === 'call' ? BlitzOptionsDirection.Call : BlitzOptionsDirection.Put;
         let option: { id: number };
+        let sentRate: number | string = 'n/a';
         try {
+            // Read the rate IMMEDIATELY before the buy — no intervening await.
+            // profitPercent is a METHOD on BlitzOptionsActive (index.ts:4699).
+            sentRate = typeof (active as any).profitPercent === 'function' ? (active as any).profitPercent() : (active as any).profitPercent;
             option = await sdkTimeout(blitzOptions.buy(active, dir, targetSize, amount, selectedBalance), 'buy', 20_000);
         } catch (buyErr) {
             const msg = buyErr instanceof Error ? buyErr.message : String(buyErr);
             // Same-stake refresh+retry on profit-rate change (4117) — the buy did not
             // fill, so retrying the SAME amount can never double a round.
             if (/4117|profit rate|not been purchased/i.test(msg)) {
-                logger.warn('trade-core', `buy rejected (profit-rate/4117) pair=${pair} amt=${amount} — refreshing actives and retrying same stake`);
+                dumpRaw4117Once(buyErr);
+                const readBackRate = (() => {
+                    try {
+                        const fa = (blitzOptions as any).getActives?.()?.find((a: any) => normTicker(a.ticker) === normalizedInput ||
+                            normTicker(a.localizationKey) === normalizedInput);
+                        if (!fa) return 'n/a';
+                        return typeof fa.profitPercent === 'function' ? fa.profitPercent() : fa.profitPercent;
+                    } catch { return 'n/a'; }
+                })();
+                const gapMs = Date.now() - rateReadAt;
+                logger.warn('trade-core', `buy rejected (profit-rate/4117) pair=${pair} amt=${amount} sentRate=${sentRate} readBackRate=${readBackRate} gapMs=${gapMs} — refreshing actives and retrying same stake`);
                 let placed = false;
                 const backoffs = [1000, 2000, 3000, 4000];
                 for (let attempt = 0; attempt < backoffs.length; attempt++) {
@@ -367,7 +404,7 @@ export async function settle(sdk: ClientSdk, order: CoreOrder): Promise<CoreFina
                         await new Promise(r => setTimeout(r, backoffs[attempt]));
                         const refresh = (blitzOptions as any).refreshActives?.();
                         if (refresh) await sdkTimeout(refresh, 'refreshActives-retry', 15_000);
-                        await new Promise(r => setTimeout(r, 400));
+                        await new Promise(r => setTimeout(r, 50));
                         // Re-read the FRESH active — the stale object still carries the old rate.
                         const freshActive = (blitzOptions as any).getActives().find((a: any) => normTicker(a.ticker) === normalizedInput ||
                             normTicker(a.localizationKey) === normalizedInput) ?? active;
@@ -388,7 +425,7 @@ export async function settle(sdk: ClientSdk, order: CoreOrder): Promise<CoreFina
                     // connection's rate path is the suspect, so flag it for rebuild
                     // and let the NEXT opportunity open a fresh socket rather than
                     // re-failing on this one (directive §4.3).
-                    logger.warn('trade-core', `4117 survived ${backoffs.length} retries pair=${pair} — flagging socket for rebuild`);
+                    logger.warn('trade-core', `4117 survived ${backoffs.length} retries pair=${pair} sentRate=${sentRate} readBackRate=${readBackRate} gapMs=${gapMs} — flagging socket for rebuild`);
                     markSocketUnhealthy(order.telegramId, '4117 survived retry ladder');
                     return noFill('Payout rate changed');
                 }
