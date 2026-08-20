@@ -4,6 +4,13 @@
 // PM2: pm2 start sales-bot-entry.ts --name sales-bot --interpreter tsx
 
 import 'dotenv/config';
+// One Telegram session PER BOT (2026-08-20): the sales scanner gets its own
+// auth key via SALES_TELETHON_SESSION (set in .env). Without this override
+// both local bots would share the main TELETHON_SESSION and burn the key
+// with AUTH_KEY_DUPLICATED churn (happened twice — Aug 17 & Aug 20).
+if (process.env.SALES_TELETHON_SESSION) {
+    process.env.TELETHON_SESSION = process.env.SALES_TELETHON_SESSION;
+}
 import { createSalesBot } from './src/sales-bot.js';
 
 const SALES_BOT_TOKEN = '6461943886:AAECqdFjZUdcQtmvw2NB076IylQuEn0t6CQ';
