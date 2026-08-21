@@ -4527,20 +4527,37 @@ export class BlitzOptions {
         }
 
         const current = this.actives.get(active.id) ?? active
-        try {
-            const response = await openWith(current)
-            return new BlitzOptionsOption(response)
-        } catch (err: unknown) {
-            const msg = err instanceof Error ? err.message : String(err)
-            if (!/4117|profit rate change|not been purchased/i.test(msg)) {
-                throw err
+        // 4117 permanent fix (round 2): up to 4 attempts. IQ embeds the EXACT current
+        // rate in the rejection payload (details.result.actual_commission.commission) —
+        // adopt it and retry immediately (200ms); fall back to re-fetching init data.
+        let lastErr: unknown
+        for (let attempt = 0; attempt < 4; attempt++) {
+            try {
+                const response = await openWith(this.actives.get(active.id) ?? current)
+                return new BlitzOptionsOption(response)
+            } catch (err: unknown) {
+                lastErr = err
+                const msg = err instanceof Error ? err.message : String(err)
+                if (!/4117|profit rate change|not been purchased/i.test(msg)) {
+                    throw err
+                }
+                const actual = (err as any)?.details?.result?.actual_commission?.commission
+                const act = this.actives.get(active.id) ?? current
+                if (typeof actual === 'number' && actual > 0 && act) {
+                    // Use the rate IQ just told us (per-account/VIP adjusted).
+                    act.profitCommissionPercent = actual
+                } else {
+                    // Fallback: re-fetch init data + updateActives()
+                    try {
+                        await this.refreshActives()
+                    } catch {
+                        // keep cached actives — better than blocking the buy entirely
+                    }
+                }
+                await new Promise(r => setTimeout(r, 200))
             }
-            // Rate changed in the milliseconds between refresh and server accept — re-fetch & retry once.
-            await this.refreshActives()
-            const retried = this.actives.get(active.id) ?? active
-            const response = await openWith(retried)
-            return new BlitzOptionsOption(response)
         }
+        throw lastErr ?? new Error('4117 retries exhausted')
     }
 
     /**
@@ -4853,7 +4870,7 @@ export class TurboOptions {
         turboOptions.intervalId = setInterval(async () => {
             const response = await wsApiClient.doRequest<InitializationDataV3>(new CallBinaryOptionsGetInitializationDataV3())
             turboOptions.updateActives(response.turboActives)
-        }, 600000)
+        }, 60_000) // 4117 fix round 2: was 600000 (10 min) — OTC payout rates move more often than that
 
         return turboOptions
     }
@@ -5418,7 +5435,7 @@ export class BinaryOptions {
         binaryOptions.intervalId = setInterval(async () => {
             const response = await wsApiClient.doRequest<InitializationDataV3>(new CallBinaryOptionsGetInitializationDataV3())
             binaryOptions.updateActives(response.binaryActives)
-        }, 600000)
+        }, 60_000) // 4117 fix round 2: was 600000 (10 min) — OTC payout rates move more often than that
 
         return binaryOptions
     }
@@ -8008,11 +8025,17 @@ class WsApiClient {
     }
 
     private createRequestError(status: number, details: any, request: Request<any>): Error {
+        let error: Error
         if (request.createError) {
-            return request.createError(status, details);
+            error = request.createError(status, details)
+        } else {
+            error = new Error(`request is failed with status ${status} and message: ${details?.message}`)
         }
-
-        return new Error(`request is failed with status ${status} and message: ${details?.message}`);
+        // 4117 permanent fix (round 2): attach the raw rejection payload to the error so
+        // callers can read the server's ACTUAL rate (details.result.actual_commission.commission)
+        // and retry with it instead of guessing.
+        ;(error as any).details = details
+        return error
     }
 
     public async disconnectGracefully(timeoutMs = 5000): Promise<void> {
