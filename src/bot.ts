@@ -2239,11 +2239,12 @@ async function showDemoLimitReached(ctx) {
 }
 // ─── /start ───────────────────────────────────────────────────────────────────
 // Deep-link payloads: t.me/Shiloh10xbot?start=pt lands members straight in the
-// Private Trader flow (Yacht Club setup announcements carry this button).
+// Private Trader trade wizard (Yacht Club setup announcements carry this
+// button) — same flow as tapping the menu button, including access checks.
 bot.command('start', async (ctx) => {
     const payload = String(ctx.startPayload || '').toLowerCase();
     if (payload === 'pt' || payload === 'private' || payload === 'trade') {
-        await handleSmartFlowCallback({ ...ctx, callbackQuery: { data: 'smart:open' } });
+        await openTradeWizard(ctx);
         return;
     }
     return sendStartMenu(ctx);
@@ -2899,8 +2900,9 @@ bot.action('ui:trade_menu', async (ctx) => {
             ] }
     });
 });
-bot.action('ui:trade', async (ctx) => {
-    await ctx.answerCbQuery().catch(() => { });
+/** Open the Private Trader trade wizard (mode menu). Shared by the menu
+ *  callback and the ?start=pt deep link so both land in the same flow. */
+async function openTradeWizard(ctx) {
     if (!await requireApproval(ctx))
         return;
     // Connected users always reach the mode menu. Demo Mode is open to everyone
@@ -2926,6 +2928,10 @@ bot.action('ui:trade', async (ctx) => {
     catch { }
     wizardSessions.set(ctx.chat.id, state);
     await ctx.reply('Trade live | Trade Demo', { reply_markup: tradeModeKeyboard() });
+}
+bot.action('ui:trade', async (ctx) => {
+    await ctx.answerCbQuery().catch(() => { });
+    await openTradeWizard(ctx);
 });
 // ═══════════════════════════════════════════════════════════════════════════════
 // Product access — locks, Signals, Auto Trading, Auto God Mode

@@ -60,7 +60,7 @@ const TICK_MS = 60_000;
 /** Setups per session. */
 const SETUPS_PER_SESSION = 10;
 /** Pause between a settled setup and the next analysis. */
-const SETUP_PAUSE_MS = 60_000;
+const SETUP_PAUSE_MS = 120_000;
 /** Gap between one session ending and the next starting. */
 const COOLDOWN_MS = 2 * 60 * 60_000;
 /** How long an `executing` setup may sit before the engine gives up on it.
@@ -272,21 +272,25 @@ function setupCard(product: string, pair: string, timeframeSec: number, directio
  *   - private_trader → the AI Trading result language (Direct Win / Recovery
  *     complete / New setup loading), PnL-free for the channel. */
 function winCard(product: string, pair: string, timeframeSec: number, direction: string, rounds: number): string {
-    const dirStr = direction === 'put' ? 'SELL' : 'BUY';
-    const dirEmoji = direction === 'put' ? '🔴' : '🟢';
     const maxAttempts = 4; // initial + 3 gale rounds
     if (product === 'private_trader') {
         return [
-            `${pair} · ${tfLabel(timeframeSec)} · Attempt ${rounds}/${maxAttempts}`,
+            '⟡ PRIVATE TRADER — RESULT ✦',
+            '',
+            `◆ Assets: ${pair}`,
+            `◆ Timeframe: ${tfLabel(timeframeSec)}`,
+            `◆ Attempt: ${rounds}/${maxAttempts}`,
             '',
             rounds === 1 ? '🟢 WIN — Direct Win ✅' : '🟢 WIN — Recovery complete ✅',
             'New setup loading ✦',
         ].join('\n');
     }
     return [
-        `· ${pairFlags(pair)} (OTC)`,
+        '· 10x Signal — RESULT',
         '',
-        `${dirStr} ${dirEmoji} · ${tfLabel(timeframeSec)} · Attempt ${rounds}/${maxAttempts}`,
+        `◆ Trade: ${pairFlags(pair)} (OTC)`,
+        `··· Expiry: ${tfLabel(timeframeSec)}`,
+        `→️ Attempt: ${rounds}/${maxAttempts}`,
         '',
         '🟢 WIN — signal hit! ✅',
         'Ready for the next signal 👇',
@@ -296,20 +300,24 @@ function winCard(product: string, pair: string, timeframeSec: number, direction:
 /** LOSS result — product-aware. Private Trader mirrors the AI Trading closer:
  *  calm, no accumulated loss total (subtle-loss doctrine). */
 function lossCard(product: string, pair: string, timeframeSec: number, direction: string): string {
-    const dirStr = direction === 'put' ? 'SELL' : 'BUY';
-    const dirEmoji = direction === 'put' ? '🔴' : '🟢';
     const maxAttempts = 4; // initial + 3 gale rounds
     if (product === 'private_trader') {
         return [
-            `${pair} · ${tfLabel(timeframeSec)} · All ${maxAttempts} attempts done`,
+            '⟡ PRIVATE TRADER — RESULT ✦',
+            '',
+            `◆ Assets: ${pair}`,
+            `◆ Timeframe: ${tfLabel(timeframeSec)}`,
+            `◆ Attempt: ${maxAttempts}/${maxAttempts}`,
             '',
             '🔴 LOSS — Sequence done · New setup loading ✦',
         ].join('\n');
     }
     return [
-        `· ${pairFlags(pair)} (OTC)`,
+        '· 10x Signal — RESULT',
         '',
-        `${dirStr} ${dirEmoji} · ${tfLabel(timeframeSec)} · All ${maxAttempts} attempts done`,
+        `◆ Trade: ${pairFlags(pair)} (OTC)`,
+        `··· Expiry: ${tfLabel(timeframeSec)}`,
+        `→️ Attempt: ${maxAttempts}/${maxAttempts}`,
         '',
         '🔴 Signal finished — all attempts done.',
         'Try a new signal 👇',
@@ -478,10 +486,16 @@ interface GeneratedSetup {
     timeframeSec: number;
 }
 
+/** Timeframe pool — setups rotate through these instead of a fixed TF. */
+const TIMEFRAME_POOL: number[] = [30, 60, 120, 300];
+let tfCursor = 0;
+
 function timeframeFor(product: string): number {
-    return product === 'private_trader'
-        ? cfgInt('yacht_tf_private', 120)
-        : cfgInt('yacht_tf_signals', 60);
+    // Alternate across the pool (30s → 1m → 2m → 5m → …) so the channel shows
+    // different timeframes just as it shows different assets.
+    const tf = TIMEFRAME_POOL[tfCursor % TIMEFRAME_POOL.length];
+    tfCursor += 1;
+    return tf;
 }
 
 /** Analyze every open pair at the product's timeframe and return the highest
