@@ -227,12 +227,16 @@ function fmtClock(d: Date): string {
 /** The bot's real setup cards — identical structure to what the bot sends users,
  *  so the Yacht Club sees the same cards members get:
  *   - signals → the 10x Signal card (bot.ts renderCard)
- *   - private_trader → the OPPORTUNITY FOUND card (bot.ts wizard).
+ *   - private_trader → the OPPORTUNITY FOUND card (bot.ts wizard), with the
+ *     martingale levels block added so the FULL setup (incl. recovery ladder)
+ *     is visible — same levels the signals card carries.
  *  Channel doctrine: no PnL / stake / balance anywhere, so the private trader
  *  card deliberately omits the Amount line. */
 function setupCard(product: string, pair: string, timeframeSec: number, direction: string, confidence: number): string {
     const dirStr = direction === 'put' ? 'SELL' : 'BUY';
     const dirEmoji = direction === 'put' ? '🔴' : '🟢';
+    const entryTime = new Date(Date.now() + 60_000);
+    const lvlTime = (n: number) => fmtClock(new Date(entryTime.getTime() + n * timeframeSec * 1000));
     if (product === 'private_trader') {
         return [
             'OPPORTUNITY FOUND',
@@ -243,10 +247,15 @@ function setupCard(product: string, pair: string, timeframeSec: number, directio
             `◆ Trading pair: ${pair}`,
             `◆ Expiration: ${tfLabel(timeframeSec)}`,
             '◆ Strategy: High-Profit ✦',
+            '',
+            '→️ Martingale Levels:',
+            `• Level 1 → ${lvlTime(1)}`,
+            `• Level 2 → ${lvlTime(2)}`,
+            `• Level 3 → ${lvlTime(3)}`,
+            '',
+            'The engine is executing this now.',
         ].join('\n');
     }
-    const entryTime = new Date(Date.now() + 60_000);
-    const lvlTime = (n: number) => fmtClock(new Date(entryTime.getTime() + n * timeframeSec * 1000));
     return [
         '· 10x Signal',
         '',
@@ -266,11 +275,22 @@ function setupCard(product: string, pair: string, timeframeSec: number, directio
     ].join('\n');
 }
 
-/** WIN result — mirrors the bot's signal-hit template. No PnL, no amounts. */
-function winCard(pair: string, timeframeSec: number, direction: string, rounds: number): string {
+/** WIN result — product-aware:
+ *   - signals → the bot's signal-hit template
+ *   - private_trader → the AI Trading result language (Direct Win / Recovery
+ *     complete / New setup loading), PnL-free for the channel. */
+function winCard(product: string, pair: string, timeframeSec: number, direction: string, rounds: number): string {
     const dirStr = direction === 'put' ? 'SELL' : 'BUY';
     const dirEmoji = direction === 'put' ? '🔴' : '🟢';
     const maxAttempts = 4; // initial + 3 gale rounds
+    if (product === 'private_trader') {
+        return [
+            `${dirStr} ${dirEmoji} · ${pair} · ${tfLabel(timeframeSec)} · Attempt ${rounds}/${maxAttempts}`,
+            '',
+            rounds === 1 ? '🟢 WIN — Direct Win ✅' : '🟢 WIN — Recovery complete ✅',
+            'New setup loading ✦',
+        ].join('\n');
+    }
     return [
         `· ${pairFlags(pair)} (OTC)`,
         '',
@@ -281,11 +301,19 @@ function winCard(pair: string, timeframeSec: number, direction: string, rounds: 
     ].join('\n');
 }
 
-/** LOSS result — mirrors the bot's exhausted-attempts template. No PnL. */
-function lossCard(pair: string, timeframeSec: number, direction: string): string {
+/** LOSS result — product-aware. Private Trader mirrors the AI Trading closer:
+ *  calm, no accumulated loss total (subtle-loss doctrine). */
+function lossCard(product: string, pair: string, timeframeSec: number, direction: string): string {
     const dirStr = direction === 'put' ? 'SELL' : 'BUY';
     const dirEmoji = direction === 'put' ? '🔴' : '🟢';
     const maxAttempts = 4; // initial + 3 gale rounds
+    if (product === 'private_trader') {
+        return [
+            `${dirStr} ${dirEmoji} · ${pair} · ${tfLabel(timeframeSec)} · All ${maxAttempts} attempts done`,
+            '',
+            '🔴 LOSS — Sequence done · New setup loading ✦',
+        ].join('\n');
+    }
     return [
         `· ${pairFlags(pair)} (OTC)`,
         '',
@@ -619,7 +647,7 @@ async function runOneSetup(session: YachtSession): Promise<void> {
     // 6. Result to the channel. A post failure here is logged, not fatal — the
     //    trade is already settled and the counters are already correct.
     try {
-        await postToChannel(won ? winCard(setup.pair, setup.timeframeSec, setup.direction, outcome.rounds) : lossCard(setup.pair, setup.timeframeSec, setup.direction));
+        await postToChannel(won ? winCard(product, setup.pair, setup.timeframeSec, setup.direction, outcome.rounds) : lossCard(product, setup.pair, setup.timeframeSec, setup.direction));
     } catch (e) {
         logger.error('yacht', `result post failed: ${errText(e)}`);
         await notifyAdminOnce('result-post', `Yacht engine: a result message could not be posted (${errText(e)}). The trade itself settled normally.`);
