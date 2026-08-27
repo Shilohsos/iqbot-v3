@@ -224,38 +224,31 @@ function fmtClock(d: Date): string {
     return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'Africa/Lagos' });
 }
 
-/** The bot's real setup cards — identical structure to what the bot sends users,
- *  so the Yacht Club sees the same cards members get:
- *   - signals → the 10x Signal card (bot.ts renderCard)
- *   - private_trader → the OPPORTUNITY FOUND card (bot.ts wizard), with the
- *     martingale levels block added so the FULL setup (incl. recovery ladder)
- *     is visible — same levels the signals card carries.
- *  Channel doctrine: no PnL / stake / balance anywhere, so the private trader
- *  card deliberately omits the Amount line. */
-function setupCard(product: string, pair: string, timeframeSec: number, direction: string, confidence: number): string {
+/** The setup messages the engine posts to the Yacht Club:
+ *   - signals → the 10x Signal card (bot.ts renderCard) — the engine executes
+ *     these on the Yacht account, so the card carries the full ladder.
+ *   - private_trader → a SETUP ANNOUNCEMENT, not a card: the engine does NOT
+ *     execute Private Trader setups — members run them themselves in the bot.
+ *     The post lists assets, direction, timeframe and smart recovery, and the
+ *     button opens the bot where they execute it.
+ *  Channel doctrine: no PnL / stake / balance anywhere. */
+function setupCard(product: string, pair: string, timeframeSec: number, direction: string, confidence: number, galeRounds: number): string {
     const dirStr = direction === 'put' ? 'SELL' : 'BUY';
     const dirEmoji = direction === 'put' ? '🔴' : '🟢';
-    const entryTime = new Date(Date.now() + 60_000);
-    const lvlTime = (n: number) => fmtClock(new Date(entryTime.getTime() + n * timeframeSec * 1000));
     if (product === 'private_trader') {
         return [
-            'OPPORTUNITY FOUND',
-            `Confidence: ${Math.round(confidence)}% · Bot is ready to execute.`,
+            '⟡ PRIVATE TRADER SETUP ✦',
             '',
-            `${dirEmoji} ${direction === 'put' ? 'PUT' : 'CALL'} SIGNAL`,
+            `◆ Assets: ${pair}`,
+            `◆ Direction: ${dirStr} ${dirEmoji}`,
+            `◆ Timeframe: ${tfLabel(timeframeSec)}`,
+            `◆ Smart Recovery: ${galeRounds} rounds`,
             '',
-            `◆ Trading pair: ${pair}`,
-            `◆ Expiration: ${tfLabel(timeframeSec)}`,
-            '◆ Strategy: High-Profit ✦',
-            '',
-            '→️ Martingale Levels:',
-            `• Level 1 → ${lvlTime(1)}`,
-            `• Level 2 → ${lvlTime(2)}`,
-            `• Level 3 → ${lvlTime(3)}`,
-            '',
-            'The engine is executing this now.',
+            'Execute it yourself in the bot — tap the button below 👇',
         ].join('\n');
     }
+    const entryTime = new Date(Date.now() + 60_000);
+    const lvlTime = (n: number) => fmtClock(new Date(entryTime.getTime() + n * timeframeSec * 1000));
     return [
         '· 10x Signal',
         '',
@@ -324,7 +317,11 @@ function lossCard(product: string, pair: string, timeframeSec: number, direction
     ].join('\n');
 }
 
-function sessionCloseCard(product: string, wins: number, losses: number): string {
+function sessionCloseCard(product: string, wins: number, losses: number, setupsDone: number): string {
+    if (product === 'private_trader') {
+        return `Session closed.\n\n${productLabel(product)}: ${setupsDone} setups shared\n` +
+            'Next session in 2 hours.';
+    }
     return `Session closed.\n\n${productLabel(product)}: ${wins} won / ${losses} lost\n` +
         'Next session in 2 hours.';
 }
@@ -410,16 +407,22 @@ function channelTarget(): string | number {
 
 /** Post one message to the Yacht Club channel as the 10x bot.
  *  Throws on any failure — callers treat that as "do not trade". */
-async function postToChannel(text: string): Promise<void> {
+async function postToChannel(text: string, keyboard?: { inline_keyboard: Array<Array<{ text: string; url?: string; callback_data?: string }>> }): Promise<void> {
     const bot = botRef;
     if (!bot) throw new Error('yacht engine has no bot reference');
     const target = channelTarget();
     await withTimeout(
-        bot.telegram.sendMessage(target, text),
+        bot.telegram.sendMessage(target, text, keyboard ? { reply_markup: keyboard as never } : undefined),
         20_000,
         'channel post',
     );
 }
+
+/** Button that takes members into the bot so they can execute a Private Trader
+ *  setup themselves (the engine announces, it does not trade these). */
+const PRIVATE_TRADER_KB = {
+    inline_keyboard: [[{ text: '⟡ Open Private Trader', url: 'https://t.me/Shiloh10xbot' }]],
+};
 
 // ─── User nudges (§4.6) ─────────────────────────────────────────────────────
 
@@ -586,23 +589,35 @@ async function runOneSetup(session: YachtSession): Promise<void> {
         stake,
     });
 
-    // 2. Post the card BEFORE executing. A failure here means no trade at all.
+    // 2. Post the setup BEFORE anything else. A failure here means no drop at all.
     try {
-        await postToChannel(setupCard(product, setup.pair, setup.timeframeSec, setup.direction, setup.confidence));
+        // Private Trader is an announcement with a button into the bot — the
+        // engine never trades these, members execute them themselves.
+        const kb = product === 'private_trader' ? PRIVATE_TRADER_KB : undefined;
+        await postToChannel(setupCard(product, setup.pair, setup.timeframeSec, setup.direction, setup.confidence, galeRounds), kb);
         clearOnce('poster');
     } catch (e) {
         updateYachtSetup(setupId, { status: 'aborted', closed_at: new Date().toISOString() });
-        logger.error('yacht', `poster session unavailable — setup NOT executed: ${errText(e)}`);
-        await fatal(session, `channel post failed: ${errText(e)}`, `could not post to the Yacht Club channel (${errText(e)}). No trade was placed.`);
+        logger.error('yacht', `channel post failed — setup NOT dropped: ${errText(e)}`);
+        await fatal(session, `channel post failed: ${errText(e)}`, `could not post to the Yacht Club channel (${errText(e)}). Nothing was placed.`);
         return;
     }
-    logger.info('yacht', `setup #${setup.pair} posted (${product}, ${tfLabel(setup.timeframeSec)}, ${dirLabel(setup.direction)}, ${setup.confidence}%)`);
+    logger.info('yacht', `setup #${setupId} posted (${product}, ${setup.pair}, ${tfLabel(setup.timeframeSec)}, ${dirLabel(setup.direction)}, ${setup.confidence}%)`);
 
-    // 3. Nudge members. Best-effort — a nudge failure must not block the trade.
+    // 3. Nudge members. Best-effort — a nudge failure must not block anything.
     const nudged = await sendSetupNudges();
     logger.info('yacht', `nudged ${nudged} member(s)`);
 
-    // 4. Execute.
+    // Private Trader stops here — it is announced, not executed. Members open
+    // the bot through the button and run the setup themselves.
+    if (product === 'private_trader') {
+        updateYachtSetup(setupId, { status: 'posted', closed_at: new Date().toISOString() });
+        bumpYachtSessionCounters(session.id, 'none');
+        nextSetupAt = Date.now() + SETUP_PAUSE_MS;
+        return;
+    }
+
+    // 4. Execute (signals only).
     updateYachtSetup(setupId, { status: 'executing' });
     let lastTradeId: string | null = null;
     let outcome: Awaited<ReturnType<typeof runMartingaleCore>>;
@@ -669,11 +684,14 @@ async function endSession(session: YachtSession): Promise<void> {
     endYachtSession(session.id, wins, losses);
     logger.info('yacht', `session #${session.id} (${session.product}) ended — ${wins}W / ${losses}L; cooldown 2h`);
     try {
-        await postToChannel(sessionCloseCard(session.product, wins, losses));
+        await postToChannel(sessionCloseCard(session.product, wins, losses, session.setups_done));
     } catch (e) {
         logger.error('yacht', `session-close post failed: ${errText(e)}`);
     }
-    await notifyAdmin(`Yacht engine: ${productLabel(session.product)} session closed — ${wins} won / ${losses} lost. Next session in 2 hours.`);
+    const closeSummary = session.product === 'private_trader'
+        ? `${session.setups_done} setups shared`
+        : `${wins} won / ${losses} lost`;
+    await notifyAdmin(`Yacht engine: ${productLabel(session.product)} session closed — ${closeSummary}. Next session in 2 hours.`);
 }
 
 /** Resolve a setup orphaned by a restart. Returns true when the engine should
