@@ -14,6 +14,7 @@ import { initCheckinDb, startCheckinScheduler, setCheckinLiveRefresher, handleCh
 import { startBotALoop } from './bot-a-loop.js';
 import { initSmartFlowDb, setSmartFlowScanner, setSmartFlowWizardStarter, setSmartFlowPhotoSender, handleSmartFlowCallback, tryHandleSmartFlowText, getFlowMsgs, startHotBoardScanner } from './smart-flow.js';
 import { startUpdateWatchdog } from './watchdog.js';
+import { startYachtEngine, yachtStart, yachtStop, yachtStatusText, isYachtEngineMessage } from './yacht-setup-engine.js';
 import { autoEngine, initAutoEngine } from './auto-trading.js';
 import { startSwarm, stopSwarm, getSwarmSession, getSwarmStats, setSwarmNotifier, initSwarmDb } from './swarm.js';
 import { startCopying, stopCopying, getCopyStatus, getCopyConfig, updateCopyConfig, adminToggleTrading, setCopyNotifier, initCopyDb } from './copy-trading.js';
@@ -168,7 +169,10 @@ const YACHT_WATCH_TEMPLATES = {
 };
 // Autopilot setup-block buffer (Yacht Club watcher): accumulates
 // ASSETS/TIMEFRAME/RECOVERY posts and fires one nudge when complete.
-let autoSetupBuf: { t: number; assets?: string; tf?: string; gale?: string } | null = null;
+// Shape: { t: number, assets?: string, tf?: string, gale?: string } | null
+// (kept as a comment — bot.ts is copied verbatim into dist/bot.js, so a TS
+// annotation here would make dist/bot.js unparseable by node.)
+let autoSetupBuf = null;
 try {
     db.exec('CREATE TABLE IF NOT EXISTS yacht_watch_sent (telegram_id INTEGER PRIMARY KEY, message_id INTEGER, sent_at INTEGER)');
 } catch { }
@@ -178,6 +182,14 @@ bot.on('channel_post', async (ctx) => {
         const msg = ctx.channelPost ?? ctx.message ?? {};
         const text = String(msg.text ?? msg.caption ?? '');
         console.log(`[yacht-watch] post received (${text.length} chars): ${text.slice(0, 100)}`);
+        // The Yacht Club Setup Engine posts its own cards to this channel and
+        // sends its own nudge. Its copy contains "setup"/"Signals", which the
+        // keyword fallback below would match — letting the watcher run too would
+        // double-nudge every funded member.
+        if (isYachtEngineMessage(text)) {
+            console.log('[yacht-watch] engine post — nudge already sent by the engine, skipping');
+            return;
+        }
         let cat = null;
         let nudgeText = '';
         let kb;
@@ -6195,6 +6207,31 @@ bot.command('pairs', async (ctx) => {
     }
 });
 bot.command('ping', ctx => ctx.reply('pong'));
+// ─── /yacht — Admin only: Yacht Club Setup Engine control ───────────────────
+// /yacht          → status card
+// /yacht start    → arm the engine (starts a session when the cooldown allows)
+// /yacht stop     → disarm; a setup mid-execution is allowed to settle first
+bot.command('yacht', async (ctx) => {
+    if (ctx.from.id !== getAdminId()) {
+        await ctx.reply('✕ Admin only command.').catch(() => { });
+        return;
+    }
+    const arg = (ctx.message?.text ?? '').split(/\s+/).filter(Boolean)[1]?.toLowerCase() ?? '';
+    try {
+        if (arg === 'start') {
+            await ctx.reply(yachtStart());
+            return;
+        }
+        if (arg === 'stop') {
+            await ctx.reply(yachtStop());
+            return;
+        }
+        await ctx.reply(yachtStatusText());
+    }
+    catch (err) {
+        await ctx.reply(`❌ Yacht engine command failed: ${err instanceof Error ? err.message : err}`).catch(() => { });
+    }
+});
 // ─── /checkmate — Admin only: scan all pairs with PRO analysis, show ≥75% confidence ───
 bot.command('checkmate', async (ctx) => {
     const adminId = getAdminId();
@@ -8062,6 +8099,11 @@ setCheckinLiveRefresher(refreshFundedBalanceFromLive);
 startCheckinScheduler(bot);
 // Bot A hourly smart loop (DIRECTIVE-BOT-A-HOURLY-SMART-LOOP.md).
 startBotALoop(bot);
+// Yacht Club Setup Engine (DIRECTIVE-YACHT-CLUB-SETUP-ENGINE.md) — 60s tick,
+// 10-setup sessions on the dedicated Yacht account, posted to the VIP channel
+// as a real user account. Boots ARMED only when yacht_enabled=1; otherwise it
+// loads paused and waits for /yacht start.
+startYachtEngine(bot);
 // Pending-delete recovery — fire deletes that came due while the bot was
 // down, re-arm future ones (broadcast auto-delete survival across restarts).
 restorePendingDeletes();

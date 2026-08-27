@@ -3389,3 +3389,155 @@ export function getMarathonLeaderboard(marathonConfigId: number): Array<{ telegr
     `).all(marathonConfigId) as Array<{ telegram_id: number; trades_done: number; growth_multiplier: number; current_balance_usd: number }>;
     return rows.map((r, i) => ({ ...r, rank: i + 1 }));
 }
+
+// ─── Yacht Club Setup Engine (DIRECTIVE-YACHT-CLUB-SETUP-ENGINE.md) ──────────
+// Sessions of 10 setups posted to the VIP channel and executed on the dedicated
+// Yacht account. Storage only — all behaviour lives in src/yacht-setup-engine.ts.
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS yacht_sessions (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    product     TEXT    NOT NULL,                 -- 'signals' | 'private_trader'
+    status      TEXT    NOT NULL DEFAULT 'idle',  -- idle | running | cooldown | ended | stopped
+    started_at  TEXT,
+    ended_at    TEXT,
+    setups_done INTEGER DEFAULT 0,
+    wins        INTEGER DEFAULT 0,
+    losses      INTEGER DEFAULT 0,
+    created_at  TEXT    DEFAULT (datetime('now'))
+  )
+`);
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS yacht_setups (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id    INTEGER,
+    product       TEXT    NOT NULL,
+    pair          TEXT    NOT NULL,
+    timeframe_sec INTEGER NOT NULL,
+    direction     TEXT    NOT NULL,               -- 'call' | 'put' (display BUY/SELL)
+    stake         REAL    NOT NULL DEFAULT 200,
+    status        TEXT    NOT NULL DEFAULT 'posted', -- posted | executing | won | lost | aborted
+    trade_id      TEXT,
+    result_rounds INTEGER,
+    posted_at     TEXT    DEFAULT (datetime('now')),
+    closed_at     TEXT
+  )
+`);
+
+db.exec(`CREATE INDEX IF NOT EXISTS idx_yacht_setups_session ON yacht_setups(session_id, id)`);
+
+export interface YachtSession {
+    id: number;
+    product: string;
+    status: string;
+    started_at: string | null;
+    ended_at: string | null;
+    setups_done: number;
+    wins: number;
+    losses: number;
+    created_at: string;
+}
+
+export interface YachtSetup {
+    id: number;
+    session_id: number | null;
+    product: string;
+    pair: string;
+    timeframe_sec: number;
+    direction: string;
+    stake: number;
+    status: string;
+    trade_id: string | null;
+    result_rounds: number | null;
+    posted_at: string | null;
+    closed_at: string | null;
+}
+
+/** The session the engine is currently working on — running or cooling down.
+ *  Returns undefined when the engine has never run or the last session ended. */
+export function getActiveYachtSession(): YachtSession | undefined {
+    return db.prepare(`
+        SELECT * FROM yacht_sessions
+        WHERE status IN ('running', 'cooldown')
+        ORDER BY id DESC LIMIT 1
+    `).get() as YachtSession | undefined;
+}
+
+/** Most recent session in any state — used for the 2h cooldown check and to
+ *  derive the next product in the rotation. */
+export function getLastYachtSession(): YachtSession | undefined {
+    return db.prepare(`SELECT * FROM yacht_sessions ORDER BY id DESC LIMIT 1`).get() as YachtSession | undefined;
+}
+
+export function startYachtSession(product: string): YachtSession {
+    const info = db.prepare(`
+        INSERT INTO yacht_sessions (product, status, started_at) VALUES (?, 'running', datetime('now'))
+    `).run(product);
+    return db.prepare(`SELECT * FROM yacht_sessions WHERE id = ?`).get(info.lastInsertRowid) as YachtSession;
+}
+
+export function endYachtSession(id: number, wins: number, losses: number): void {
+    db.prepare(`
+        UPDATE yacht_sessions SET status = 'ended', ended_at = datetime('now'), wins = ?, losses = ? WHERE id = ?
+    `).run(wins, losses, id);
+}
+
+/** Pause a session without ending it — /yacht stop and every fatal condition.
+ *  A stopped session is never resumed; the next start begins a fresh one. */
+export function stopYachtSession(id: number): void {
+    db.prepare(`
+        UPDATE yacht_sessions SET status = 'stopped', ended_at = datetime('now') WHERE id = ?
+    `).run(id);
+}
+
+export function insertYachtSetup(row: {
+    session_id: number;
+    product: string;
+    pair: string;
+    timeframe_sec: number;
+    direction: string;
+    stake: number;
+}): number {
+    const info = db.prepare(`
+        INSERT INTO yacht_setups (session_id, product, pair, timeframe_sec, direction, stake, status)
+        VALUES (@session_id, @product, @pair, @timeframe_sec, @direction, @stake, 'posted')
+    `).run(row);
+    return Number(info.lastInsertRowid);
+}
+
+/** Patch a setup row. Only the known columns are writable — an unknown key is
+ *  ignored rather than interpolated into SQL. */
+export function updateYachtSetup(id: number, patch: Partial<Pick<YachtSetup, 'status' | 'trade_id' | 'result_rounds' | 'closed_at'>>): void {
+    const cols = ['status', 'trade_id', 'result_rounds', 'closed_at'] as const;
+    const sets: string[] = [];
+    const vals: unknown[] = [];
+    for (const c of cols) {
+        if (patch[c] !== undefined) { sets.push(`${c} = ?`); vals.push(patch[c]); }
+    }
+    if (sets.length === 0) return;
+    vals.push(id);
+    db.prepare(`UPDATE yacht_setups SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
+}
+
+/** Session counters advance with the setup outcome so a crash between the trade
+ *  and the next tick cannot lose a result. `'none'` advances setups_done only —
+ *  an aborted setup must still let the session reach its 10, but the engine will
+ *  not claim a win or a loss it never observed. */
+export function bumpYachtSessionCounters(id: number, outcome: 'win' | 'loss' | 'none'): void {
+    db.prepare(`
+        UPDATE yacht_sessions
+        SET setups_done = setups_done + 1,
+            wins   = wins   + ?,
+            losses = losses + ?
+        WHERE id = ?
+    `).run(outcome === 'win' ? 1 : 0, outcome === 'loss' ? 1 : 0, id);
+}
+
+/** Any setup left mid-flight by a restart. The engine refuses to start a new
+ *  setup while one of these exists (restart safety, directive §4.1). */
+export function getInFlightYachtSetup(sessionId: number): YachtSetup | undefined {
+    return db.prepare(`
+        SELECT * FROM yacht_setups WHERE session_id = ? AND status = 'executing' ORDER BY id DESC LIMIT 1
+    `).get(sessionId) as YachtSetup | undefined;
+}
