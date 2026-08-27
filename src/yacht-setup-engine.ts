@@ -227,10 +227,10 @@ function fmtClock(d: Date): string {
 /** The setup messages the engine posts to the Yacht Club:
  *   - signals → the 10x Signal card (bot.ts renderCard) — the engine executes
  *     these on the Yacht account, so the card carries the full ladder.
- *   - private_trader → a SETUP ANNOUNCEMENT, not a card: the engine does NOT
- *     execute Private Trader setups — members run them themselves in the bot.
- *     The post lists assets, direction, timeframe and smart recovery, and the
- *     button opens the bot where they execute it.
+ *   - private_trader → a SETUP ANNOUNCEMENT, not a card: no direction shown
+ *     (members trade it themselves through the button — their own Private
+ *     Trader decides direction). The engine STILL executes the same setup on
+ *     the Yacht account in parallel, so a real result drops at the end.
  *  Channel doctrine: no PnL / stake / balance anywhere. */
 function setupCard(product: string, pair: string, timeframeSec: number, direction: string, confidence: number, galeRounds: number): string {
     const dirStr = direction === 'put' ? 'SELL' : 'BUY';
@@ -316,11 +316,7 @@ function lossCard(product: string, pair: string, timeframeSec: number, direction
     ].join('\n');
 }
 
-function sessionCloseCard(product: string, wins: number, losses: number, setupsDone: number): string {
-    if (product === 'private_trader') {
-        return `Session closed.\n\n${productLabel(product)}: ${setupsDone} setups shared\n` +
-            'Next session in 2 hours.';
-    }
+function sessionCloseCard(product: string, wins: number, losses: number): string {
     return `Session closed.\n\n${productLabel(product)}: ${wins} won / ${losses} lost\n` +
         'Next session in 2 hours.';
 }
@@ -614,16 +610,10 @@ async function runOneSetup(session: YachtSession): Promise<void> {
     const nudged = await sendSetupNudges();
     logger.info('yacht', `nudged ${nudged} member(s)`);
 
-    // Private Trader stops here — it is announced, not executed. Members open
-    // the bot through the button and run the setup themselves.
-    if (product === 'private_trader') {
-        updateYachtSetup(setupId, { status: 'posted', closed_at: new Date().toISOString() });
-        bumpYachtSessionCounters(session.id, 'none');
-        nextSetupAt = Date.now() + SETUP_PAUSE_MS;
-        return;
-    }
-
-    // 4. Execute (signals only).
+    // 4. Execute — the engine runs EVERY setup (signals AND private trader) on
+    //    the Yacht account so a real result drops in the channel at the end.
+    //    Private Trader members still trade it themselves through the button;
+    //    the engine's parallel execution is what produces the result post.
     updateYachtSetup(setupId, { status: 'executing' });
     let lastTradeId: string | null = null;
     let outcome: Awaited<ReturnType<typeof runMartingaleCore>>;
@@ -690,7 +680,7 @@ async function endSession(session: YachtSession): Promise<void> {
     endYachtSession(session.id, wins, losses);
     logger.info('yacht', `session #${session.id} (${session.product}) ended — ${wins}W / ${losses}L; cooldown 2h`);
     try {
-        await postToChannel(sessionCloseCard(session.product, wins, losses, session.setups_done));
+        await postToChannel(sessionCloseCard(session.product, wins, losses));
     } catch (e) {
         logger.error('yacht', `session-close post failed: ${errText(e)}`);
     }
