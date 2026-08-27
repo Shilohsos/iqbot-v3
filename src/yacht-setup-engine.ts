@@ -463,6 +463,14 @@ function retryAfterSeconds(m: string): number {
     return hit ? Number(hit[1]) : 0;
 }
 
+/** Sleep until an absolute epoch ms (1s granularity) — the entry hold, so the
+ *  card countdown and the real IQ Option entry share one clock. */
+async function sleepUntil(targetMs: number): Promise<void> {
+    while (Date.now() < targetMs) {
+        await new Promise(r => setTimeout(r, 1000));
+    }
+}
+
 async function runSignalCountdown(msgId: number, baseText: string, entryAt: number, expiryAt: number): Promise<void> {
     const bot = botRef;
     if (!bot) return;
@@ -665,6 +673,11 @@ async function fatal(session: YachtSession | null, reason: string, adminMsg: str
 
 async function runOneSetup(session: YachtSession): Promise<void> {
     const product = session.product;
+    // Entry/expiry clocks — shared by the countdown and the execution hold.
+    // Function-scoped (var-style) so both the post step and the execution step
+    // see them; block-scoping inside the post try made them invisible later.
+    let entryAt = 0;
+    let expiryAt = 0;
 
     // 1. Analysis first — it needs the IQ session, so a login failure is caught
     //    BEFORE anything is posted and the channel never sees an orphan card.
@@ -708,12 +721,13 @@ async function runOneSetup(session: YachtSession): Promise<void> {
         const cardText = setupCard(product, setup.pair, setup.timeframeSec, setup.direction, setup.confidence, galeRounds);
         const msgId = await postToChannel(cardText, kb);
         clearOnce('poster');
-        // Signals get a live countdown on the card: ⏳ Entry in 0:47 during the
-        // 60s prep, then ⏳ Expiry in 1:30 until the window closes. Fire-and-
-        // forget — it must never block the engine.
+        // One clock for card and execution: the entry fires 60s after the post
+        // (when the countdown hits 0:00), expiry is entry + timeframe. Signals
+        // show the countdown live on the card; private-trader posts run the
+        // same hold silently so results land at the true expiry.
+        entryAt = Date.now() + 60_000;
+        expiryAt = entryAt + setup.timeframeSec * 1000;
         if (product === 'signals') {
-            const entryAt = Date.now() + 60_000;
-            const expiryAt = entryAt + setup.timeframeSec * 1000;
             void runSignalCountdown(msgId, cardText, entryAt, expiryAt).catch(() => { });
         }
     } catch (e) {
@@ -733,6 +747,16 @@ async function runOneSetup(session: YachtSession): Promise<void> {
     //    Private Trader members still trade it themselves through the button;
     //    the engine's parallel execution is what produces the result post.
     updateYachtSetup(setupId, { status: 'executing' });
+    // 4a. Entry hold — the trade fires when the card's countdown reaches 0:00.
+    // The setup is already marked 'executing', so a restart during the hold is
+    // covered by handleInFlight (grace window → abort, no double entry).
+    {
+        const holdMs = entryAt - Date.now();
+        if (holdMs > 0) {
+            logger.info('yacht', `entry hold ${Math.round(holdMs / 1000)}s (${setup.pair} ${dirLabel(setup.direction)}) — trade fires at countdown 0:00`);
+            await sleepUntil(entryAt);
+        }
+    }
     let lastTradeId: string | null = null;
     let outcome: Awaited<ReturnType<typeof runMartingaleCore>>;
     try {
