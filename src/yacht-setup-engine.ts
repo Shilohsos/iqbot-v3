@@ -224,11 +224,27 @@ function fmtClock(d: Date): string {
     return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'Africa/Lagos' });
 }
 
-/** The real 10x signal card — identical structure to what the bot sends users
- *  (bot.ts renderCard), so the Yacht Club sees the same card the members get. */
+/** The bot's real setup cards — identical structure to what the bot sends users,
+ *  so the Yacht Club sees the same cards members get:
+ *   - signals → the 10x Signal card (bot.ts renderCard)
+ *   - private_trader → the OPPORTUNITY FOUND card (bot.ts wizard).
+ *  Channel doctrine: no PnL / stake / balance anywhere, so the private trader
+ *  card deliberately omits the Amount line. */
 function setupCard(product: string, pair: string, timeframeSec: number, direction: string, confidence: number): string {
     const dirStr = direction === 'put' ? 'SELL' : 'BUY';
     const dirEmoji = direction === 'put' ? '🔴' : '🟢';
+    if (product === 'private_trader') {
+        return [
+            'OPPORTUNITY FOUND',
+            `Confidence: ${Math.round(confidence)}% · Bot is ready to execute.`,
+            '',
+            `${dirEmoji} ${direction === 'put' ? 'PUT' : 'CALL'} SIGNAL`,
+            '',
+            `◆ Trading pair: ${pair}`,
+            `◆ Expiration: ${tfLabel(timeframeSec)}`,
+            '◆ Strategy: High-Profit ✦',
+        ].join('\n');
+    }
     const entryTime = new Date(Date.now() + 60_000);
     const lvlTime = (n: number) => fmtClock(new Date(entryTime.getTime() + n * timeframeSec * 1000));
     return [
