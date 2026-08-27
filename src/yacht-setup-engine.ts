@@ -25,8 +25,6 @@
 // Yacht Club channel_post watcher (see the note on §6 below).
 
 import type { Telegraf } from 'telegraf';
-import { TelegramClient } from 'telegram';
-import { StringSession } from 'telegram/sessions/index.js';
 import { ProxyAgent } from 'undici';
 import {
     db,
@@ -99,7 +97,6 @@ let noPairsSince = 0;
 const notifiedOnce = new Set<string>();
 
 let _sdk: YachtSdk | null = null;
-let _poster: TelegramClient | null = null;
 
 // ─── Small helpers ──────────────────────────────────────────────────────────
 
@@ -299,66 +296,11 @@ function dropYachtSdk(reason: string): void {
     void Promise.resolve(sdk.shutdown()).catch(() => { /* best-effort */ });
 }
 
-// ─── Telegram side — posting as a real user account ─────────────────────────
+// ─── Telegram side — posting as the 10x bot ─────────────────────────────────
 //
-// Connect-per-use with a bounded release, exactly like src/affiliate.ts: one
-// auth key permits one live connection, and a half-open socket still counts on
-// Telegram's side. Never hold this client between posts.
-
-async function getPosterClient(): Promise<TelegramClient> {
-    if (_poster?.connected) return _poster;
-
-    const session = envVal('YACHT_TELEGRAM_SESSION');
-    const apiId = parseInt(process.env.TELEGRAM_API_ID ?? '', 10);
-    const apiHash = process.env.TELEGRAM_API_HASH ?? '';
-    if (!session || !Number.isFinite(apiId) || !apiHash) {
-        throw new Error('missing YACHT_TELEGRAM_SESSION / TELEGRAM_API_ID / TELEGRAM_API_HASH');
-    }
-
-    _poster = new TelegramClient(new StringSession(session), apiId, apiHash, {
-        connectionRetries: 3,
-        baseLogger: undefined as never,
-    });
-    try {
-        await withTimeout(_poster.connect(), 15_000, 'poster connect');
-    } catch (err) {
-        try {
-            const conn = (_poster as unknown as { _connection?: { _socket?: { destroy?: () => void } } })._connection;
-            conn?._socket?.destroy?.();
-        } catch { /* best-effort */ }
-        _poster = null;
-        throw err;
-    }
-    return _poster;
-}
-
-function releasePosterClient(): void {
-    const c = _poster;
-    // Null the reference first — that is what makes this idempotent.
-    _poster = null;
-    if (!c) return;
-    const killSocket = () => {
-        try {
-            const conn = (c as unknown as { _connection?: { _socket?: { destroy?: () => void } } })._connection;
-            conn?._socket?.destroy?.();
-        } catch { /* best-effort */ }
-    };
-    try {
-        if (c.connected) {
-            Promise.race([
-                c.disconnect(),
-                new Promise((_, rej) => setTimeout(() => rej(new Error('disconnect timeout')), 2000)),
-            ]).catch(() => {
-                try { c.destroy?.(); } catch { /* best-effort */ }
-                killSocket();
-            });
-        } else {
-            try { c.destroy?.(); } catch { /* best-effort */ }
-            killSocket();
-        }
-    } catch { /* best-effort */ }
-    logger.info('yacht', 'poster session released');
-}
+// The 10x bot (@Shiloh10xbot) is admin of the Yacht Club channel, so it can
+// post there via the Bot API — no user session, no MTProto, no login codes.
+// `botRef` is the same Telegraf instance that handles user messages.
 
 function channelTarget(): string | number {
     const raw = (process.env.YACHT_CHANNEL_ID ?? '').trim() || CHANNEL_ID_DEFAULT;
@@ -367,26 +309,17 @@ function channelTarget(): string | number {
     return Number.isFinite(n) ? n : raw;
 }
 
-/** Post one message to the Yacht Club channel as the real user account.
+/** Post one message to the Yacht Club channel as the 10x bot.
  *  Throws on any failure — callers treat that as "do not trade". */
 async function postToChannel(text: string): Promise<void> {
-    const client = await getPosterClient();
-    try {
-        const target = channelTarget();
-        let entity: unknown;
-        try {
-            entity = await withTimeout(client.getEntity(target as never), 15_000, 'resolve channel');
-        } catch (e) {
-            // A freshly-minted session has an empty entity cache and cannot map a
-            // raw channel id to an access hash. One dialog page fills it in.
-            logger.warn('yacht', `channel not in entity cache (${errText(e)}) — loading dialogs`);
-            await withTimeout(client.getDialogs({ limit: 200 }), 20_000, 'get dialogs');
-            entity = await withTimeout(client.getEntity(target as never), 15_000, 'resolve channel retry');
-        }
-        await withTimeout(client.sendMessage(entity as never, { message: text }), 20_000, 'channel post');
-    } finally {
-        releasePosterClient();
-    }
+    const bot = botRef;
+    if (!bot) throw new Error('yacht engine has no bot reference');
+    const target = channelTarget();
+    await withTimeout(
+        bot.telegram.sendMessage(target, text),
+        20_000,
+        'channel post',
+    );
 }
 
 // ─── User nudges (§4.6) ─────────────────────────────────────────────────────
@@ -745,7 +678,6 @@ export function startYachtEngine(bot: Telegraf): void {
     const missing = [
         envVal('YACHT_IQ_EMAIL') ? null : 'YACHT_IQ_EMAIL',
         envVal('YACHT_IQ_PASSWORD') ? null : 'YACHT_IQ_PASSWORD',
-        envVal('YACHT_TELEGRAM_SESSION') ? null : 'YACHT_TELEGRAM_SESSION',
     ].filter(Boolean) as string[];
 
     logger.info('yacht', `engine ${armed ? 'ARMED' : 'paused'} (60s tick, ${SETUPS_PER_SESSION} setups/session, 2h between sessions)` +
@@ -817,7 +749,6 @@ export function yachtStatusText(): string {
     const missing = [
         envVal('YACHT_IQ_EMAIL') ? null : 'YACHT_IQ_EMAIL',
         envVal('YACHT_IQ_PASSWORD') ? null : 'YACHT_IQ_PASSWORD',
-        envVal('YACHT_TELEGRAM_SESSION') ? null : 'YACHT_TELEGRAM_SESSION',
     ].filter(Boolean) as string[];
     if (missing.length) lines.push('', `⚠ Missing env: ${missing.join(', ')}`);
 
