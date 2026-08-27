@@ -2238,7 +2238,16 @@ async function showDemoLimitReached(ctx) {
         } });
 }
 // ─── /start ───────────────────────────────────────────────────────────────────
-bot.command('start', sendStartMenu);
+// Deep-link payloads: t.me/Shiloh10xbot?start=pt lands members straight in the
+// Private Trader flow (Yacht Club setup announcements carry this button).
+bot.command('start', async (ctx) => {
+    const payload = String(ctx.startPayload || '').toLowerCase();
+    if (payload === 'pt' || payload === 'private' || payload === 'trade') {
+        await handleSmartFlowCallback({ ...ctx, callbackQuery: { data: 'smart:open' } });
+        return;
+    }
+    return sendStartMenu(ctx);
+});
 bot.command('refresh', async (ctx) => {
     const telegramId = ctx.from.id;
     clearUserSsid(telegramId);

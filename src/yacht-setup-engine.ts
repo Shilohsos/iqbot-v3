@@ -417,10 +417,17 @@ async function postToChannel(text: string, keyboard?: { inline_keyboard: Array<A
     );
 }
 
-/** Button that takes members into the bot so they can execute a Private Trader
- *  setup themselves (the engine announces, it does not trade these). */
+/** Button that takes members straight into the bot's Private Trader flow —
+ *  one tap, no menu hunting. The deep link routes to smart:open (the same
+ *  setup card as the menu button); access checks happen there as usual. */
 const PRIVATE_TRADER_KB = {
-    inline_keyboard: [[{ text: '⟡ Open Private Trader', url: 'https://t.me/Shiloh10xbot' }]],
+    inline_keyboard: [[{ text: '⟡ Open Private Trader', url: 'https://t.me/Shiloh10xbot?start=pt' }]],
+};
+
+/** Signal drops carry a direct IQ Option link so members can trade along on
+ *  their own accounts while the engine executes on the Yacht account. */
+const SIGNAL_KB = {
+    inline_keyboard: [[{ text: '◆ Open IQ Option', url: 'https://iqoption.com' }]],
 };
 
 // ─── User nudges (§4.6) ─────────────────────────────────────────────────────
@@ -590,9 +597,9 @@ async function runOneSetup(session: YachtSession): Promise<void> {
 
     // 2. Post the setup BEFORE anything else. A failure here means no drop at all.
     try {
-        // Private Trader is an announcement with a button into the bot — the
-        // engine never trades these, members execute them themselves.
-        const kb = product === 'private_trader' ? PRIVATE_TRADER_KB : undefined;
+        // Private Trader: announcement + button into the bot (members execute
+        // themselves). Signals: card + IQ Option link (members trade along).
+        const kb = product === 'private_trader' ? PRIVATE_TRADER_KB : SIGNAL_KB;
         await postToChannel(setupCard(product, setup.pair, setup.timeframeSec, setup.direction, setup.confidence, galeRounds), kb);
         clearOnce('poster');
     } catch (e) {
