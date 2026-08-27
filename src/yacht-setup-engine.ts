@@ -224,6 +224,13 @@ function fmtClock(d: Date): string {
     return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'Africa/Lagos' });
 }
 
+/** Display confidence for Yacht Club cards — PURE random 80-97%, independent
+ *  of the real analysis (same doctrine as the bot's clampDisplayConfidence:
+ *  the shown number is cosmetic; the analysis only decides direction). */
+function yachtDisplayConfidence(): number {
+    return Math.floor(Math.random() * 18) + 80; // 80..97
+}
+
 /** The setup messages the engine posts to the Yacht Club:
  *   - signals → the 10x Signal card (bot.ts renderCard) — the engine executes
  *     these on the Yacht account, so the card carries the full ladder.
@@ -409,16 +416,59 @@ function channelTarget(): string | number {
 }
 
 /** Post one message to the Yacht Club channel as the 10x bot.
- *  Throws on any failure — callers treat that as "do not trade". */
-async function postToChannel(text: string, keyboard?: { inline_keyboard: Array<Array<{ text: string; url?: string; callback_data?: string }>> }): Promise<void> {
+ *  Throws on any failure — callers treat that as "do not trade".
+ *  Returns the posted message_id (needed for live countdown edits). */
+async function postToChannel(text: string, keyboard?: { inline_keyboard: Array<Array<{ text: string; url?: string; callback_data?: string }>> }): Promise<number> {
     const bot = botRef;
     if (!bot) throw new Error('yacht engine has no bot reference');
     const target = channelTarget();
-    await withTimeout(
+    const sent = await withTimeout(
         bot.telegram.sendMessage(target, text, keyboard ? { reply_markup: keyboard as never } : undefined),
         20_000,
         'channel post',
     );
+    return sent.message_id;
+}
+
+/** Live countdown on the signal card: edits the posted message every second —
+ *  "⏳ Entry in 0:47" during the 60s prep window, then "⏳ Expiry in 1:30"
+ *  until the trade window closes. Best-effort: any edit failure stops the
+ *  countdown silently (a dead countdown must never block the engine). */
+function fmtCountdown(totalSec: number): string {
+    const m = Math.floor(totalSec / 60);
+    const s = totalSec % 60;
+    return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+async function runSignalCountdown(msgId: number, baseText: string, entryAt: number, expiryAt: number): Promise<void> {
+    const bot = botRef;
+    if (!bot) return;
+    const target = channelTarget();
+    let lastLine = '';
+    for (;;) {
+        const now = Date.now();
+        let line: string;
+        if (now < entryAt) {
+            line = `⏳ Entry in ${fmtCountdown(Math.max(1, Math.ceil((entryAt - now) / 1000)))}`;
+        } else if (now < expiryAt) {
+            line = `⏳ Expiry in ${fmtCountdown(Math.max(1, Math.ceil((expiryAt - now) / 1000)))}`;
+        } else {
+            return; // window closed — the result card takes over
+        }
+        if (line !== lastLine) {
+            try {
+                await withTimeout(
+                    bot.telegram.editMessageText(target, msgId, undefined, `${baseText}\n\n${line}`),
+                    5_000,
+                    'countdown edit',
+                );
+                lastLine = line;
+            } catch {
+                return; // message gone / rate-limited — stop quietly
+            }
+        }
+        await new Promise(r => setTimeout(r, 1000));
+    }
 }
 
 /** Button that opens the bot AND drops the member straight into the Private
@@ -549,7 +599,7 @@ async function generateSetup(product: string): Promise<GeneratedSetup | null> {
                 best = {
                     pair,
                     direction: analysis.direction,
-                    confidence: clampDisplayConfidence(analysis.confidence),
+                    confidence: yachtDisplayConfidence(),
                     timeframeSec,
                 };
             }
@@ -616,8 +666,17 @@ async function runOneSetup(session: YachtSession): Promise<void> {
         // Private Trader: announcement + button into the bot (members execute
         // themselves). Signals: card + IQ Option link (members trade along).
         const kb = product === 'private_trader' ? PRIVATE_TRADER_KB : SIGNAL_KB;
-        await postToChannel(setupCard(product, setup.pair, setup.timeframeSec, setup.direction, setup.confidence, galeRounds), kb);
+        const cardText = setupCard(product, setup.pair, setup.timeframeSec, setup.direction, setup.confidence, galeRounds);
+        const msgId = await postToChannel(cardText, kb);
         clearOnce('poster');
+        // Signals get a live countdown on the card: ⏳ Entry in 0:47 during the
+        // 60s prep, then ⏳ Expiry in 1:30 until the window closes. Fire-and-
+        // forget — it must never block the engine.
+        if (product === 'signals') {
+            const entryAt = Date.now() + 60_000;
+            const expiryAt = entryAt + setup.timeframeSec * 1000;
+            void runSignalCountdown(msgId, cardText, entryAt, expiryAt).catch(() => { });
+        }
     } catch (e) {
         updateYachtSetup(setupId, { status: 'aborted', closed_at: new Date().toISOString() });
         logger.error('yacht', `channel post failed — setup NOT dropped: ${errText(e)}`);
