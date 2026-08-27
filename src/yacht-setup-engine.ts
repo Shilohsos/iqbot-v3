@@ -421,13 +421,17 @@ async function postToChannel(text: string, keyboard?: { inline_keyboard: Array<A
     );
 }
 
-/** Button that takes members straight into the bot's Private Trader trade
- *  wizard — one tap. This is a CALLBACK button, not a t.me URL: a URL button
- *  with ?start= does nothing when the user already has the bot chat open
- *  (known Telegram pitfall), while a callback on a channel post arrives at
- *  the bot and opens the wizard in the member's DM directly. */
+/** Button that opens the bot AND drops the member straight into the Private
+ *  Trader trade wizard — one tap.
+ *
+ *  MUST be a t.me URL button: a URL is the only Telegram button type that
+ *  makes the client OPEN the bot chat (navigation). A callback button can
+ *  only run the flow in the background — it never opens the chat, which the
+ *  user explicitly requires. The URL is /start?pt=, and bot.ts routes that
+ *  payload to openTradeWizard() (Trade live | Trade Demo → wizard), so the
+ *  tap both opens the bot and lands in the trade flow. */
 const PRIVATE_TRADER_KB = {
-    inline_keyboard: [[{ text: '⟡ Open Private Trader', callback_data: 'yacht:pt' }]],
+    inline_keyboard: [[{ text: '⟡ Open Private Trader', url: 'https://t.me/Shiloh10xbot?start=pt' }]],
 };
 
 /** Signal drops carry a direct IQ Option link so members can trade along on
