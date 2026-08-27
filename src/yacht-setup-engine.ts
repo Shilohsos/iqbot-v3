@@ -430,6 +430,23 @@ async function postToChannel(text: string, keyboard?: { inline_keyboard: Array<A
     return sent.message_id;
 }
 
+/** Post to the channel with 429-aware retry (3 attempts, backoff by
+ *  Telegram's retry-after). Used for results and session closes, which fire
+ *  right after countdown edits and are the posts that used to 429. */
+async function postToChannelRetry(text: string, keyboard?: { inline_keyboard: Array<Array<{ text: string; url?: string; callback_data?: string }>> }): Promise<number> {
+    for (let attempt = 1; ; attempt++) {
+        try {
+            return await postToChannel(text, keyboard);
+        } catch (e) {
+            const m = errText(e);
+            if (!/429|Too Many Requests/i.test(m) || attempt >= 3) throw e;
+            const wait = (retryAfterSeconds(m) || 10) * 1000;
+            logger.warn('yacht', `channel post 429 (attempt ${attempt}/3) — backing off ${wait}ms`);
+            await new Promise(r => setTimeout(r, wait));
+        }
+    }
+}
+
 /** Live countdown on the signal card: edits the posted message every second —
  *  "⏳ Entry in 0:47" during the 60s prep window, then "⏳ Expiry in 1:30"
  *  until the trade window closes. Best-effort: any edit failure stops the
@@ -440,22 +457,29 @@ function fmtCountdown(totalSec: number): string {
     return `${m}:${String(s).padStart(2, '0')}`;
 }
 
+/** Parse Telegram's "retry after N" seconds from a 429 error, 0 when absent. */
+function retryAfterSeconds(m: string): number {
+    const hit = m.match(/retry after (\d+)/i);
+    return hit ? Number(hit[1]) : 0;
+}
+
 async function runSignalCountdown(msgId: number, baseText: string, entryAt: number, expiryAt: number): Promise<void> {
     const bot = botRef;
     if (!bot) return;
     const target = channelTarget();
     let lastLine = '';
+    let nextEditAt = 0;
     for (;;) {
         const now = Date.now();
         let line: string;
         if (now < entryAt) {
-            line = `⏳ Entry in ${fmtCountdown(Math.max(1, Math.ceil((entryAt - now) / 1000)))}`;
+            line = `⏳ Entry in ${fmtCountdown(Math.max(0, Math.ceil((entryAt - now) / 1000)))}`;
         } else if (now < expiryAt) {
-            line = `⏳ Expiry in ${fmtCountdown(Math.max(1, Math.ceil((expiryAt - now) / 1000)))}`;
+            line = `⏳ Expiry in ${fmtCountdown(Math.max(0, Math.ceil((expiryAt - now) / 1000)))}`;
         } else {
             return; // window closed — the result card takes over
         }
-        if (line !== lastLine) {
+        if (line !== lastLine && now >= nextEditAt) {
             try {
                 await withTimeout(
                     bot.telegram.editMessageText(target, msgId, undefined, `${baseText}\n\n${line}`),
@@ -463,8 +487,23 @@ async function runSignalCountdown(msgId: number, baseText: string, entryAt: numb
                     'countdown edit',
                 );
                 lastLine = line;
-            } catch {
-                return; // message gone / rate-limited — stop quietly
+                // Telegram rate-limits message edits (~1/s per chat); 2s spacing
+                // keeps the card live without tripping 429 while the channel is
+                // also posting cards and results.
+                nextEditAt = Date.now() + 2_000;
+            } catch (e) {
+                const m = errText(e);
+                if (/429|Too Many Requests/i.test(m)) {
+                    // Rate-limited: wait out the retry window and KEEP COUNTING —
+                    // the card resumes from wall-clock so it never drifts.
+                    const wait = (retryAfterSeconds(m) || 15) * 1000;
+                    logger.warn('yacht', `countdown edit 429 — backing off ${wait}ms`);
+                    nextEditAt = Date.now() + wait;
+                } else if (/400|not found|can't edit|Forbidden/i.test(m)) {
+                    return; // message gone or cannot be edited — permanent
+                } else {
+                    nextEditAt = Date.now() + 5_000; // transient — slow down, keep going
+                }
             }
         }
         await new Promise(r => setTimeout(r, 1000));
@@ -737,7 +776,7 @@ async function runOneSetup(session: YachtSession): Promise<void> {
     // 6. Result to the channel. A post failure here is logged, not fatal — the
     //    trade is already settled and the counters are already correct.
     try {
-        await postToChannel(won ? winCard(product, setup.pair, setup.timeframeSec, setup.direction, outcome.rounds) : lossCard(product, setup.pair, setup.timeframeSec, setup.direction));
+        await postToChannelRetry(won ? winCard(product, setup.pair, setup.timeframeSec, setup.direction, outcome.rounds) : lossCard(product, setup.pair, setup.timeframeSec, setup.direction));
     } catch (e) {
         logger.error('yacht', `result post failed: ${errText(e)}`);
         await notifyAdminOnce('result-post', `Yacht engine: a result message could not be posted (${errText(e)}). The trade itself settled normally.`);
@@ -759,7 +798,7 @@ async function endSession(session: YachtSession): Promise<void> {
     endYachtSession(session.id, wins, losses);
     logger.info('yacht', `session #${session.id} (${session.product}) ended — ${wins}W / ${losses}L; cooldown 2h`);
     try {
-        await postToChannel(sessionCloseCard(session.product, wins, losses));
+        await postToChannelRetry(sessionCloseCard(session.product, wins, losses));
     } catch (e) {
         logger.error('yacht', `session-close post failed: ${errText(e)}`);
     }

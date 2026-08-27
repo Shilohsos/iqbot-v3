@@ -8063,8 +8063,15 @@ setTimeout(async () => {
                     console.log(`[GALE-BOOT] Resuming gale for user ${gale.telegram_id} (trade was ${trade.status})`);
                     await resumeGaleAfterRestart(bot, gale, trade.status);
                 } else {
-                    // Trade still in_flight — recovery will catch it and resume
-                    console.log(`[GALE-BOOT] Trade still in_flight for user ${gale.telegram_id}, periodic recovery will handle`);
+                    // Trade still in_flight — recovery will catch it and resume.
+                    // REVERT the 'resuming' mark placed above: if we leave it,
+                    // the periodic recovery sees 'resuming' and skips, and once
+                    // the trade resolves nothing ever re-selects the row — the
+                    // chain dies with no martingale round (Bethel 17:25 incident,
+                    // 5 users 2026-08-27). Reverting lets recovery pick it up
+                    // the moment the trade settles.
+                    db.prepare("UPDATE gale_sessions SET status='active', updated_at=datetime('now') WHERE telegram_id=? AND status='resuming'").run(gale.telegram_id);
+                    console.log(`[GALE-BOOT] Trade still in_flight for user ${gale.telegram_id}, periodic recovery will handle (status reverted to active)`);
                 }
             }
         }
