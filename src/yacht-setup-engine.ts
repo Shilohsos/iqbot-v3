@@ -277,7 +277,7 @@ function winCard(product: string, pair: string, timeframeSec: number, direction:
     const maxAttempts = 4; // initial + 3 gale rounds
     if (product === 'private_trader') {
         return [
-            `${dirStr} ${dirEmoji} · ${pair} · ${tfLabel(timeframeSec)} · Attempt ${rounds}/${maxAttempts}`,
+            `${pair} · ${tfLabel(timeframeSec)} · Attempt ${rounds}/${maxAttempts}`,
             '',
             rounds === 1 ? '🟢 WIN — Direct Win ✅' : '🟢 WIN — Recovery complete ✅',
             'New setup loading ✦',
@@ -301,7 +301,7 @@ function lossCard(product: string, pair: string, timeframeSec: number, direction
     const maxAttempts = 4; // initial + 3 gale rounds
     if (product === 'private_trader') {
         return [
-            `${dirStr} ${dirEmoji} · ${pair} · ${tfLabel(timeframeSec)} · All ${maxAttempts} attempts done`,
+            `${pair} · ${tfLabel(timeframeSec)} · All ${maxAttempts} attempts done`,
             '',
             '🔴 LOSS — Sequence done · New setup loading ✦',
         ].join('\n');
