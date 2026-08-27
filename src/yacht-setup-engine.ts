@@ -240,7 +240,6 @@ function setupCard(product: string, pair: string, timeframeSec: number, directio
             '⟡ PRIVATE TRADER SETUP ✦',
             '',
             `◆ Assets: ${pair}`,
-            `◆ Direction: ${dirStr} ${dirEmoji}`,
             `◆ Timeframe: ${tfLabel(timeframeSec)}`,
             `◆ Smart Recovery: ${galeRounds} rounds`,
             '',
