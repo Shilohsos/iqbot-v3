@@ -2933,6 +2933,14 @@ bot.action('ui:trade', async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
     await openTradeWizard(ctx);
 });
+// Yacht Club setup announcement button — one tap opens the Private Trader
+// trade wizard for the member who tapped (channel-post callback). The
+// callback's ctx.chat is the CHANNEL, so the chat is redirected to the
+// member's DM — otherwise the wizard would post into the channel.
+bot.action('yacht:pt', async (ctx) => {
+    await ctx.answerCbQuery().catch(() => { });
+    await openTradeWizard({ ...ctx, chat: { id: ctx.from.id } });
+});
 // ═══════════════════════════════════════════════════════════════════════════════
 // Product access — locks, Signals, Auto Trading, Auto God Mode
 // ═══════════════════════════════════════════════════════════════════════════════
