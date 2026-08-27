@@ -495,10 +495,12 @@ async function runSignalCountdown(msgId: number, baseText: string, entryAt: numb
                     'countdown edit',
                 );
                 lastLine = line;
-                // Telegram rate-limits message edits (~1/s per chat); 2s spacing
-                // keeps the card live without tripping 429 while the channel is
-                // also posting cards and results.
-                nextEditAt = Date.now() + 2_000;
+                // Telegram's per-chat budget for bots is ~20 messages/min
+                // (edits count). 2s spacing = 30/min → guaranteed 429 after a
+                // minute of ticking, which froze the card (stopped at 0:23,
+                // jumped to 0:02 after the penalty). 4s = 15/min, leaving
+                // headroom for the setup post, result post and session close.
+                nextEditAt = Date.now() + 4_000;
             } catch (e) {
                 const m = errText(e);
                 if (/429|Too Many Requests/i.test(m)) {
