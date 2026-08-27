@@ -192,10 +192,9 @@ function clearOnce(key: string): void {
 // are exact substrings of the engine's own copy — precise enough that a manual
 // post by Master still nudges normally.
 const ENGINE_SIGNATURES = [
-    'YACHT CLUB — SIGNALS SETUP ✦',
-    'YACHT CLUB — PRIVATE TRADER SETUP ✦',
-    '🟢 WIN — setup hit.',
-    'There was a loss on this setup.',
+    '· 10x Signal',
+    '🟢 WIN — signal hit! ✅',
+    '🔴 Signal finished — all attempts done.',
     'Next session in 2 hours.',
 ];
 
@@ -209,21 +208,77 @@ export function isYachtEngineMessage(text: string): boolean {
 
 // ─── Message formats (§4.5) ─────────────────────────────────────────────────
 
+/** Currency → flag emoji, mirroring the bot's real signal card (§ bot.ts). */
+const CURRENCY_FLAGS: Record<string, string> = {
+    EUR: '🇪🇺', USD: '🇺🇸', GBP: '🇬🇧', JPY: '🇯🇵', AUD: '🇦🇺',
+    NZD: '🇳🇿', CAD: '🇨🇦', CHF: '🇨🇭',
+};
+
+function pairFlags(p: string): string {
+    const m = p.match(/^(\w{3})(\w{3})/);
+    if (!m) return p;
+    return `${CURRENCY_FLAGS[m[1]] || ''} ${m[1]}/${m[2]} ${CURRENCY_FLAGS[m[2]] || ''}`;
+}
+
+function fmtClock(d: Date): string {
+    return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'Africa/Lagos' });
+}
+
+/** The real 10x signal card — identical structure to what the bot sends users
+ *  (bot.ts renderCard), so the Yacht Club sees the same card the members get. */
 function setupCard(product: string, pair: string, timeframeSec: number, direction: string, confidence: number): string {
-    const header = product === 'private_trader'
-        ? '⟡ YACHT CLUB — PRIVATE TRADER SETUP ✦'
-        : '· YACHT CLUB — SIGNALS SETUP ✦';
-    return `${header}\n\n${pair} · ${tfLabel(timeframeSec)}\n\n` +
-        `Direction: ${dirLabel(direction)}\nConfidence: ${confidence}%\n\n` +
-        'The engine is executing this now.';
+    const dirStr = direction === 'put' ? 'SELL' : 'BUY';
+    const dirEmoji = direction === 'put' ? '🔴' : '🟢';
+    const entryTime = new Date(Date.now() + 60_000);
+    const lvlTime = (n: number) => fmtClock(new Date(entryTime.getTime() + n * timeframeSec * 1000));
+    return [
+        '· 10x Signal',
+        '',
+        `✦ Accuracy Level: ${Math.round(confidence)}%`,
+        '',
+        `✦ Trade: ${pairFlags(pair)} (OTC)`,
+        `··· Expiry: ${tfLabel(timeframeSec)}`,
+        `→️ Entry: ${fmtClock(entryTime)}`,
+        `◆ Direction: ${dirStr} ${dirEmoji}`,
+        '',
+        '→️ Martingale Levels:',
+        `• Level 1 → ${lvlTime(1)}`,
+        `• Level 2 → ${lvlTime(2)}`,
+        `• Level 3 → ${lvlTime(3)}`,
+        '',
+        'The engine is executing this now.',
+    ].join('\n');
 }
 
+/** WIN result — mirrors the bot's signal-hit template. No PnL, no amounts. */
 function winCard(pair: string, timeframeSec: number, direction: string, rounds: number): string {
-    return `🟢 WIN — setup hit.\n\n${pair} · ${tfLabel(timeframeSec)} · ${dirLabel(direction)}\n` +
-        `Recovery: ${rounds} round(s)`;
+    const dirStr = direction === 'put' ? 'SELL' : 'BUY';
+    const dirEmoji = direction === 'put' ? '🔴' : '🟢';
+    const maxAttempts = 4; // initial + 3 gale rounds
+    return [
+        `· ${pairFlags(pair)} (OTC)`,
+        '',
+        `${dirStr} ${dirEmoji} · ${tfLabel(timeframeSec)} · Attempt ${rounds}/${maxAttempts}`,
+        '',
+        '🟢 WIN — signal hit! ✅',
+        'Ready for the next signal 👇',
+    ].join('\n');
 }
 
-const LOSS_CARD = 'There was a loss on this setup.\nThe engine is already analyzing the next one.';
+/** LOSS result — mirrors the bot's exhausted-attempts template. No PnL. */
+function lossCard(pair: string, timeframeSec: number, direction: string): string {
+    const dirStr = direction === 'put' ? 'SELL' : 'BUY';
+    const dirEmoji = direction === 'put' ? '🔴' : '🟢';
+    const maxAttempts = 4; // initial + 3 gale rounds
+    return [
+        `· ${pairFlags(pair)} (OTC)`,
+        '',
+        `${dirStr} ${dirEmoji} · ${tfLabel(timeframeSec)} · All ${maxAttempts} attempts done`,
+        '',
+        '🔴 Signal finished — all attempts done.',
+        'Try a new signal 👇',
+    ].join('\n');
+}
 
 function sessionCloseCard(product: string, wins: number, losses: number): string {
     return `Session closed.\n\n${productLabel(product)}: ${wins} won / ${losses} lost\n` +
@@ -341,6 +396,12 @@ function nudgeTargets(): number[] {
 /** Cancel-out send: the new nudge replaces the previous one so a member never
  *  accumulates a column of them. Exactly the watcher's pattern, same table. */
 async function sendSetupNudges(): Promise<number> {
+    // Config gate: yacht_nudges=0 silences user nudges (test channel runs,
+    // private session testing) while the channel posts keep working.
+    if (getConfig('yacht_nudges') === '0') {
+        logger.info('yacht', 'nudges disabled by config (yacht_nudges=0)');
+        return 0;
+    }
     const bot = botRef;
     if (!bot) return 0;
     const targets = nudgeTargets();
@@ -542,7 +603,7 @@ async function runOneSetup(session: YachtSession): Promise<void> {
     // 6. Result to the channel. A post failure here is logged, not fatal — the
     //    trade is already settled and the counters are already correct.
     try {
-        await postToChannel(won ? winCard(setup.pair, setup.timeframeSec, setup.direction, outcome.rounds) : LOSS_CARD);
+        await postToChannel(won ? winCard(setup.pair, setup.timeframeSec, setup.direction, outcome.rounds) : lossCard(setup.pair, setup.timeframeSec, setup.direction));
     } catch (e) {
         logger.error('yacht', `result post failed: ${errText(e)}`);
         await notifyAdminOnce('result-post', `Yacht engine: a result message could not be posted (${errText(e)}). The trade itself settled normally.`);
@@ -656,6 +717,7 @@ function seedYachtConfig(): void {
         ['yacht_tf_private', '120'],
         ['yacht_stake', '200'],
         ['yacht_gale', '3'],
+        ['yacht_nudges', '1'],
     ];
     for (const [k, v] of defaults) {
         if (getConfig(k) === null) setConfig(k, v);
