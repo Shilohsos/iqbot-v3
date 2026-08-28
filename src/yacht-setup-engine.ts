@@ -954,15 +954,32 @@ export function startYachtEngine(bot: Telegraf): void {
     }
 }
 
-/** Arm the engine. The next tick picks it up; a tick is also kicked immediately
- *  so `/yacht start` feels instant. */
+/** Arm the engine. When no session is running, a new session starts
+ *  IMMEDIATELY — the 2h cooldown is bypassed (force-start). The cooldown
+ *  resets to 2h from whenever that forced session ends. */
 export function yachtStart(): string {
     setConfig('yacht_enabled', '1');
     notifiedOnce.clear();
     noPairsSince = 0;
+    const active = getActiveYachtSession();
+    if (!active) {
+        const last = getLastYachtSession();
+        const product = nextProduct(last);
+        try {
+            const session = startYachtSession(product);
+            nextSetupAt = 0;
+            logger.info('yacht', `session #${session.id} started (${product}) — force-started by admin (cooldown bypassed)`);
+            void notifyAdmin(`Yacht engine: ${productLabel(product)} session started (forced by admin) — ${SETUPS_PER_SESSION} setups at ${tfLabel(timeframeFor(product))}.`);
+        } catch (e) {
+            logger.error('yacht', `force-start failed: ${errText(e)}`);
+            return `❌ Yacht engine started, but the session could not be created: ${errText(e)}`;
+        }
+    }
     void yachtTick();
     logger.info('yacht', 'engine armed by admin');
-    return 'Yacht engine started.';
+    return active
+        ? `Yacht engine started. Session #${active.id} (${productLabel(active.product)}) is already running — one session at a time.`
+        : 'Yacht engine started — session forced now. The 2h wait resets when the session ends.';
 }
 
 /** Disarm. A setup already mid-execution holds `engineBusy` and finishes
@@ -1018,6 +1035,7 @@ export function yachtStatusText(): string {
 
     lines.push('', `Stake ${cfgNum('yacht_stake', 200)} · Gale ${cfgInt('yacht_gale', 3)} · ` +
         `Signals ${tfLabel(cfgInt('yacht_tf_signals', 60))} · Private ${tfLabel(cfgInt('yacht_tf_private', 120))}`);
-    lines.push('', '/yacht start · /yacht stop');
+    lines.push('', '/yacht start — forces a session now (bypasses the 2h wait)');
+    lines.push('/yacht stop — stops after the current setup');
     return lines.join('\n');
 }
