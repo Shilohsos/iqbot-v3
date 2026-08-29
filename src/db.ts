@@ -3541,3 +3541,22 @@ export function getInFlightYachtSetup(sessionId: number): YachtSetup | undefined
         SELECT * FROM yacht_setups WHERE session_id = ? AND status = 'executing' ORDER BY id DESC LIMIT 1
     `).get(sessionId) as YachtSetup | undefined;
 }
+
+/** EVERY setup still marked `executing`, across all sessions — the boot scan's
+ *  input. A process killed mid-trade leaves one of these behind, and it belongs
+ *  to whichever session was running then, not necessarily the current one. */
+export function getExecutingYachtSetups(): YachtSetup[] {
+    return db.prepare(`SELECT * FROM yacht_setups WHERE status = 'executing' ORDER BY id ASC`).all() as YachtSetup[];
+}
+
+/** The session a recovered setup belongs to — needed for the product-specific
+ *  result card and to bump the right counters. */
+export function getYachtSessionById(id: number): YachtSession | undefined {
+    return db.prepare(`SELECT * FROM yacht_sessions WHERE id = ?`).get(id) as YachtSession | undefined;
+}
+
+/** Re-read one setup immediately before posting its result. The double-post
+ *  guard depends on seeing the CURRENT status, not a stale snapshot. */
+export function getYachtSetupById(id: number): YachtSetup | undefined {
+    return db.prepare(`SELECT * FROM yacht_setups WHERE id = ?`).get(id) as YachtSetup | undefined;
+}

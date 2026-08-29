@@ -217,3 +217,158 @@ export async function recoverMissedTradeResults(bot, runMartingaleFn) {
     }
     if (resolved.length > 0) console.log(`[RECOVERY] ${resolved.length} resolved: ${resolved.join(', ')}`);
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Yacht trade reconciliation (DIRECTIVE-YACHT-RESULT-HARDENING Part 2)
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// recoverMissedTradeResults() above resolves USER trades and finds them with
+// `FROM trades t JOIN users u ON u.telegram_id = t.telegram_id`. Yacht engine
+// trades carry `telegram_id = 0` and have no users row, so that JOIN drops them
+// — which is why trade #124166 sat `in_flight` for 24 minutes on 2026-08-29
+// with nothing in the system able to resolve it.
+//
+// This half is deliberately Telegram-free and read-only against IQ Option: it
+// resolves the chain and writes the `trades` rows. The ENGINE owns the
+// yacht_setups update, the session counters and the channel post — one place
+// decides what the channel sees.
+
+/** What a resolved yacht chain amounts to.
+ *   win       — a round closed WIN (or TIE, which the engine counts as a win)
+ *   loss      — every round of a COMPLETE ladder closed LOSS
+ *   truncated — the ladder stopped early (process died mid-chain): the rounds we
+ *               can see all lost, but the remaining rounds were never placed.
+ *               The engine must NOT post a loss card for this — "all attempts
+ *               done" would be a lie. */
+export interface YachtChainResolution {
+    outcome: 'win' | 'loss' | 'truncated';
+    /** Rounds actually placed and resolved (1 = direct hit, no recovery). */
+    rounds: number;
+    /** IQ Option option id of the deciding round, for yacht_setups.trade_id. */
+    tradeId: number | null;
+    externalId: number | null;
+    pnl: number;
+    /** Rows found in the window that IQ Option could not account for. */
+    unresolved: number;
+}
+
+/** Trades rows belonging to one yacht setup's martingale chain.
+ *
+ *  `yacht_setups.posted_at` is sqlite `datetime('now')` ("YYYY-MM-DD HH:MM:SS",
+ *  UTC) while trade-core writes `trades.created_at` as a JS ISO string. The two
+ *  formats do NOT compare lexicographically, so the window is computed in JS and
+ *  handed over as ISO — comparing ISO against ISO, which does sort correctly. */
+/** Derived from createSdk rather than imported from index.js — same trick the
+ *  engine uses, so this file gains no new module dependency. */
+type Sdk = Awaited<ReturnType<typeof createSdk>>;
+
+interface YachtSetupRow {
+    id: number;
+    session_id: number | null;
+    product: string;
+    pair: string;
+    timeframe_sec: number;
+    direction: string;
+    stake: number;
+    status: string;
+    trade_id: string | null;
+    result_rounds: number | null;
+    posted_at: string | null;
+    closed_at: string | null;
+}
+
+function yachtChainRows(setup: YachtSetupRow, maxRounds: number) {
+    const postedMs = Date.parse(String(setup.posted_at ?? '').replace(' ', 'T') + 'Z');
+    if (!Number.isFinite(postedMs)) return [];
+    const tf = Number(setup.timeframe_sec) || 60;
+    // 60s entry hold + every round's expiry + inter-round cooldowns + slack.
+    const windowMs = 60_000 + maxRounds * (tf * 1000 + 5_000) + 120_000;
+    const from = new Date(postedMs - 5_000).toISOString();
+    const to = new Date(postedMs + windowMs).toISOString();
+
+    return db.prepare(`
+        SELECT id, trade_id, external_id, pair, direction, amount, status, pnl, created_at, timeframe_sec
+        FROM trades
+        WHERE telegram_id = 0
+          AND pair = ?
+          AND created_at >= ? AND created_at <= ?
+        ORDER BY id ASC
+        LIMIT ?
+    `).all(setup.pair, from, to, maxRounds);
+}
+
+/** Resolve one yacht setup's chain from IQ Option position history and write the
+ *  outcome back to `trades`. Read-only against the broker: it looks positions up,
+ *  it never places anything, so it can never cause a second entry.
+ *
+ *  Returns null when IQ Option has no record of any round — the caller then
+ *  aborts the setup rather than inventing a result.
+ *
+ *  @param sdk        a live SDK for the YACHT account (never a member session)
+ *  @param setup      the `yacht_setups` row
+ *  @param galeRounds configured recovery rounds; the full ladder is galeRounds+1 */
+export async function resolveYachtSetupTrades(sdk: Sdk, setup: YachtSetupRow, galeRounds: number): Promise<YachtChainResolution | null> {
+    const maxRounds = Math.max(1, galeRounds + 1);
+    const rows = yachtChainRows(setup, maxRounds);
+    if (rows.length === 0) {
+        console.log(`[YACHT-RECOVERY] setup ${setup.id}: no trades row in the window — nothing was placed`);
+        return null;
+    }
+
+    const settled: Array<{ status: string; pnl: number; tradeId: number | null; externalId: number | null }> = [];
+    let unresolved = 0;
+
+    for (const row of rows) {
+        // Already settled by the live chain before it died — trust the DB.
+        if (row.status === 'WIN' || row.status === 'LOSS' || row.status === 'TIE') {
+            settled.push({ status: row.status, pnl: Number(row.pnl) || 0, tradeId: row.trade_id ?? null, externalId: row.external_id ?? null });
+            continue;
+        }
+        // in_flight / TIMEOUT / ERROR — ERROR is included on purpose: the user-path
+        // sweep at the top of this file stamps EVERY stale in_flight row (yacht rows
+        // included — that UPDATE has no telegram_id filter) with
+        // 'unconfirmed_settlement_stale' after 45 minutes. A yacht row that crossed
+        // that line is still perfectly resolvable from position history.
+        if (!row.trade_id) { unresolved++; break; }
+        let recovered = null;
+        try {
+            const startedAt = Date.parse(row.created_at) || (Date.now() - 600_000);
+            recovered = await recoverFinal(sdk, row.trade_id, row.external_id ?? undefined, row.amount, startedAt);
+        } catch (e) {
+            console.warn(`[YACHT-RECOVERY] recoverFinal threw for trade #${row.trade_id}: ${e instanceof Error ? e.message : e}`);
+        }
+        if (!recovered) {
+            unresolved++;
+            console.warn(`[YACHT-RECOVERY] setup ${setup.id}: trade #${row.trade_id} not found in position history`);
+            break;   // the ladder is ordered — stop at the first hole
+        }
+        const pnl = recovered.status === 'WIN' ? recovered.pnl : 0;
+        db.prepare(`UPDATE trades SET status = ?, pnl = ?, external_id = COALESCE(?, external_id), error = NULL
+                     WHERE id = ? AND status IN ('in_flight', 'TIMEOUT', 'ERROR')`)
+            .run(recovered.status, pnl, recovered.externalId ?? null, row.id);
+        console.log(`[YACHT-RECOVERY] setup ${setup.id}: trade #${row.trade_id} → ${recovered.status} (${pnl}) src=${recovered.settleSource}`);
+        settled.push({ status: recovered.status, pnl, tradeId: row.trade_id, externalId: recovered.externalId ?? row.external_id ?? null });
+    }
+
+    if (settled.length === 0) return null;
+
+    const last = settled[settled.length - 1];
+    // Diagnostic only — never shown in the channel (no PnL doctrine).
+    const totalPnl = settled.reduce((s, r) => s + r.pnl, 0);
+
+    // TIE is a win for the engine (stake returned), matching runOneSetup.
+    if (last.status === 'WIN' || last.status === 'TIE') {
+        return { outcome: 'win', rounds: settled.length, tradeId: last.tradeId, externalId: last.externalId, pnl: totalPnl, unresolved };
+    }
+    // Every visible round lost. Only a COMPLETE ladder is a real loss; a ladder cut
+    // short by the restart is 'truncated' and gets no card.
+    const complete = settled.length >= maxRounds && unresolved === 0;
+    return {
+        outcome: complete ? 'loss' : 'truncated',
+        rounds: settled.length,
+        tradeId: last.tradeId,
+        externalId: last.externalId,
+        pnl: totalPnl,
+        unresolved,
+    };
+}

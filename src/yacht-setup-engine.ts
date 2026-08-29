@@ -40,8 +40,13 @@ import {
     updateYachtSetup,
     bumpYachtSessionCounters,
     getInFlightYachtSetup,
+    getExecutingYachtSetups,
+    getYachtSessionById,
+    getYachtSetupById,
     type YachtSession,
+    type YachtSetup,
 } from './db.js';
+import { resolveYachtSetupTrades } from './tradeRecovery.js';
 import { logger } from './logger.js';
 import { getAdminId } from './ui/admin.js';
 import { runAdminAnalysis } from './admin-analysis.js';
@@ -63,11 +68,15 @@ const SETUPS_PER_SESSION = 10;
 const SETUP_PAUSE_MS = 120_000;
 /** Gap between one session ending and the next starting. */
 const COOLDOWN_MS = 2 * 60 * 60_000;
-/** How long an `executing` setup may sit before the engine gives up on it.
- *  A process restart mid-trade orphans the row — trade recovery settles the
- *  TRADE, but nothing settles the setup, so without this the session wedges
- *  forever. Sized above the worst case (5M expiry × 3 gale rounds + cooldowns). */
-const IN_FLIGHT_GRACE_MS = 45 * 60_000;
+/** Settle slack added on top of the full martingale ladder when budgeting one
+ *  setup's execution (DIRECTIVE-YACHT-RESULT-HARDENING Part 1). */
+const CHAIN_SLACK_MS = 180_000;
+/** How long after a setup was posted an orphaned `executing` row is considered
+ *  resolvable. The row can only be orphaned by a process death — while a chain
+ *  is genuinely running in-process, `engineBusy` stops any tick from reaching
+ *  the check at all — so this is purely "has the broker had time to settle it".
+ *  Covers the 60s entry hold + the expiry + 30s. */
+const ORPHAN_SETTLE_SLACK_MS = 90_000;
 /** Admin is told about a dead market only after it has lasted this long. */
 const NO_PAIRS_ALERT_MS = 60 * 60_000;
 /** Candles fed to the PRO engine — same count as the 10x admin analysis path. */
@@ -95,6 +104,11 @@ let nextSetupAt = 0;
 let noPairsSince = 0;
 /** Admin-notification dedupe keys, cleared when the condition clears. */
 const notifiedOnce = new Set<string>();
+/** Cancellation token for the live card countdown. A chain that aborts must not
+ *  leave "⏳ Entry in 0:47" ticking on a card whose trade is already resolved. */
+let activeCountdown: { cancelled: boolean } | null = null;
+/** The boot scan runs once, inside the first tick, before any new setup starts. */
+let bootScanDone = false;
 
 let _sdk: YachtSdk | null = null;
 
@@ -471,13 +485,22 @@ async function sleepUntil(targetMs: number): Promise<void> {
     }
 }
 
-async function runSignalCountdown(msgId: number, baseText: string, entryAt: number, expiryAt: number): Promise<void> {
+/** Stop the live countdown immediately. Called when a setup's chain ends —
+ *  normally, on abort, or on timeout — so no edit ever lands on a card whose
+ *  result has already been posted. */
+function cancelCountdown(): void {
+    if (activeCountdown) activeCountdown.cancelled = true;
+    activeCountdown = null;
+}
+
+async function runSignalCountdown(msgId: number, baseText: string, entryAt: number, expiryAt: number, token: { cancelled: boolean }): Promise<void> {
     const bot = botRef;
     if (!bot) return;
     const target = channelTarget();
     let lastLine = '';
     let nextEditAt = 0;
     for (;;) {
+        if (token.cancelled) return;
         const now = Date.now();
         let line: string;
         if (now < entryAt) {
@@ -730,7 +753,9 @@ async function runOneSetup(session: YachtSession): Promise<void> {
         entryAt = Date.now() + 60_000;
         expiryAt = entryAt + setup.timeframeSec * 1000;
         if (product === 'signals') {
-            void runSignalCountdown(msgId, cardText, entryAt, expiryAt).catch(() => { });
+            const token = { cancelled: false };
+            activeCountdown = token;
+            void runSignalCountdown(msgId, cardText, entryAt, expiryAt, token).catch(() => { });
         }
     } catch (e) {
         updateYachtSetup(setupId, { status: 'aborted', closed_at: new Date().toISOString() });
@@ -749,35 +774,59 @@ async function runOneSetup(session: YachtSession): Promise<void> {
     //    Private Trader members still trade it themselves through the button;
     //    the engine's parallel execution is what produces the result post.
     updateYachtSetup(setupId, { status: 'executing' });
-    // 4a. Entry hold — the trade fires when the card's countdown reaches 0:00.
-    // The setup is already marked 'executing', so a restart during the hold is
-    // covered by handleInFlight (grace window → abort, no double entry).
-    {
-        const holdMs = entryAt - Date.now();
-        if (holdMs > 0) {
-            logger.info('yacht', `entry hold ${Math.round(holdMs / 1000)}s (${setup.pair} ${dirLabel(setup.direction)}) — trade fires at countdown 0:00`);
-            await sleepUntil(entryAt);
-        }
-    }
+
+    // 4a. TOTAL-CHAIN BUDGET (DIRECTIVE-YACHT-RESULT-HARDENING Part 1).
+    // The 2026-08-29 incident: the watchdog restarted the process mid-settle, the
+    // in-process `runMartingaleCore` await died with it, and — because nothing
+    // bounded this step — the engine sat on `status='executing'` forever, never
+    // posted a confirmed WIN, and blocked the next setup for 24 minutes.
+    // Budget = the full ladder's expiries + 3 min of settle slack. The 60s entry
+    // hold is INSIDE the budget (it lives in the same wrapped promise), covered
+    // by the slack.
+    const chainTimeoutMs = (galeRounds + 1) * setup.timeframeSec * 1000 + CHAIN_SLACK_MS;
+    const chainLabel = `setup ${setupId} chain`;
     let lastTradeId: string | null = null;
-    let outcome: Awaited<ReturnType<typeof runMartingaleCore>>;
+    let outcome: Awaited<ReturnType<typeof runMartingaleCore>> | null = null;
+
     try {
-        const sdk = await getYachtSdk();
-        logger.info('yacht', `placing ${setup.pair} ${setup.direction} stake=${stake} gale=${galeRounds} tf=${setup.timeframeSec}s`);
-        outcome = await runMartingaleCore(sdk, {
-            pair: setup.pair,
-            direction: setup.direction,
-            amount: stake,
-            galeRounds,
-            timeframeSec: setup.timeframeSec,
-            balanceType: 'live',
-            telegramId: 0,
-            cooldownMs: 2000,
-        }, (info) => {
-            const id = info.result.tradeId || info.result.externalId;
-            if (id) lastTradeId = String(id);
-        });
+        outcome = await withTimeout((async () => {
+            // Entry hold — the trade fires when the card's countdown reaches 0:00.
+            const holdMs = entryAt - Date.now();
+            if (holdMs > 0) {
+                logger.info('yacht', `entry hold ${Math.round(holdMs / 1000)}s (${setup.pair} ${dirLabel(setup.direction)}) — trade fires at countdown 0:00`);
+                await sleepUntil(entryAt);
+            }
+            const sdk = await getYachtSdk();
+            logger.info('yacht', `placing ${setup.pair} ${setup.direction} stake=${stake} gale=${galeRounds} tf=${setup.timeframeSec}s (chain budget ${Math.round(chainTimeoutMs / 1000)}s)`);
+            return await runMartingaleCore(sdk, {
+                pair: setup.pair,
+                direction: setup.direction,
+                amount: stake,
+                galeRounds,
+                timeframeSec: setup.timeframeSec,
+                balanceType: 'live',
+                telegramId: 0,
+                cooldownMs: 2000,
+            }, (info) => {
+                const id = info.result.tradeId || info.result.externalId;
+                if (id) lastTradeId = String(id);
+            });
+        })(), chainTimeoutMs, chainLabel);
     } catch (e) {
+        cancelCountdown();
+        if (errText(e) === `${chainLabel} timeout`) {
+            // The chain blew its budget. Do NOT fabricate a result and do NOT
+            // pause the engine: resolve the real outcome from position history
+            // and carry on to the next setup.
+            logger.warn('yacht', `setup ${setupId} chain timed out after ${Math.round(chainTimeoutMs / 1000)}s — resolving from position history`);
+            // Shutting the SDK down also kills the zombie chain still awaiting a
+            // settle behind the timed-out promise, so it cannot place further
+            // rounds while we recover. getYachtSdk() then logs in fresh.
+            dropYachtSdk('chain timeout');
+            await resolveOrphanSetup(setupId, 'chain timeout');
+            nextSetupAt = Date.now() + SETUP_PAUSE_MS;
+            return;
+        }
         dropYachtSdk(errText(e));
         updateYachtSetup(setupId, { status: 'aborted', trade_id: lastTradeId, closed_at: new Date().toISOString() });
         // The card is already in the channel; advance the counter so the session
@@ -787,6 +836,7 @@ async function runOneSetup(session: YachtSession): Promise<void> {
         await fatal(session, `execution failed: ${errText(e)}`, `the trade could not be executed (${errText(e)}). Nothing was posted as a result.`);
         return;
     }
+    cancelCountdown();
 
     // 5. Settle. WIN/TIE count as a win; everything else is a loss.
     const won = outcome.status === 'WIN' || outcome.status === 'TIE';
@@ -809,6 +859,113 @@ async function runOneSetup(session: YachtSession): Promise<void> {
     }
 
     nextSetupAt = Date.now() + SETUP_PAUSE_MS;
+}
+
+// ─── Orphan resolution (DIRECTIVE-YACHT-RESULT-HARDENING Part 2) ────────────
+//
+// One code path for all three triggers — boot scan, periodic tick check, and
+// the Part 1 chain timeout — so the double-post guard exists in exactly one
+// place. Read-only against IQ Option: it looks the positions up, it never
+// places anything, so recovery can never produce a second entry.
+
+/** Resolve an orphaned `executing` setup and post its REAL result.
+ *  Returns true when a result card was posted. */
+async function resolveOrphanSetup(setupId: number, trigger: string): Promise<boolean> {
+    // Re-read: this is the double-post guard. Any path that already resolved
+    // this setup has flipped it off 'executing', and we stop here.
+    const setup = getYachtSetupById(setupId);
+    if (!setup || setup.status !== 'executing' || setup.closed_at) {
+        logger.info('yacht', `setup ${setupId} already resolved (${setup?.status ?? 'missing'}) — no second post`);
+        return false;
+    }
+    const session = setup.session_id != null ? getYachtSessionById(setup.session_id) : undefined;
+    const product = setup.product;
+    const galeRounds = cfgInt('yacht_gale', 3);
+
+    let resolution: Awaited<ReturnType<typeof resolveYachtSetupTrades>> = null;
+    try {
+        const sdk = await getYachtSdk();
+        resolution = await resolveYachtSetupTrades(sdk, setup, galeRounds);
+    } catch (e) {
+        logger.error('yacht', `setup ${setupId} recovery failed (${trigger}): ${errText(e)}`);
+        dropYachtSdk(errText(e));
+    }
+
+    const closedAt = new Date().toISOString();
+
+    if (!resolution || resolution.outcome === 'truncated') {
+        // No position, or a ladder the dead process never finished. Posting a loss
+        // card here would claim "all attempts done", which is not true — so the
+        // setup is aborted silently and the session moves on.
+        const why = !resolution
+            ? 'no position found'
+            : `ladder truncated at round ${resolution.rounds}/${galeRounds + 1}`;
+        updateYachtSetup(setupId, {
+            status: 'aborted',
+            trade_id: resolution?.tradeId != null ? String(resolution.tradeId) : setup.trade_id,
+            result_rounds: resolution?.rounds ?? null,
+            closed_at: closedAt,
+        });
+        if (session) bumpYachtSessionCounters(session.id, 'none');
+        logger.warn('yacht', `setup ${setupId} aborted — ${trigger}, ${why}`);
+        await notifyAdminOnce(`orphan-${setupId}`, `Yacht engine: setup ${setupId} (${setup.pair}) could not be resolved — ${why}. No result was posted; the session continues.`);
+        return false;
+    }
+
+    const won = resolution.outcome === 'win';
+    // Flip the status BEFORE posting. A crash between the two loses one card;
+    // the reverse order could post the same result twice, which is worse.
+    updateYachtSetup(setupId, {
+        status: won ? 'won' : 'lost',
+        trade_id: resolution.tradeId != null ? String(resolution.tradeId) : setup.trade_id,
+        result_rounds: resolution.rounds,
+        closed_at: closedAt,
+    });
+    if (session) bumpYachtSessionCounters(session.id, won ? 'win' : 'loss');
+    logger.info('yacht', `setup ${setupId} recovered via ${trigger}: ${resolution.outcome.toUpperCase()} rounds=${resolution.rounds} pair=${setup.pair}`);
+
+    try {
+        await postToChannelRetry(won
+            ? winCard(product, setup.pair, setup.timeframe_sec, setup.direction, resolution.rounds)
+            : lossCard(product, setup.pair, setup.timeframe_sec, setup.direction));
+        return true;
+    } catch (e) {
+        logger.error('yacht', `recovered result post failed for setup ${setupId}: ${errText(e)}`);
+        await notifyAdminOnce('result-post', `Yacht engine: the recovered result for setup ${setupId} could not be posted (${errText(e)}). The trade itself is settled in the DB.`);
+        return false;
+    }
+}
+
+/** Boot scan: resolve every setup a previous process left `executing` before the
+ *  engine is allowed to start a new one. Runs once, inside the first tick, so it
+ *  holds `engineBusy` and cannot race the scheduler. */
+async function runBootScan(): Promise<void> {
+    bootScanDone = true;
+    let orphans: YachtSetup[] = [];
+    try {
+        orphans = getExecutingYachtSetups();
+    } catch (e) {
+        logger.error('yacht', `boot scan query failed: ${errText(e)}`);
+        return;
+    }
+    if (orphans.length === 0) return;
+
+    logger.warn('yacht', `boot scan: ${orphans.length} setup(s) left executing by a previous process`);
+    // A recovered result is still a result: give the channel the normal pause
+    // before the next setup card instead of stacking them back to back.
+    nextSetupAt = Date.now() + SETUP_PAUSE_MS;
+    for (const o of orphans) {
+        const age = Date.now() - sqlTimeMs(o.posted_at);
+        const settleDue = (Number(o.timeframe_sec) || 60) * 1000 + ORPHAN_SETTLE_SLACK_MS;
+        if (age < settleDue) {
+            // Posted moments before the restart — its own expiry has not passed
+            // yet, so position history has nothing to say. The periodic check
+            // picks it up on a later tick.
+            logger.info('yacht', `boot scan: setup ${o.id} is only ${Math.round(age / 1000)}s old — leaving it for the tick check`);
+            continue;
+        }
+        await resolveOrphanSetup(o.id, 'boot scan');
+    }
 }
 
 // ─── Session lifecycle (§4.1) ───────────────────────────────────────────────
@@ -834,24 +991,29 @@ async function endSession(session: YachtSession): Promise<void> {
     await notifyAdmin(`Yacht engine: ${productLabel(session.product)} session closed — ${closeSummary}. Next session in 2 hours.`);
 }
 
-/** Resolve a setup orphaned by a restart. Returns true when the engine should
- *  stand down this tick and wait for it. */
-function handleInFlight(session: YachtSession): boolean {
+/** Periodic orphan check (Part 2, trigger 2). Returns true when the engine
+ *  should stand down this tick.
+ *
+ *  A setup seen here is ALWAYS orphaned: while a chain is genuinely running
+ *  in-process, `runOneSetup` holds `engineBusy` and no tick can reach this
+ *  function at all. So there is no live chain to race — the only question is
+ *  whether the broker has had time to settle it (expiry + 90s).
+ *
+ *  Before this directive the engine simply waited 45 minutes and then aborted
+ *  without ever asking IQ Option what happened. That is what silenced the
+ *  channel for 24 minutes on a trade that had already won. */
+async function handleInFlight(session: YachtSession): Promise<boolean> {
     const inFlight = getInFlightYachtSetup(session.id);
     if (!inFlight) return false;
 
     const age = Date.now() - sqlTimeMs(inFlight.posted_at);
-    if (age < IN_FLIGHT_GRACE_MS) {
-        logger.info('yacht', `setup ${inFlight.id} still executing (${Math.round(age / 1000)}s) — not starting another`);
+    const settleDue = (Number(inFlight.timeframe_sec) || 60) * 1000 + ORPHAN_SETTLE_SLACK_MS;
+    if (age < settleDue) {
+        logger.info('yacht', `setup ${inFlight.id} still executing (${Math.round(age / 1000)}s of ${Math.round(settleDue / 1000)}s) — waiting for its expiry`);
         return true;
     }
-    // Past the grace window nothing will resolve it: the martingale promise died
-    // with the process. Trade recovery settles the TRADE row; the setup is
-    // released here so the session can finish. No result is posted — the engine
-    // does not know the outcome and will not guess in the channel.
-    logger.warn('yacht', `setup ${inFlight.id} abandoned after restart (${Math.round(age / 60000)}min) — marking aborted`);
-    updateYachtSetup(inFlight.id, { status: 'aborted', closed_at: new Date().toISOString() });
-    bumpYachtSessionCounters(session.id, 'none');
+    logger.warn('yacht', `setup ${inFlight.id} orphaned (${Math.round(age / 1000)}s, no live chain) — resolving from position history`);
+    await resolveOrphanSetup(inFlight.id, 'tick check');
     nextSetupAt = Date.now() + SETUP_PAUSE_MS;
     return true;
 }
@@ -865,6 +1027,10 @@ export async function yachtTick(): Promise<void> {
     engineBusy = true;
     try {
         if (getConfig('yacht_enabled') !== '1') return;
+
+        // Boot scan first, once — an orphan from the previous process is resolved
+        // and its result posted BEFORE the engine is allowed to start anything new.
+        if (!bootScanDone) await runBootScan();
 
         let session = getActiveYachtSession();
 
@@ -888,7 +1054,7 @@ export async function yachtTick(): Promise<void> {
 
         // Restart safety before anything else — never start a setup while one is
         // (or might still be) live.
-        if (handleInFlight(session)) return;
+        if (await handleInFlight(session)) return;
 
         if (session.setups_done >= SETUPS_PER_SESSION) {
             await endSession(session);
