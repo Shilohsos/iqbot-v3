@@ -51,7 +51,7 @@ import { logger } from './logger.js';
 import { getAdminId } from './ui/admin.js';
 import { runAdminAnalysis } from './admin-analysis.js';
 import { ALL_PAIRS, clampDisplayConfidence } from './access.js';
-import { createSdk, runMartingaleCore } from './trade.js';
+import { createSdk, runMartingaleCore, executeTradeWithSdk } from './trade.js';
 import { IQ_AUTH_URL } from './protocol.js';
 import { getProxyUrl } from './proxy.js';
 
@@ -85,6 +85,29 @@ const ANALYSIS_CANDLES = 200;
 const MIN_CANDLES = 30;
 /** Courtesy delay between user nudges. */
 const NUDGE_DELAY_MS = 60;
+/** Base stake per setup, in account currency (DIRECTIVE-YACHT-DEMO-STAKE-10).
+ *  One constant behind the fallback, the seed and the status card so the three
+ *  can never drift apart. Overridable at runtime via the `yacht_stake` config. */
+const DEFAULT_STAKE = 10;
+/** The stake the engine shipped with before the demo switch. seedYachtConfig
+ *  only inserts when a key is ABSENT, so every deployment that has already run
+ *  the engine carries `yacht_stake=200` and would keep staking $200 forever.
+ *  migrateYachtStake() retires exactly that value — see the note there. */
+const LEGACY_STAKE = 200;
+
+// ── Live mirror (DIRECTIVE-YACHT-LIVE-MIRROR-COMPOUNDING) ───────────────────
+// The demo chain is the PRODUCT: it drives the channel, the counters and the
+// recovery path. The live mirror is a silent side effect whose only job is to
+// compound the real account. Nothing about it may ever reach a member.
+/** The live stake on the very first mirror. It also fixes the compounding
+ *  ratio: ratio = FIRST_LIVE_STAKE / liveBalanceAtFirstMirror. */
+const FIRST_LIVE_STAKE = 50;
+/** Broker floor. Below this a buy is rejected, so the mirror is skipped rather
+ *  than attempted — deliberately NOT a "stop limit": the next setup still
+ *  mirrors, and the moment the balance recovers so does the stake. */
+const LIVE_MIN_STAKE = 1;
+/** A hung live buy must never stall the session. One trade, one budget. */
+const LIVE_MIRROR_TIMEOUT_MS = 20_000;
 
 const CHANNEL_ID_DEFAULT = '-1004351740042';
 const YACHT_CLUB_LINK = 'https://t.me/xyachtclub';
@@ -696,6 +719,125 @@ async function fatal(session: YachtSession | null, reason: string, adminMsg: str
     await notifyAdmin(`Yacht engine: ${adminMsg}\n\nThe session is paused. Run /yacht start when it is fixed.`);
 }
 
+// ─── Live mirror (DIRECTIVE-YACHT-LIVE-MIRROR-COMPOUNDING) ──────────────────
+//
+// After the demo tracking chain has settled and its result is in the channel,
+// the engine places ONE live trade on the same pair/direction/timeframe. It is
+// flat-staked (the eBook's percentage-of-balance method — the stake rises with
+// the balance, never with a loss), has no martingale, no stop limit and no
+// daily cap, and it is invisible: no channel post, no session counter, no
+// yacht_setups column, no admin notice. Only a log line.
+
+/** Current real-money balance on the Yacht account, or null when it cannot be
+ *  read. USD only — the Yacht account is a USD account and no conversion is
+ *  applied anywhere in this path. */
+async function liveBalanceUsd(sdk: YachtSdk): Promise<number | null> {
+    try {
+        const balances = await withTimeout(sdk.balances(), 10_000, 'balances');
+        const list = balances.getBalances();
+        // BalanceType.Real is the string 'real'; compared by value so this file
+        // gains no import from index.js.
+        const real = list.find(b => String(b.type) === 'real') ?? list.find(b => b.type === undefined);
+        if (!real) return null;
+        const amount = Number(real.amount);
+        return Number.isFinite(amount) ? amount : null;
+    } catch (e) {
+        logger.warn('yacht', `live balance read failed: ${errText(e)}`);
+        return null;
+    }
+}
+
+/** The compounding stake for the next live mirror.
+ *
+ *  First mirror of the engine's life: stake $50, and the ratio it represents at
+ *  that moment ($50 / balance) is persisted as `yacht_live_ratio`. Every mirror
+ *  after that: stake = balance × ratio, recomputed immediately before the buy —
+ *  so the stake rises as the account compounds and falls proportionally if it
+ *  draws down. No cap, no floor other than the broker minimum. */
+async function compoundingLiveStake(sdk: YachtSdk): Promise<{ stake: number; balance: number; ratio: number } | null> {
+    const balance = await liveBalanceUsd(sdk);
+    if (balance == null) return null;
+    if (!(balance > 0)) {
+        logger.warn('yacht', `live mirror skipped — live balance is ${balance}`);
+        return null;
+    }
+
+    const stored = Number(getConfig('yacht_live_ratio') ?? '');
+    let ratio: number;
+    if (Number.isFinite(stored) && stored > 0) {
+        ratio = stored;
+    } else {
+        // Calibration. $50 at TODAY's balance defines the percentage from here
+        // on: $1,000 → 5%, $500 → 10%. Written once and then never rewritten,
+        // which is what makes the stake compound instead of resetting.
+        ratio = FIRST_LIVE_STAKE / balance;
+        setConfig('yacht_live_ratio', String(ratio));
+        logger.info('yacht', `live mirror calibrated: $${FIRST_LIVE_STAKE} on a $${balance.toFixed(2)} balance → ratio ${(ratio * 100).toFixed(4)}%`);
+    }
+
+    const stake = Math.round(balance * ratio * 100) / 100;
+    return { stake, balance, ratio };
+}
+
+/** Place the silent live mirror for a settled setup. Never throws, never
+ *  blocks: every failure path logs and returns. */
+async function placeLiveMirror(setup: GeneratedSetup): Promise<void> {
+    try {
+        const sdk = await getYachtSdk();
+        const calc = await compoundingLiveStake(sdk);
+        if (!calc) {
+            logger.warn('yacht', `live mirror skipped ${setup.pair} — live balance unavailable`);
+            return;
+        }
+        if (calc.stake < LIVE_MIN_STAKE) {
+            // NOT a stop: the next setup recalculates and mirrors again the
+            // moment the balance supports it.
+            logger.warn('yacht', `live mirror skipped ${setup.pair} — stake $${calc.stake.toFixed(2)} is below the $${LIVE_MIN_STAKE} broker minimum (live balance $${calc.balance.toFixed(2)})`);
+            return;
+        }
+
+        logger.info('yacht', `live mirror: ${setup.pair} ${dirLabel(setup.direction)} $${calc.stake.toFixed(2)} (${(calc.ratio * 100).toFixed(4)}% of $${calc.balance.toFixed(2)}) tf=${setup.timeframeSec}s`);
+
+        // ONE trade through the single settlement authority — no gale ladder.
+        // `telegramId` is deliberately omitted: trade-core only touches the
+        // users table when it is non-null, and the trades row it writes then
+        // carries telegram_id NULL, which the yacht recovery query
+        // (`WHERE telegram_id = 0`) and the user recovery (`JOIN users`) both
+        // exclude. The mirror can therefore never be mistaken for the demo
+        // tracking chain. See the note in mirrors' cleanup below.
+        const result = await withTimeout(
+            executeTradeWithSdk(sdk, {
+                pair: setup.pair,
+                direction: setup.direction,
+                amount: calc.stake,
+                timeframeSec: setup.timeframeSec,
+                balanceType: 'live',
+            }),
+            LIVE_MIRROR_TIMEOUT_MS + setup.timeframeSec * 1000,
+            'live mirror',
+        );
+
+        // The row trade-core wrote for this mirror is removed immediately: the
+        // live side is not tracked, so it must leave no trace in the DB. Keyed
+        // on the exact option id AND telegram_id IS NULL, so it can never reach
+        // a demo tracking row or a member's trade.
+        if (result.tradeId) {
+            try {
+                const info = db.prepare('DELETE FROM trades WHERE trade_id = ? AND telegram_id IS NULL').run(result.tradeId);
+                if (info.changes === 0) logger.warn('yacht', `live mirror row ${result.tradeId} not found to clean up`);
+            } catch (e) {
+                logger.warn('yacht', `live mirror row cleanup failed: ${errText(e)}`);
+            }
+        }
+
+        logger.info('yacht', `live mirror result: ${setup.pair} → ${result.status}${result.pnl ? ` pnl=${result.pnl}` : ''}${result.error ? ` (${result.error})` : ''} — logged only, not tracked`);
+    } catch (e) {
+        // A failed mirror is never fatal and never surfaces. The demo chain is
+        // the product; this is a side effect.
+        logger.warn('yacht', `live mirror failed ${setup.pair}: ${errText(e)} — continuing`);
+    }
+}
+
 async function runOneSetup(session: YachtSession): Promise<void> {
     const product = session.product;
     // Entry/expiry clocks — shared by the countdown and the execution hold.
@@ -726,7 +868,7 @@ async function runOneSetup(session: YachtSession): Promise<void> {
     noPairsSince = 0;
     clearOnce('no-pairs');
 
-    const stake = cfgNum('yacht_stake', 200);
+    const stake = cfgNum('yacht_stake', DEFAULT_STAKE);
     const galeRounds = cfgInt('yacht_gale', 3);
 
     const setupId = insertYachtSetup({
@@ -804,7 +946,13 @@ async function runOneSetup(session: YachtSession): Promise<void> {
                 amount: stake,
                 galeRounds,
                 timeframeSec: setup.timeframeSec,
-                balanceType: 'live',
+                // DEMO, not live (DIRECTIVE-YACHT-DEMO-STAKE-10). OTC pairs are
+                // synthetic: demo and live see the same candles and the same
+                // price feed, so a setup that wins on demo wins on live and the
+                // WIN/LOSS the channel sees is unchanged. What changes is that a
+                // bad streak can no longer empty the account and flood the
+                // channel with loss cards — demo starts at $10,000 and refills.
+                balanceType: 'demo',
                 telegramId: 0,
                 cooldownMs: 2000,
             }, (info) => {
@@ -857,6 +1005,11 @@ async function runOneSetup(session: YachtSession): Promise<void> {
         logger.error('yacht', `result post failed: ${errText(e)}`);
         await notifyAdminOnce('result-post', `Yacht engine: a result message could not be posted (${errText(e)}). The trade itself settled normally.`);
     }
+
+    // 7. Live mirror — silent, after the tracking result is already published.
+    //    Everything the channel and the DB will ever see about this setup is
+    //    settled by the time this runs, so the mirror cannot influence any of it.
+    await placeLiveMirror(setup);
 
     nextSetupAt = Date.now() + SETUP_PAUSE_MS;
 }
@@ -1083,7 +1236,7 @@ function seedYachtConfig(): void {
         ['yacht_enabled', '0'],
         ['yacht_tf_signals', '60'],
         ['yacht_tf_private', '120'],
-        ['yacht_stake', '200'],
+        ['yacht_stake', String(DEFAULT_STAKE)],
         ['yacht_gale', '3'],
         ['yacht_nudges', '1'],
     ];
@@ -1092,9 +1245,29 @@ function seedYachtConfig(): void {
     }
 }
 
+/** Retire the pre-demo $200 stake (DIRECTIVE-YACHT-DEMO-STAKE-10).
+ *
+ *  seedYachtConfig() only writes a key that is ABSENT, so changing the seed
+ *  alone does nothing on a machine where the engine has already run: the DB
+ *  still says 200 and the engine keeps staking 200. This retires that exact
+ *  value once, so the shipped state is correct without a manual DB edit.
+ *
+ *  Deliberately narrow — it fires ONLY on exactly 200, the value this codebase
+ *  seeded. Any other number is an operator's own choice (set through the DB or
+ *  a future /yacht command) and is left alone. It is also self-limiting: after
+ *  the rewrite the value is 10, so a later restart matches nothing. */
+function migrateYachtStake(): void {
+    const raw = getConfig('yacht_stake');
+    if (raw === null) return;                 // seedYachtConfig already wrote the new default
+    if (Number(raw) !== LEGACY_STAKE) return; // operator-chosen value — not ours to change
+    setConfig('yacht_stake', String(DEFAULT_STAKE));
+    logger.info('yacht', `stake migrated ${LEGACY_STAKE} → ${DEFAULT_STAKE} (demo execution)`);
+}
+
 export function startYachtEngine(bot: Telegraf): void {
     botRef = bot;
     seedYachtConfig();
+    migrateYachtStake();
     // The nudge cancel-out table is created by bot.ts; create it defensively so
     // module load order can never matter.
     try {
@@ -1199,7 +1372,7 @@ export function yachtStatusText(): string {
     ].filter(Boolean) as string[];
     if (missing.length) lines.push('', `⚠ Missing env: ${missing.join(', ')}`);
 
-    lines.push('', `Stake ${cfgNum('yacht_stake', 200)} · Gale ${cfgInt('yacht_gale', 3)} · ` +
+    lines.push('', `Stake ${cfgNum('yacht_stake', DEFAULT_STAKE)} (demo) · Gale ${cfgInt('yacht_gale', 3)} · ` +
         `Signals ${tfLabel(cfgInt('yacht_tf_signals', 60))} · Private ${tfLabel(cfgInt('yacht_tf_private', 120))}`);
     lines.push('', '/yacht start — forces a session now (bypasses the 2h wait)');
     lines.push('/yacht stop — stops after the current setup');
