@@ -85,6 +85,15 @@ const ANALYSIS_CANDLES = 200;
 const MIN_CANDLES = 30;
 /** Courtesy delay between user nudges. */
 const NUDGE_DELAY_MS = 60;
+/** Base stake per setup, in account currency (DIRECTIVE-YACHT-DEMO-STAKE-10).
+ *  One constant behind the fallback, the seed and the status card so the three
+ *  can never drift apart. Overridable at runtime via the `yacht_stake` config. */
+const DEFAULT_STAKE = 10;
+/** The stake the engine shipped with before the demo switch. seedYachtConfig
+ *  only inserts when a key is ABSENT, so every deployment that has already run
+ *  the engine carries `yacht_stake=200` and would keep staking $200 forever.
+ *  migrateYachtStake() retires exactly that value — see the note there. */
+const LEGACY_STAKE = 200;
 
 const CHANNEL_ID_DEFAULT = '-1004351740042';
 const YACHT_CLUB_LINK = 'https://t.me/xyachtclub';
@@ -726,7 +735,7 @@ async function runOneSetup(session: YachtSession): Promise<void> {
     noPairsSince = 0;
     clearOnce('no-pairs');
 
-    const stake = cfgNum('yacht_stake', 200);
+    const stake = cfgNum('yacht_stake', DEFAULT_STAKE);
     const galeRounds = cfgInt('yacht_gale', 3);
 
     const setupId = insertYachtSetup({
@@ -804,7 +813,13 @@ async function runOneSetup(session: YachtSession): Promise<void> {
                 amount: stake,
                 galeRounds,
                 timeframeSec: setup.timeframeSec,
-                balanceType: 'live',
+                // DEMO, not live (DIRECTIVE-YACHT-DEMO-STAKE-10). OTC pairs are
+                // synthetic: demo and live see the same candles and the same
+                // price feed, so a setup that wins on demo wins on live and the
+                // WIN/LOSS the channel sees is unchanged. What changes is that a
+                // bad streak can no longer empty the account and flood the
+                // channel with loss cards — demo starts at $10,000 and refills.
+                balanceType: 'demo',
                 telegramId: 0,
                 cooldownMs: 2000,
             }, (info) => {
@@ -1083,7 +1098,7 @@ function seedYachtConfig(): void {
         ['yacht_enabled', '0'],
         ['yacht_tf_signals', '60'],
         ['yacht_tf_private', '120'],
-        ['yacht_stake', '200'],
+        ['yacht_stake', String(DEFAULT_STAKE)],
         ['yacht_gale', '3'],
         ['yacht_nudges', '1'],
     ];
@@ -1092,9 +1107,29 @@ function seedYachtConfig(): void {
     }
 }
 
+/** Retire the pre-demo $200 stake (DIRECTIVE-YACHT-DEMO-STAKE-10).
+ *
+ *  seedYachtConfig() only writes a key that is ABSENT, so changing the seed
+ *  alone does nothing on a machine where the engine has already run: the DB
+ *  still says 200 and the engine keeps staking 200. This retires that exact
+ *  value once, so the shipped state is correct without a manual DB edit.
+ *
+ *  Deliberately narrow — it fires ONLY on exactly 200, the value this codebase
+ *  seeded. Any other number is an operator's own choice (set through the DB or
+ *  a future /yacht command) and is left alone. It is also self-limiting: after
+ *  the rewrite the value is 10, so a later restart matches nothing. */
+function migrateYachtStake(): void {
+    const raw = getConfig('yacht_stake');
+    if (raw === null) return;                 // seedYachtConfig already wrote the new default
+    if (Number(raw) !== LEGACY_STAKE) return; // operator-chosen value — not ours to change
+    setConfig('yacht_stake', String(DEFAULT_STAKE));
+    logger.info('yacht', `stake migrated ${LEGACY_STAKE} → ${DEFAULT_STAKE} (demo execution)`);
+}
+
 export function startYachtEngine(bot: Telegraf): void {
     botRef = bot;
     seedYachtConfig();
+    migrateYachtStake();
     // The nudge cancel-out table is created by bot.ts; create it defensively so
     // module load order can never matter.
     try {
@@ -1199,7 +1234,7 @@ export function yachtStatusText(): string {
     ].filter(Boolean) as string[];
     if (missing.length) lines.push('', `⚠ Missing env: ${missing.join(', ')}`);
 
-    lines.push('', `Stake ${cfgNum('yacht_stake', 200)} · Gale ${cfgInt('yacht_gale', 3)} · ` +
+    lines.push('', `Stake ${cfgNum('yacht_stake', DEFAULT_STAKE)} (demo) · Gale ${cfgInt('yacht_gale', 3)} · ` +
         `Signals ${tfLabel(cfgInt('yacht_tf_signals', 60))} · Private ${tfLabel(cfgInt('yacht_tf_private', 120))}`);
     lines.push('', '/yacht start — forces a session now (bypasses the 2h wait)');
     lines.push('/yacht stop — stops after the current setup');
