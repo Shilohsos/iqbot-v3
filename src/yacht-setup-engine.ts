@@ -108,6 +108,10 @@ const FIRST_LIVE_STAKE = 50;
 const LIVE_MIN_STAKE = 1;
 /** A hung live buy must never stall the session. One trade, one budget. */
 const LIVE_MIRROR_TIMEOUT_MS = 20_000;
+/** How long a prepared mirror stays usable. The entry hold is 60s, so a prep
+ *  older than this means something went badly out of step and the connection is
+ *  rebuilt rather than trusted. */
+const MIRROR_PREP_TTL_MS = 90_000;
 
 const CHANNEL_ID_DEFAULT = '-1004351740042';
 const YACHT_CLUB_LINK = 'https://t.me/xyachtclub';
@@ -137,6 +141,17 @@ let _sdk: YachtSdk | null = null;
 /** Cached SSID for the Yacht account, shared by the engine's SDK and every
  *  mirror SDK so one account never performs two concurrent logins. */
 let _ssid: string | null = null;
+
+/** What one setup's live mirror is holding, prepared during the entry hold.
+ *  `ready` carries a warm connection and a computed stake — at entry there is
+ *  nothing left to do but buy. `skip` is a decision already taken (the stake is
+ *  below the broker minimum), recorded so entry does not pointlessly rebuild a
+ *  connection for a trade that will not be placed. Tagged with the setup id so
+ *  a prep that lands late can never be spent on a different setup. */
+type MirrorPrep =
+    | { kind: 'ready'; setupId: number; sdk: YachtSdk; calc: MirrorCalc; readyAt: number }
+    | { kind: 'skip'; setupId: number; reason: string; readyAt: number };
+let mirrorPrep: MirrorPrep | null = null;
 
 // ─── Small helpers ──────────────────────────────────────────────────────────
 
@@ -466,8 +481,10 @@ function dropYachtSdk(reason: string): void {
     _sdk = null;
     // Drop the SSID too: the engine only drops its session when something went
     // wrong, and a stale SSID is the most likely cause. The next SDK — the
-    // engine's or a mirror's — logs in fresh.
+    // engine's or a mirror's — logs in fresh. A prepared mirror was built on
+    // those same credentials, so it goes with them.
     _ssid = null;
+    void discardMirrorPrep('engine session dropped');
     if (!sdk) return;
     logger.warn('yacht', `dropping IQ session: ${reason}`);
     void Promise.resolve(sdk.shutdown()).catch(() => { /* best-effort */ });
@@ -748,6 +765,9 @@ async function generateSetup(product: string): Promise<GeneratedSetup | null> {
  *  disarmed, so nothing restarts until the admin runs /yacht start. */
 async function fatal(session: YachtSession | null, reason: string, adminMsg: string): Promise<void> {
     logger.error('yacht', `PAUSED — ${reason}`);
+    // A setup aborted before entry may still be holding a pre-warmed mirror
+    // socket. Nothing will consume it now, so close it here.
+    await discardMirrorPrep('setup aborted');
     if (session) stopYachtSession(session.id);
     setConfig('yacht_enabled', '0');
     await notifyAdmin(`Yacht engine: ${adminMsg}\n\nThe session is paused. Run /yacht start when it is fixed.`);
@@ -767,6 +787,8 @@ async function fatal(session: YachtSession | null, reason: string, adminMsg: str
 // demo entered NZDJPY at 12:39:56 and won; the mirror bought at 12:41:57 and
 // lost). Entry time is the whole point of a mirror, so it now fires at entry,
 // fire-and-forget, on its own connection.
+
+interface MirrorCalc { stake: number; balance: number; ratio: number }
 
 /** Current real-money balance on the Yacht account, or null when it cannot be
  *  read. USD only — the Yacht account is a USD account and no conversion is
@@ -794,7 +816,7 @@ async function liveBalanceUsd(sdk: YachtSdk): Promise<number | null> {
  *  after that: stake = balance × ratio, recomputed immediately before the buy —
  *  so the stake rises as the account compounds and falls proportionally if it
  *  draws down. No cap, no floor other than the broker minimum. */
-async function compoundingLiveStake(sdk: YachtSdk): Promise<{ stake: number; balance: number; ratio: number } | null> {
+async function compoundingLiveStake(sdk: YachtSdk): Promise<MirrorCalc | null> {
     const balance = await liveBalanceUsd(sdk);
     if (balance == null) return null;
     if (!(balance > 0)) {
@@ -819,6 +841,67 @@ async function compoundingLiveStake(sdk: YachtSdk): Promise<{ stake: number; bal
     return { stake, balance, ratio };
 }
 
+async function shutdownMirrorSdk(sdk: YachtSdk): Promise<void> {
+    try { await withTimeout(Promise.resolve(sdk.shutdown()), 10_000, 'live mirror shutdown'); }
+    catch (e) { logger.warn('yacht', `live mirror sdk shutdown failed: ${errText(e)}`); }
+}
+
+/** Release any held prep. Safe from anywhere, including when none is held —
+ *  every abort path calls it so a prepared socket is never orphaned. */
+async function discardMirrorPrep(reason: string): Promise<void> {
+    const p = mirrorPrep;
+    mirrorPrep = null;
+    if (!p) return;
+    logger.info('yacht', `live mirror prep for setup ${p.setupId} discarded — ${reason}`);
+    if (p.kind === 'ready') await shutdownMirrorSdk(p.sdk);
+}
+
+/** Pre-warm the mirror during the entry hold (Part 4).
+ *
+ *  Part 3 opened the mirror's WebSocket and read the live balance AT the entry
+ *  moment, which measured ~5.8s on the real broker — on a 30s timeframe that is
+ *  a fifth of the trade. Both of those are done here instead, in the ~60s hold
+ *  between the setup post and countdown 0:00, so the hot path is a bare buy.
+ *
+ *  Fire-and-forget and never throws. Started right after the post and BEFORE
+ *  the nudges, which can take most of the hold on their own — the two run
+ *  concurrently rather than in sequence. */
+async function prepareLiveMirror(setup: GeneratedSetup, setupId: number): Promise<void> {
+    // A prep still held here belongs to a setup that never reached entry.
+    await discardMirrorPrep('superseded by a new setup');
+
+    const t0 = Date.now();
+    let sdk: YachtSdk | null = null;
+    try {
+        sdk = await withTimeout(createYachtSdk('live mirror'), 60_000, 'live mirror sdk');
+        const calc = await compoundingLiveStake(sdk);
+        if (!calc) {
+            // Transient (balance unreadable): hold nothing, so entry falls back
+            // to the direct path and gets another chance.
+            logger.warn('yacht', `live mirror prep skipped ${setup.pair} — live balance unavailable`);
+            return;
+        }
+        if (calc.stake < LIVE_MIN_STAKE) {
+            // Deterministic: a second attempt at entry would reach the same
+            // answer, so record the decision and drop the connection now.
+            // NOT a stop — the next setup recalculates from a fresh balance.
+            mirrorPrep = {
+                kind: 'skip', setupId, readyAt: Date.now(),
+                reason: `stake $${calc.stake.toFixed(2)} is below the $${LIVE_MIN_STAKE} broker minimum (live balance $${calc.balance.toFixed(2)})`,
+            };
+            return;
+        }
+        mirrorPrep = { kind: 'ready', setupId, sdk, calc, readyAt: Date.now() };
+        sdk = null;   // ownership handed to mirrorPrep — the finally must not close it
+        logger.info('yacht', `live mirror prep ready in ${Date.now() - t0}ms — $${calc.stake.toFixed(2)} on ${setup.pair}, waiting for entry`);
+    } catch (e) {
+        logger.warn('yacht', `live mirror prep failed ${setup.pair}: ${errText(e)}`);
+    } finally {
+        // Anything still owned locally never made it into mirrorPrep.
+        if (sdk) await shutdownMirrorSdk(sdk);
+    }
+}
+
 /** Place the silent live mirror, at the same instant the tracking chain enters.
  *
  *  Fire-and-forget: the caller must NOT await this. It never throws — every
@@ -827,22 +910,53 @@ async function compoundingLiveStake(sdk: YachtSdk): Promise<{ stake: number; bal
  *
  *  It runs on its OWN SDK. The tracking chain is placing its buy on `_sdk` at
  *  this same moment, and two concurrent buys over one WebSocket is the known
- *  parallel-buy hang; the mirror's connection is opened here and closed in the
- *  finally, so the engine's session is never shared and never disturbed. */
-async function placeLiveMirror(setup: GeneratedSetup): Promise<void> {
+ *  parallel-buy hang; the mirror's connection is closed in the finally, so the
+ *  engine's session is never shared and never disturbed.
+ *
+ *  Normally the connection and the stake are already prepared (see
+ *  prepareLiveMirror) and this only has to buy. The direct path below is the
+ *  Part 3 behaviour, kept as a fallback so a failed prep means a slower mirror
+ *  rather than a missing one — and it logs how long it took, so the gap that
+ *  motivated Part 4 stays measurable. */
+async function placeLiveMirror(setup: GeneratedSetup, setupId: number): Promise<void> {
     let sdk: YachtSdk | null = null;
     try {
-        sdk = await withTimeout(createYachtSdk('live mirror'), 60_000, 'live mirror sdk');
-        const calc = await compoundingLiveStake(sdk);
-        if (!calc) {
-            logger.warn('yacht', `live mirror skipped ${setup.pair} — live balance unavailable`);
-            return;
+        const prep = mirrorPrep;
+        mirrorPrep = null;
+        const usable = prep !== null && prep.setupId === setupId && Date.now() - prep.readyAt < MIRROR_PREP_TTL_MS;
+
+        if (prep && !usable) {
+            // Belongs to another setup, or went stale (the 90s TTL vs a 60s
+            // hold means this should not happen) — never spend it.
+            const why = prep.setupId !== setupId ? `belongs to setup ${prep.setupId}` : 'stale';
+            if (prep.kind === 'ready') await shutdownMirrorSdk(prep.sdk);
+            logger.warn('yacht', `live mirror prep unusable (${why}) — rebuilding (${setup.pair})`);
         }
-        if (calc.stake < LIVE_MIN_STAKE) {
-            // NOT a stop: the next setup recalculates and mirrors again the
-            // moment the balance supports it.
-            logger.warn('yacht', `live mirror skipped ${setup.pair} — stake $${calc.stake.toFixed(2)} is below the $${LIVE_MIN_STAKE} broker minimum (live balance $${calc.balance.toFixed(2)})`);
+
+        let calc: MirrorCalc;
+        if (usable && prep!.kind === 'skip') {
+            logger.warn('yacht', `live mirror skipped ${setup.pair} — ${prep!.reason}`);
             return;
+        } else if (usable && prep!.kind === 'ready') {
+            // Hot path: warm socket, stake already computed. Straight to the buy —
+            // no createSdk, no balances() call between here and the order.
+            sdk = prep!.sdk;
+            calc = prep!.calc;
+        } else {
+            // Fallback: build it now, exactly as Part 3 did.
+            const t0 = Date.now();
+            sdk = await withTimeout(createYachtSdk('live mirror'), 60_000, 'live mirror sdk');
+            const fresh = await compoundingLiveStake(sdk);
+            logger.warn('yacht', `live mirror built fresh in ${Date.now() - t0}ms — prep was unavailable (${setup.pair})`);
+            if (!fresh) {
+                logger.warn('yacht', `live mirror skipped ${setup.pair} — live balance unavailable`);
+                return;
+            }
+            if (fresh.stake < LIVE_MIN_STAKE) {
+                logger.warn('yacht', `live mirror skipped ${setup.pair} — stake $${fresh.stake.toFixed(2)} is below the $${LIVE_MIN_STAKE} broker minimum (live balance $${fresh.balance.toFixed(2)})`);
+                return;
+            }
+            calc = fresh;
         }
 
         logger.info('yacht', `live mirror: ${setup.pair} ${dirLabel(setup.direction)} $${calc.stake.toFixed(2)} (${(calc.ratio * 100).toFixed(4)}% of $${calc.balance.toFixed(2)}) tf=${setup.timeframeSec}s`);
@@ -853,7 +967,7 @@ async function placeLiveMirror(setup: GeneratedSetup): Promise<void> {
         // carries telegram_id NULL, which the yacht recovery query
         // (`WHERE telegram_id = 0`) and the user recovery (`JOIN users`) both
         // exclude. The mirror can therefore never be mistaken for the demo
-        // tracking chain. See the note in mirrors' cleanup below.
+        // tracking chain.
         const result = await withTimeout(
             executeTradeWithSdk(sdk, {
                 pair: setup.pair,
@@ -887,10 +1001,7 @@ async function placeLiveMirror(setup: GeneratedSetup): Promise<void> {
     } finally {
         // Always hand the mirror's own connection back. Leaving it open would
         // accumulate one socket per setup for the life of the process.
-        if (sdk) {
-            try { await withTimeout(Promise.resolve(sdk.shutdown()), 10_000, 'live mirror shutdown'); }
-            catch (e) { logger.warn('yacht', `live mirror sdk shutdown failed: ${errText(e)}`); }
-        }
+        if (sdk) await shutdownMirrorSdk(sdk);
     }
 }
 
@@ -963,6 +1074,13 @@ async function runOneSetup(session: YachtSession): Promise<void> {
     }
     logger.info('yacht', `setup #${setupId} posted (${product}, ${setup.pair}, ${tfLabel(setup.timeframeSec)}, ${dirLabel(setup.direction)}, ${setup.confidence}%)`);
 
+    // 2a. Pre-warm the live mirror NOW, in the ~60s hold before entry (Part 4).
+    //     Deliberately before the nudges: those are awaited and can take most of
+    //     the hold on their own, so starting the prep first lets the WebSocket
+    //     handshake and the balance read overlap with them instead of queueing
+    //     behind them. Fire-and-forget — it never throws and is never awaited.
+    void prepareLiveMirror(setup, setupId);
+
     // 3. Nudge members. Best-effort — a nudge failure must not block anything.
     const nudged = await sendSetupNudges();
     logger.info('yacht', `nudged ${nudged} member(s)`);
@@ -1002,7 +1120,7 @@ async function runOneSetup(session: YachtSession): Promise<void> {
             // budget, or fail the setup. (Part 2 fired it after settlement,
             // which entered at the demo trade's expiry — see the note above
             // placeLiveMirror.)
-            void placeLiveMirror(setup);
+            void placeLiveMirror(setup, setupId);
             logger.info('yacht', `placing ${setup.pair} ${setup.direction} stake=${stake} gale=${galeRounds} tf=${setup.timeframeSec}s (chain budget ${Math.round(chainTimeoutMs / 1000)}s)`);
             return await runMartingaleCore(sdk, {
                 pair: setup.pair,
@@ -1035,6 +1153,9 @@ async function runOneSetup(session: YachtSession): Promise<void> {
             // settle behind the timed-out promise, so it cannot place further
             // rounds while we recover. getYachtSdk() then logs in fresh.
             dropYachtSdk('chain timeout');
+            // If the chain died before entry the mirror was never consumed;
+            // if it was, this is a no-op.
+            await discardMirrorPrep('chain timed out');
             await resolveOrphanSetup(setupId, 'chain timeout');
             nextSetupAt = Date.now() + SETUP_PAUSE_MS;
             return;
@@ -1385,6 +1506,11 @@ export function yachtStart(): string {
  *  trade is never killed. */
 export function yachtStop(): string {
     setConfig('yacht_enabled', '0');
+    // Never leave a socket open while the engine is paused. A setup already in
+    // its entry hold still mirrors — it just falls back to the direct path and
+    // enters a few seconds later, which beats holding a connection open for as
+    // long as the engine stays stopped.
+    void discardMirrorPrep('engine stopped by admin');
     logger.info('yacht', 'engine disarmed by admin');
     return 'Yacht engine stopped after the current setup.';
 }
