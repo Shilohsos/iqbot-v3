@@ -134,6 +134,9 @@ let activeCountdown: { cancelled: boolean } | null = null;
 let bootScanDone = false;
 
 let _sdk: YachtSdk | null = null;
+/** Cached SSID for the Yacht account, shared by the engine's SDK and every
+ *  mirror SDK so one account never performs two concurrent logins. */
+let _ssid: string | null = null;
 
 // ─── Small helpers ──────────────────────────────────────────────────────────
 
@@ -423,10 +426,37 @@ async function yachtLogin(): Promise<string> {
     return loginAttempt(email, password, false);
 }
 
+/** The Yacht account's current SSID, held so a second SDK does not require a
+ *  second login. Cleared whenever the engine drops its session. */
+async function yachtSsid(forceFresh: boolean): Promise<string> {
+    if (_ssid && !forceFresh) return _ssid;
+    _ssid = await yachtLogin();
+    return _ssid;
+}
+
+/** A brand-new SDK — its own WebSocket — on the Yacht credentials. Callers own
+ *  it and must shut it down.
+ *
+ *  The live mirror needs a connection of its own: the tracking chain is mid-buy
+ *  on `_sdk` at the same instant, and two concurrent buys over one WebSocket is
+ *  the parallel-buy hang. What it does NOT need is a second *login* — the
+ *  cached SSID is reused, so a mirror costs one WS handshake rather than an
+ *  auth round-trip per setup, and no second login can disturb the session the
+ *  tracking chain is trading on. A stale SSID re-authenticates once and
+ *  retries. */
+async function createYachtSdk(label: string): Promise<YachtSdk> {
+    try {
+        return await withTimeout(createSdk(await yachtSsid(false)), 180_000, `${label} sdk create`);
+    } catch (e) {
+        logger.warn('yacht', `${label} sdk create failed (${errText(e)}) — re-authenticating`);
+        return await withTimeout(createSdk(await yachtSsid(true)), 180_000, `${label} sdk create (fresh)`);
+    }
+}
+
+/** The engine's long-lived SDK — analysis and the demo tracking chain. */
 async function getYachtSdk(): Promise<YachtSdk> {
     if (_sdk) return _sdk;
-    const ssid = await yachtLogin();
-    _sdk = await withTimeout(createSdk(ssid), 180_000, 'yacht sdk create');
+    _sdk = await createYachtSdk('yacht');
     logger.info('yacht', 'IQ session established for the Yacht account');
     return _sdk;
 }
@@ -434,6 +464,10 @@ async function getYachtSdk(): Promise<YachtSdk> {
 function dropYachtSdk(reason: string): void {
     const sdk = _sdk;
     _sdk = null;
+    // Drop the SSID too: the engine only drops its session when something went
+    // wrong, and a stale SSID is the most likely cause. The next SDK — the
+    // engine's or a mirror's — logs in fresh.
+    _ssid = null;
     if (!sdk) return;
     logger.warn('yacht', `dropping IQ session: ${reason}`);
     void Promise.resolve(sdk.shutdown()).catch(() => { /* best-effort */ });
@@ -719,14 +753,20 @@ async function fatal(session: YachtSession | null, reason: string, adminMsg: str
     await notifyAdmin(`Yacht engine: ${adminMsg}\n\nThe session is paused. Run /yacht start when it is fixed.`);
 }
 
-// ─── Live mirror (DIRECTIVE-YACHT-LIVE-MIRROR-COMPOUNDING) ──────────────────
+// ─── Live mirror (DIRECTIVE-YACHT-LIVE-MIRROR-COMPOUNDING + ENTRY-TIMING) ────
 //
-// After the demo tracking chain has settled and its result is in the channel,
-// the engine places ONE live trade on the same pair/direction/timeframe. It is
+// At the SAME instant the demo tracking chain enters — countdown 0:00 — the
+// engine places ONE live trade on the same pair/direction/timeframe. It is
 // flat-staked (the eBook's percentage-of-balance method — the stake rises with
 // the balance, never with a loss), has no martingale, no stop limit and no
 // daily cap, and it is invisible: no channel post, no session counter, no
 // yacht_setups column, no admin notice. Only a log line.
+//
+// Part 2 fired this AFTER the chain settled, which meant the live account
+// bought at the demo trade's EXPIRY — a different window entirely (session #34:
+// demo entered NZDJPY at 12:39:56 and won; the mirror bought at 12:41:57 and
+// lost). Entry time is the whole point of a mirror, so it now fires at entry,
+// fire-and-forget, on its own connection.
 
 /** Current real-money balance on the Yacht account, or null when it cannot be
  *  read. USD only — the Yacht account is a USD account and no conversion is
@@ -779,11 +819,20 @@ async function compoundingLiveStake(sdk: YachtSdk): Promise<{ stake: number; bal
     return { stake, balance, ratio };
 }
 
-/** Place the silent live mirror for a settled setup. Never throws, never
- *  blocks: every failure path logs and returns. */
+/** Place the silent live mirror, at the same instant the tracking chain enters.
+ *
+ *  Fire-and-forget: the caller must NOT await this. It never throws — every
+ *  failure path logs and returns — so a rejected `void` call is impossible and
+ *  the setup flow can never be delayed or broken by the live side.
+ *
+ *  It runs on its OWN SDK. The tracking chain is placing its buy on `_sdk` at
+ *  this same moment, and two concurrent buys over one WebSocket is the known
+ *  parallel-buy hang; the mirror's connection is opened here and closed in the
+ *  finally, so the engine's session is never shared and never disturbed. */
 async function placeLiveMirror(setup: GeneratedSetup): Promise<void> {
+    let sdk: YachtSdk | null = null;
     try {
-        const sdk = await getYachtSdk();
+        sdk = await withTimeout(createYachtSdk('live mirror'), 60_000, 'live mirror sdk');
         const calc = await compoundingLiveStake(sdk);
         if (!calc) {
             logger.warn('yacht', `live mirror skipped ${setup.pair} — live balance unavailable`);
@@ -835,6 +884,13 @@ async function placeLiveMirror(setup: GeneratedSetup): Promise<void> {
         // A failed mirror is never fatal and never surfaces. The demo chain is
         // the product; this is a side effect.
         logger.warn('yacht', `live mirror failed ${setup.pair}: ${errText(e)} — continuing`);
+    } finally {
+        // Always hand the mirror's own connection back. Leaving it open would
+        // accumulate one socket per setup for the life of the process.
+        if (sdk) {
+            try { await withTimeout(Promise.resolve(sdk.shutdown()), 10_000, 'live mirror shutdown'); }
+            catch (e) { logger.warn('yacht', `live mirror sdk shutdown failed: ${errText(e)}`); }
+        }
     }
 }
 
@@ -939,6 +995,14 @@ async function runOneSetup(session: YachtSession): Promise<void> {
                 await sleepUntil(entryAt);
             }
             const sdk = await getYachtSdk();
+            // Live mirror fires HERE — the same instant as the tracking chain's
+            // first trade, which is the only moment at which it mirrors the
+            // signal at all. Fire-and-forget on its own connection: it is never
+            // awaited, so it cannot delay the buy below, extend the chain
+            // budget, or fail the setup. (Part 2 fired it after settlement,
+            // which entered at the demo trade's expiry — see the note above
+            // placeLiveMirror.)
+            void placeLiveMirror(setup);
             logger.info('yacht', `placing ${setup.pair} ${setup.direction} stake=${stake} gale=${galeRounds} tf=${setup.timeframeSec}s (chain budget ${Math.round(chainTimeoutMs / 1000)}s)`);
             return await runMartingaleCore(sdk, {
                 pair: setup.pair,
@@ -1005,11 +1069,6 @@ async function runOneSetup(session: YachtSession): Promise<void> {
         logger.error('yacht', `result post failed: ${errText(e)}`);
         await notifyAdminOnce('result-post', `Yacht engine: a result message could not be posted (${errText(e)}). The trade itself settled normally.`);
     }
-
-    // 7. Live mirror — silent, after the tracking result is already published.
-    //    Everything the channel and the DB will ever see about this setup is
-    //    settled by the time this runs, so the mirror cannot influence any of it.
-    await placeLiveMirror(setup);
 
     nextSetupAt = Date.now() + SETUP_PAUSE_MS;
 }
