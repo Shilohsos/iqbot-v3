@@ -51,7 +51,7 @@ import { logger } from './logger.js';
 import { getAdminId } from './ui/admin.js';
 import { runAdminAnalysis } from './admin-analysis.js';
 import { ALL_PAIRS, clampDisplayConfidence } from './access.js';
-import { createSdk, runMartingaleCore, executeTradeWithSdk } from './trade.js';
+import { createSdk, runMartingaleCore, executeTradeWithSdk, recoverFinal } from './trade.js';
 import { IQ_AUTH_URL } from './protocol.js';
 import { getProxyUrl } from './proxy.js';
 
@@ -112,6 +112,27 @@ const LIVE_MIRROR_TIMEOUT_MS = 20_000;
  *  older than this means something went badly out of step and the connection is
  *  rebuilt rather than trusted. */
 const MIRROR_PREP_TTL_MS = 90_000;
+/** Pause between ladder rounds — mirrors the demo chain's `cooldownMs`. */
+const MIRROR_ROUND_COOLDOWN_MS = 2_000;
+/** A TIE refunds the stake, so it does not consume a recovery round. Bounded so
+ *  a pathologically flat market cannot loop the ladder forever. */
+const MIRROR_TIE_RETRIES = 2;
+/** NO_FILL / ERROR means no trade was placed. One retry (per the directive),
+ *  then the ladder is abandoned rather than hammering a sick socket. */
+const MIRROR_FILL_RETRIES = 1;
+/** Hard ceiling on buys in one ladder, so the loop is provably finite whatever
+ *  sequence of TIEs and no-fills the broker returns. */
+const MIRROR_LADDER_MAX_ATTEMPTS = 12;
+/** How long after a crash a ladder may still be resumed. A pm2 restart takes
+ *  seconds; past this the signal is stale and doubling into it would be a large
+ *  bet on nothing, not a recovery. See the note on resumeMirrorLadder. */
+const MIRROR_RESUME_GRACE_MS = 5 * 60_000;
+/** Ladders on long timeframes outlive the setup that started them, so several
+ *  can be in flight at once — each on its own socket. This bounds that growth;
+ *  hitting it skips one mirror with a WARN, it never blocks a setup. */
+const MIRROR_MAX_CONCURRENT_LADDERS = 4;
+/** Config key holding the one in-flight ladder's state for restart resume. */
+const MIRROR_LADDER_KEY = 'yacht_mirror_ladder';
 
 const CHANNEL_ID_DEFAULT = '-1004351740042';
 const YACHT_CLUB_LINK = 'https://t.me/xyachtclub';
@@ -841,6 +862,311 @@ async function compoundingLiveStake(sdk: YachtSdk): Promise<MirrorCalc | null> {
     return { stake, balance, ratio };
 }
 
+// ─── The live mirror's own martingale ladder ────────────────────────────────
+//
+// The demo chain runs a full Smart Recovery ladder and the channel posts the
+// recovered win. Before this, the mirror placed ONE live trade per setup, so a
+// setup the channel showed as "WIN rounds=2" was a bare loss on the live
+// account (2026-09-01: BTCUSD -$50, AUDJPY -$93.43, zero recovery rounds).
+//
+// The mirror now runs its own ladder on the SAME setup: base trade, and on a
+// LOSS an immediate re-buy of the same pair and direction at double, until a
+// WIN or the `yacht_gale` cap. It follows its OWN live results only — the demo
+// outcome is never consulted, so a setup the channel calls a win still gets a
+// live recovery round if the live trade lost.
+
+/** One ladder's state, persisted so a crash mid-ladder can be picked up. */
+interface MirrorLadderState {
+    setupId: number;
+    pair: string;
+    direction: 'call' | 'put';
+    timeframeSec: number;
+    /** Recovery round index: 0 = base trade, 1 = first recovery, … */
+    round: number;
+    updatedAt: number;
+}
+
+/** The buy that was outstanding when the process died, if there was one.
+ *
+ *  It is found in the DB rather than carried in the state: `executeTradeWithSdk`
+ *  covers buy AND settle in one await, so the option id is not knowable until
+ *  after settlement — but trade-core writes the row at buy time, and the mirror
+ *  deletes it on settle. A surviving telegram_id-NULL row for this pair is
+ *  therefore exactly the round that was in flight when the process died. */
+function findOrphanedMirrorTrade(st: MirrorLadderState): { trade_id: number; amount: number; created_at: string } | null {
+    try {
+        const since = new Date(st.updatedAt - 60_000).toISOString();
+        return (db.prepare(`
+            SELECT trade_id, amount, created_at FROM trades
+            WHERE telegram_id IS NULL AND pair = ? AND trade_id IS NOT NULL AND created_at >= ?
+            ORDER BY id DESC LIMIT 1
+        `).get(st.pair, since) as { trade_id: number; amount: number; created_at: string } | undefined) ?? null;
+    } catch (e) {
+        logger.warn('yacht', `live mirror orphan lookup failed: ${errText(e)}`);
+        return null;
+    }
+}
+
+/** Ladders currently running. Several can overlap on long timeframes — each on
+ *  its own socket — which is exactly the concurrency the directive requires. */
+let activeLadders = 0;
+
+function saveLadderState(s: MirrorLadderState): void {
+    try { setConfig(MIRROR_LADDER_KEY, JSON.stringify(s)); }
+    catch (e) { logger.warn('yacht', `live mirror ladder state save failed: ${errText(e)}`); }
+}
+
+function loadLadderState(): MirrorLadderState | null {
+    try {
+        const raw = getConfig(MIRROR_LADDER_KEY);
+        if (!raw) return null;
+        const s = JSON.parse(raw) as MirrorLadderState;
+        return (s && typeof s.setupId === 'number' && typeof s.pair === 'string') ? s : null;
+    } catch (e) {
+        logger.warn('yacht', `live mirror ladder state unreadable: ${errText(e)}`);
+        return null;
+    }
+}
+
+function clearLadderState(): void {
+    try { setConfig(MIRROR_LADDER_KEY, ''); }
+    catch (e) { logger.warn('yacht', `live mirror ladder state clear failed: ${errText(e)}`); }
+}
+
+/** Drop the transient `trades` row trade-core wrote for one mirror buy. The
+ *  live side is not tracked, so it leaves no trace in the DB. Keyed on the
+ *  exact option id AND telegram_id IS NULL, so it can never reach a demo
+ *  tracking row or a member's trade. */
+function cleanupMirrorRow(tradeId: number | undefined): void {
+    if (!tradeId) return;
+    try {
+        const info = db.prepare('DELETE FROM trades WHERE trade_id = ? AND telegram_id IS NULL').run(tradeId);
+        if (info.changes === 0) logger.warn('yacht', `live mirror row ${tradeId} not found to clean up`);
+    } catch (e) {
+        logger.warn('yacht', `live mirror row cleanup failed: ${errText(e)}`);
+    }
+}
+
+type MirrorResult = Awaited<ReturnType<typeof executeTradeWithSdk>>;
+
+/** One buy on the mirror's own SDK. `telegramId` is deliberately omitted:
+ *  trade-core only touches the users table when it is non-null, and the trades
+ *  row it writes then carries telegram_id NULL, which the yacht recovery query
+ *  (`WHERE telegram_id = 0`) and the user recovery (`JOIN users`) both exclude. */
+async function mirrorBuy(sdk: YachtSdk, setup: GeneratedSetup, amount: number): Promise<MirrorResult> {
+    const result = await withTimeout(
+        executeTradeWithSdk(sdk, {
+            pair: setup.pair,
+            direction: setup.direction,
+            amount,
+            timeframeSec: setup.timeframeSec,
+            balanceType: 'live',
+        }),
+        LIVE_MIRROR_TIMEOUT_MS + setup.timeframeSec * 1000,
+        'live mirror',
+    );
+    cleanupMirrorRow(result.tradeId);
+    logger.info('yacht', `live mirror result: ${setup.pair} → ${result.status}${result.pnl ? ` pnl=${result.pnl}` : ''}${result.error ? ` (${result.error})` : ''} — logged only, not tracked`);
+    return result;
+}
+
+/** Run the ladder for one setup to completion.
+ *
+ *  Rounds are sequential on the same SDK — a recovery round can only be decided
+ *  once the previous round has settled. The NEXT setup's mirror runs
+ *  concurrently on its own SDK, so this never holds the engine up.
+ *
+ *  `prepared` is the stake computed during the entry hold; it is spent on round
+ *  0 only, which is what keeps the first buy within a second of the demo entry.
+ *  Every later round re-reads the live balance immediately before its buy — by
+ *  then the balance has already dropped by the previous loss, which is intended:
+ *  the ladder compounds off what the account actually holds. */
+async function runMirrorLadder(
+    sdk: YachtSdk,
+    setup: GeneratedSetup,
+    setupId: number,
+    prepared: MirrorCalc | null,
+    startRound: number,
+): Promise<void> {
+    const maxRecovery = cfgInt('yacht_gale', 3);
+    let round = startRound;
+    let attempts = 0;
+    let tieRetries = 0;
+    let fillRetries = 0;
+    /** Set when a round must be repeated at the same stake (TIE / no fill). */
+    let repeatStake: number | null = prepared && startRound === 0 ? prepared.stake : null;
+    let preparedNote = prepared && startRound === 0
+        ? ` (${(prepared.ratio * 100).toFixed(4)}% of $${prepared.balance.toFixed(2)})`
+        : '';
+
+    try {
+        while (round <= maxRecovery && attempts < MIRROR_LADDER_MAX_ATTEMPTS) {
+            attempts++;
+
+            let stake = repeatStake;
+            let note = preparedNote;
+            repeatStake = null;
+            preparedNote = '';
+            if (stake == null) {
+                const calc = await compoundingLiveStake(sdk);
+                if (!calc) {
+                    logger.warn('yacht', `live mirror ladder aborted ${setup.pair} — live balance unavailable at round ${round}`);
+                    return;
+                }
+                stake = Math.round(calc.stake * Math.pow(2, round) * 100) / 100;
+                note = ` (${(calc.ratio * 100).toFixed(4)}% of $${calc.balance.toFixed(2)} × 2^${round})`;
+            }
+
+            if (stake < LIVE_MIN_STAKE) {
+                logger.warn('yacht', `live mirror ladder aborted ${setup.pair} — round ${round} stake $${stake.toFixed(2)} is below the $${LIVE_MIN_STAKE} broker minimum`);
+                return;
+            }
+
+            const label = round === 0 ? 'base' : `recovery round ${round}/${maxRecovery}`;
+            logger.info('yacht', `live mirror ${label}: ${setup.pair} ${dirLabel(setup.direction)} $${stake.toFixed(2)}${note} tf=${setup.timeframeSec}s`);
+
+            saveLadderState({
+                setupId, pair: setup.pair, direction: setup.direction,
+                timeframeSec: setup.timeframeSec, round, updatedAt: Date.now(),
+            });
+
+            let result: MirrorResult;
+            try {
+                result = await mirrorBuy(sdk, setup, stake);
+            } catch (e) {
+                // The buy itself threw (timeout, dead socket). Nothing is known
+                // about whether an order landed, so the ladder stops here rather
+                // than risking a double entry on the same round.
+                logger.warn('yacht', `live mirror ladder aborted ${setup.pair} — round ${round} failed: ${errText(e)}`);
+                return;
+            }
+
+            if (result.status === 'WIN') {
+                logger.info('yacht', `live mirror WIN (${round === 0 ? 'direct' : `recovery round ${round}`}) ${setup.pair} — ladder complete, next setup restarts at base`);
+                return;
+            }
+
+            if (result.status === 'TIE') {
+                // Stake refunded — the round is not consumed.
+                if (++tieRetries > MIRROR_TIE_RETRIES) {
+                    logger.warn('yacht', `live mirror ladder aborted ${setup.pair} — ${tieRetries} consecutive TIEs at round ${round}`);
+                    return;
+                }
+                logger.info('yacht', `live mirror TIE ${setup.pair} — stake refunded, round ${round} not consumed, retrying`);
+                repeatStake = stake;
+                await new Promise(r => setTimeout(r, MIRROR_ROUND_COOLDOWN_MS));
+                continue;
+            }
+
+            if (result.status === 'NO_FILL' || result.status === 'ERROR' || result.status === 'TIMEOUT') {
+                // No order was placed, so nothing to recover from — retry the
+                // same round once, then give up on this setup.
+                if (++fillRetries > MIRROR_FILL_RETRIES) {
+                    logger.warn('yacht', `live mirror ladder aborted ${setup.pair} — round ${round} not filled twice (${result.error ?? result.status})`);
+                    return;
+                }
+                logger.warn('yacht', `live mirror round ${round} not filled (${result.error ?? result.status}) — retrying once`);
+                repeatStake = stake;
+                await new Promise(r => setTimeout(r, MIRROR_ROUND_COOLDOWN_MS));
+                continue;
+            }
+
+            // LOSS — the only path that advances the ladder.
+            if (round >= maxRecovery) {
+                logger.warn('yacht', `live mirror ladder exhausted ${setup.pair} — ${maxRecovery + 1} trades, all lost; next setup restarts at base`);
+                return;
+            }
+            round++;
+            tieRetries = 0;
+            fillRetries = 0;
+            await new Promise(r => setTimeout(r, MIRROR_ROUND_COOLDOWN_MS));
+        }
+        if (attempts >= MIRROR_LADDER_MAX_ATTEMPTS) {
+            logger.warn('yacht', `live mirror ladder aborted ${setup.pair} — attempt ceiling (${MIRROR_LADDER_MAX_ATTEMPTS}) reached`);
+        }
+    } finally {
+        clearLadderState();
+    }
+}
+
+/** Pick up a ladder the process died in the middle of.
+ *
+ *  The in-flight buy is ALWAYS resolved from position history first, so the log
+ *  tells the truth about what the live account actually did, and its transient
+ *  row is cleaned up. Continuing the ladder is the bounded part: a recovery
+ *  round is only meaningful while the setup's own window is still close —
+ *  doubling into a signal that expired an hour ago is a large bet on nothing,
+ *  not a recovery — so past MIRROR_RESUME_GRACE_MS the ladder is abandoned and
+ *  the next setup starts at base. A pm2 restart takes seconds and resumes. */
+async function resumeMirrorLadder(): Promise<void> {
+    const st = loadLadderState();
+    if (!st) return;
+    // One attempt only, whatever happens below.
+    clearLadderState();
+
+    logger.warn('yacht', `live mirror ladder from setup ${st.setupId} (${st.pair}, round ${st.round}) survived a restart — resolving`);
+    let sdk: YachtSdk | null = null;
+    activeLadders++;
+    try {
+        sdk = await withTimeout(createYachtSdk('live mirror resume'), 60_000, 'live mirror sdk');
+
+        const orphan = findOrphanedMirrorTrade(st);
+        let outcome: string | null = null;
+        if (orphan) {
+            try {
+                const startedAt = Date.parse(orphan.created_at) || (st.updatedAt);
+                const rec = await recoverFinal(sdk, orphan.trade_id, undefined, orphan.amount, startedAt);
+                outcome = rec?.status ?? null;
+            } catch (e) {
+                logger.warn('yacht', `live mirror resume: recoverFinal threw: ${errText(e)}`);
+            }
+            cleanupMirrorRow(orphan.trade_id);
+            logger.info('yacht', `live mirror resume: round ${st.round} trade ${orphan.trade_id} ($${orphan.amount}) → ${outcome ?? 'unresolved'}`);
+        } else {
+            // The crash landed between saving state and the buy — no order was
+            // placed, so this round can simply be re-run from the top.
+            logger.info('yacht', `live mirror resume: no order was outstanding — round ${st.round} will be re-run`);
+            outcome = 'LOSS';
+        }
+
+        if (outcome === 'WIN' || outcome === 'TIE') {
+            logger.info('yacht', `live mirror resume: setup ${st.setupId} ladder already complete (${outcome})`);
+            return;
+        }
+        if (outcome == null) {
+            logger.warn('yacht', `live mirror resume: setup ${st.setupId} round ${st.round} could not be resolved — ladder abandoned`);
+            return;
+        }
+
+        const age = Date.now() - st.updatedAt;
+        const bound = st.timeframeSec * 1000 + MIRROR_RESUME_GRACE_MS;
+        if (age > bound) {
+            logger.warn('yacht', `live mirror resume: setup ${st.setupId} is ${Math.round(age / 60000)}min old (limit ${Math.round(bound / 60000)}min) — ladder abandoned, next setup restarts at base`);
+            return;
+        }
+
+        const maxRecovery = cfgInt('yacht_gale', 3);
+        const nextRound = orphan ? st.round + 1 : st.round;
+        if (nextRound > maxRecovery) {
+            logger.info('yacht', `live mirror resume: setup ${st.setupId} ladder was already exhausted`);
+            return;
+        }
+        logger.info('yacht', `live mirror resume: continuing setup ${st.setupId} at round ${nextRound}`);
+        await runMirrorLadder(
+            sdk,
+            { pair: st.pair, direction: st.direction, timeframeSec: st.timeframeSec, confidence: 0 },
+            st.setupId,
+            null,
+            nextRound,
+        );
+    } catch (e) {
+        logger.warn('yacht', `live mirror resume failed: ${errText(e)} — continuing`);
+    } finally {
+        activeLadders--;
+        if (sdk) await shutdownMirrorSdk(sdk);
+    }
+}
+
 async function shutdownMirrorSdk(sdk: YachtSdk): Promise<void> {
     try { await withTimeout(Promise.resolve(sdk.shutdown()), 10_000, 'live mirror shutdown'); }
     catch (e) { logger.warn('yacht', `live mirror sdk shutdown failed: ${errText(e)}`); }
@@ -920,6 +1246,14 @@ async function prepareLiveMirror(setup: GeneratedSetup, setupId: number): Promis
  *  motivated Part 4 stays measurable. */
 async function placeLiveMirror(setup: GeneratedSetup, setupId: number): Promise<void> {
     let sdk: YachtSdk | null = null;
+    if (activeLadders >= MIRROR_MAX_CONCURRENT_LADDERS) {
+        // Never blocks: this setup simply gets no mirror. Only reachable when
+        // several long-timeframe ladders are already running at once.
+        logger.warn('yacht', `live mirror skipped ${setup.pair} — ${activeLadders} ladders already in flight (cap ${MIRROR_MAX_CONCURRENT_LADDERS})`);
+        await discardMirrorPrep('concurrency cap reached');
+        return;
+    }
+    activeLadders++;
     try {
         const prep = mirrorPrep;
         mirrorPrep = null;
@@ -959,46 +1293,15 @@ async function placeLiveMirror(setup: GeneratedSetup, setupId: number): Promise<
             calc = fresh;
         }
 
-        logger.info('yacht', `live mirror: ${setup.pair} ${dirLabel(setup.direction)} $${calc.stake.toFixed(2)} (${(calc.ratio * 100).toFixed(4)}% of $${calc.balance.toFixed(2)}) tf=${setup.timeframeSec}s`);
-
-        // ONE trade through the single settlement authority — no gale ladder.
-        // `telegramId` is deliberately omitted: trade-core only touches the
-        // users table when it is non-null, and the trades row it writes then
-        // carries telegram_id NULL, which the yacht recovery query
-        // (`WHERE telegram_id = 0`) and the user recovery (`JOIN users`) both
-        // exclude. The mirror can therefore never be mistaken for the demo
-        // tracking chain.
-        const result = await withTimeout(
-            executeTradeWithSdk(sdk, {
-                pair: setup.pair,
-                direction: setup.direction,
-                amount: calc.stake,
-                timeframeSec: setup.timeframeSec,
-                balanceType: 'live',
-            }),
-            LIVE_MIRROR_TIMEOUT_MS + setup.timeframeSec * 1000,
-            'live mirror',
-        );
-
-        // The row trade-core wrote for this mirror is removed immediately: the
-        // live side is not tracked, so it must leave no trace in the DB. Keyed
-        // on the exact option id AND telegram_id IS NULL, so it can never reach
-        // a demo tracking row or a member's trade.
-        if (result.tradeId) {
-            try {
-                const info = db.prepare('DELETE FROM trades WHERE trade_id = ? AND telegram_id IS NULL').run(result.tradeId);
-                if (info.changes === 0) logger.warn('yacht', `live mirror row ${result.tradeId} not found to clean up`);
-            } catch (e) {
-                logger.warn('yacht', `live mirror row cleanup failed: ${errText(e)}`);
-            }
-        }
-
-        logger.info('yacht', `live mirror result: ${setup.pair} → ${result.status}${result.pnl ? ` pnl=${result.pnl}` : ''}${result.error ? ` (${result.error})` : ''} — logged only, not tracked`);
+        // Round 0 spends the prepared stake, which is what keeps the first buy
+        // inside 1s of the demo entry. Every later round recomputes.
+        await runMirrorLadder(sdk, setup, setupId, calc, 0);
     } catch (e) {
         // A failed mirror is never fatal and never surfaces. The demo chain is
         // the product; this is a side effect.
         logger.warn('yacht', `live mirror failed ${setup.pair}: ${errText(e)} — continuing`);
     } finally {
+        activeLadders--;
         // Always hand the mirror's own connection back. Leaving it open would
         // accumulate one socket per setup for the life of the process.
         if (sdk) await shutdownMirrorSdk(sdk);
@@ -1274,6 +1577,11 @@ async function resolveOrphanSetup(setupId: number, trigger: string): Promise<boo
  *  holds `engineBusy` and cannot race the scheduler. */
 async function runBootScan(): Promise<void> {
     bootScanDone = true;
+    // A live mirror ladder interrupted by the restart. Fire-and-forget: it can
+    // take minutes to finish, and the boot scan (which holds engineBusy) must
+    // not wait on it. Only reached when the engine is armed — a paused engine
+    // never resumes a live ladder on its own.
+    void resumeMirrorLadder();
     let orphans: YachtSetup[] = [];
     try {
         orphans = getExecutingYachtSetups();
