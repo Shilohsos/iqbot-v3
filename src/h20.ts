@@ -146,6 +146,16 @@ async function startH20(telegramId: number): Promise<void> {
                     VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))`).run(
                     telegramId, pair, direction, tradeAmount, result.status, result.pnl, result.tradeId ?? null
                 );
+
+                // Platform floor: a sub-minimum residual (e.g. $0.91 < $1 min trade) can never be
+                // placed — IQ rejects 4112 'smaller than the allowed minimum' forever. That money
+                // is untradeable dust; treat as liquidation complete (Master case 7317644460, 2026-09-04).
+                const err = (result.error ?? '').toLowerCase();
+                if (result.status === 'NO_FILL' && (err.includes('smaller than the allowed minimum') || /status 4112/.test(err))) {
+                    logger.info('h20', `${telegramId} residual $${bal.toFixed(2)} below platform min — liquidation complete`);
+                    db.prepare('UPDATE users SET h20 = 0 WHERE telegram_id = ?').run(telegramId);
+                    break;
+                }
             } catch (e) {
                 logger.warn('h20', `trade error: ${(e as Error).message} (amount=$${tradeAmount.toFixed(2)}, pair=${pair})`);
             }
