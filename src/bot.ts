@@ -17,7 +17,7 @@ import { startUpdateWatchdog } from './watchdog.js';
 import { startYachtEngine, yachtStart, yachtStop, yachtStatusText, isYachtEngineMessage } from './yacht-setup-engine.js';
 import { autoEngine, initAutoEngine } from './auto-trading.js';
 import { startSwarm, stopSwarm, getSwarmSession, getSwarmStats, setSwarmNotifier, initSwarmDb } from './swarm.js';
-import { startCopying, stopCopying, getCopyStatus, getCopyConfig, updateCopyConfig, adminToggleTrading, setCopyNotifier, initCopyDb } from './copy-trading.js';
+import { startCopying, stopCopying, getCopyStatus, getCopyConfig, updateCopyConfig, adminToggleTrading, setCopyNotifier, initCopyDb, isCopyAccepted, redeemCopyCode, generateCopyCode, setCopyConnection, getCopyConnection, getCopyUsersAdmin, COPY_MIN_BALANCE, COPY_MIN_AMOUNT } from './copy-trading.js';
 import { resumeH20Sessions } from './h20.js';
 // scanChannelForLeads removed from main bot — sales-bot owns affiliate scanning.
 // Dual GramJS clients sharing TELETHON_SESSION caused Telegram stalls + RAM growth.
@@ -3960,30 +3960,32 @@ function copyTodayStats(uid) {
         AND julianday(created_at) >= julianday('now', 'start of day', '+1 hour')`).get(uid);
 }
 
+const copyCodeSessions = new Map(); // chatId -> { uid, at } awaiting code text
+
 bot.action('ui:copy', async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
     if (!await requireApproval(ctx))
         return;
     const uid = ctx.from.id;
     const isPriv = isPrivilegedUser(uid);
+    const isAdmin = uid === getAdminId();
     const user = getUser(uid);
     const st = getCopyStatus(uid);
 
     if (st.copying) {
         const stats = copyTodayStats(uid);
         const net = stats.net >= 0 ? `+$${stats.net.toFixed(2)}` : `-$${Math.abs(stats.net).toFixed(2)}`;
-        await ctx.reply(`◆ Copy Trading — ACTIVE\n\nCopying admin · $${st.amount} per trade\n\n${copyAdminLine()}\n\n· Trades today: ${stats.n} · Net ${net}\n\nYou can stop anytime.`, { reply_markup: { inline_keyboard: [
-            [{ text: '■ Stop Copying', callback_data: 'copy:stop' }],
-            [{ text: '· Today\u2019s activity', callback_data: 'copy:activity' }],
+        await ctx.reply(`◆ Copy Trading — ACTIVE\n\nCopying admin · $${st.amount} per trade\n\n${copyAdminLine()}\n\n· Trades today: ${stats.n} · Net ${net}`, { reply_markup: { inline_keyboard: [
+            [{ text: '■ Disconnect', callback_data: 'copy:stop' }],
             [{ text: '⟵ Back', callback_data: 'ui:trade_menu' }],
         ] } });
         return;
     }
 
     const fundedUsd = user?.funded_balance_usd ?? 0;
-    if (!isPriv && fundedUsd < 1000) {
-        const gap = Math.max(0, 1000 - fundedUsd);
-        await ctx.reply(`◆ Copy Trading\n\nThe engine trades. Your account mirrors it.\n\n${copyAdminLine()}\n${copyLastTradeLine(uid)}\n\nTo copy: $1,000 minimum\nYour balance: $${fundedUsd.toFixed(2)} — $${gap.toFixed(2)} away\n\nClose the gap and mirroring starts.`, { reply_markup: { inline_keyboard: [
+    if (!isPriv && fundedUsd < COPY_MIN_BALANCE) {
+        const gap = Math.max(0, COPY_MIN_BALANCE - fundedUsd);
+        await ctx.reply(`◆ Copy Trading\n\nThe engine trades. Your account mirrors it.\n\n${copyAdminLine()}\n${copyLastTradeLine(uid)}\n\nTo copy: $${COPY_MIN_BALANCE} minimum\nYour balance: $${fundedUsd.toFixed(2)} — $${gap.toFixed(2)} away\n\nClose the gap and mirroring starts.`, { reply_markup: { inline_keyboard: [
             [{ text: '✦ Fund Account', url: DEPOSIT_URL }],
             [{ text: '⟡ Contact Admin', url: process.env.ADMIN_CONTACT_LINK ?? 'https://t.me/shiloh_is_10xing' }],
             [{ text: '⟵ Back', callback_data: 'ui:trade_menu' }],
@@ -3991,19 +3993,67 @@ bot.action('ui:copy', async (ctx) => {
         return;
     }
 
+    // Acceptance code gate — every user except the admin account itself must
+    // first redeem an admin-generated code. Once accepted, they stay accepted.
+    if (!isAdmin && !isCopyAccepted(uid)) {
+        const chatId = ctx.chat.id;
+        copyCodeSessions.set(chatId, { uid, at: Date.now() });
+        setTimeout(() => { if (copyCodeSessions.get(chatId)?.uid === uid) copyCodeSessions.delete(chatId); }, 10 * 60 * 1000).unref?.();
+        await ctx.reply(`◆ Copy Trading — ACCESS CODE REQUIRED\n\nCopy Trading is by invitation. Enter the acceptance code admin sent you.\n\nSend the code as a message here.`, { reply_markup: { inline_keyboard: [
+            [{ text: '✕ Cancel', callback_data: 'copy:code:cancel' }],
+            [{ text: '⟵ Back', callback_data: 'ui:trade_menu' }],
+        ] } });
+        return;
+    }
+
+    // Accepted (or admin) — Start screen. Flow: accepted → Start → amount → confirm.
+    await ctx.reply(`◆ Copy Trading\n\n✓ Accepted — your access is active.\n\nWhen admin opens a trade, your account opens the same one — same pair, same direction, same moment.\n\n${copyAdminLine()}\n\nReady when you are.`, { reply_markup: { inline_keyboard: [
+        [{ text: '⟡ Start Copying', callback_data: 'copy:start' }],
+        [{ text: '· How it works', callback_data: 'copy:how' }],
+        [{ text: '⟵ Back', callback_data: 'ui:trade_menu' }],
+    ] } });
+});
+
+bot.action('copy:start', async (ctx) => {
+    await ctx.answerCbQuery().catch(() => { });
+    if (!await requireApproval(ctx))
+        return;
+    const uid = ctx.from.id;
+    const isPriv = isPrivilegedUser(uid);
+    const isAdmin = uid === getAdminId();
+    if (!isAdmin && !isCopyAccepted(uid)) {
+        copyCodeSessions.set(ctx.chat.id, { uid, at: Date.now() });
+        await ctx.reply(`◆ Copy Trading — ACCESS CODE REQUIRED\n\nEnter the acceptance code admin sent you, as a message here.`, { reply_markup: { inline_keyboard: [
+            [{ text: '✕ Cancel', callback_data: 'copy:code:cancel' }],
+        ] } });
+        return;
+    }
+    const user = getUser(uid);
+    const fundedUsd = user?.funded_balance_usd ?? 0;
+    if (!isPriv && fundedUsd < COPY_MIN_BALANCE) {
+        await ctx.reply(`Minimum balance for Copy Trading is $${COPY_MIN_BALANCE}. Your balance: $${fundedUsd.toFixed(2)}`);
+        return;
+    }
     const cur = copyCurrencyLabel(uid);
     const presetRows = copyAmountPresets(cur);
-    await ctx.reply(`◆ Copy Trading\n\nWhen admin opens a trade, your account opens the same one — same pair, same direction, same moment.\n\n${copyAdminLine()}\n\nChoose your copy amount:`, { reply_markup: { inline_keyboard: [
+    await ctx.reply(`◆ Choose your copy amount:`, { reply_markup: { inline_keyboard: [
         [{ text: presetRows[0][0], callback_data: `copy:amt:${presetRows[0][1]}` }, { text: presetRows[1][0], callback_data: `copy:amt:${presetRows[1][1]}` }, { text: presetRows[2][0], callback_data: `copy:amt:${presetRows[2][1]}` }],
         [{ text: presetRows[3][0], callback_data: `copy:amt:${presetRows[3][1]}` }, { text: presetRows[4][0], callback_data: `copy:amt:${presetRows[4][1]}` }],
-        [{ text: '· How it works', callback_data: 'copy:how' }],
+        [{ text: '⟵ Back', callback_data: 'ui:copy' }],
+    ] } });
+});
+
+bot.action('copy:code:cancel', async (ctx) => {
+    await ctx.answerCbQuery().catch(() => { });
+    copyCodeSessions.delete(ctx.chat.id);
+    await ctx.reply('Code entry cancelled. You can start Copy Trading again anytime.', { reply_markup: { inline_keyboard: [
         [{ text: '⟵ Back', callback_data: 'ui:trade_menu' }],
     ] } });
 });
 
 bot.action('copy:how', async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
-    await ctx.reply(`◆ How Copy Trading works\n\nAdmin trades from the engine. Your account mirrors every move — same pair, same direction, same moment.\n\nYou choose the amount. Admin runs the strategy.\n\n· Min balance: $1,000\n· Min copy: $50\n· Stop anytime`, { reply_markup: { inline_keyboard: [
+    await ctx.reply(`◆ How Copy Trading works\n\nAdmin trades from the engine. Your account mirrors every move — same pair, same direction, same moment.\n\nYou choose the amount. Admin runs the strategy.\n\n· Min balance: $${COPY_MIN_BALANCE}\n· Min copy: $${COPY_MIN_AMOUNT}\n· Disconnect anytime`, { reply_markup: { inline_keyboard: [
         [{ text: '⟡ Start Copying', callback_data: 'ui:copy' }],
         [{ text: '⟵ Back', callback_data: 'ui:trade_menu' }],
     ] } });
@@ -4011,25 +4061,40 @@ bot.action('copy:how', async (ctx) => {
 
 bot.action(/^copy:amt:(.+)$/, async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
-    try {
-        await ctx.deleteMessage();
-    }
-    catch { }
     const amount = parseFloat(ctx.match[1]);
-    if (isNaN(amount) || amount < 50) {
-        await ctx.reply('Minimum copy amount is $50.');
+    if (isNaN(amount) || amount < COPY_MIN_AMOUNT) {
+        await ctx.reply(`Minimum copy amount is $${COPY_MIN_AMOUNT}.`);
+        return;
+    }
+    // Confirmation step — nothing starts until the user confirms.
+    await ctx.reply(`◆ Confirm copy amount\n\nCopy admin trades at $${amount} per trade?\n\n${copyAdminLine()}`, { reply_markup: { inline_keyboard: [
+        [{ text: `✅ Confirm $${amount}`, callback_data: `copy:confirm:${amount}` }],
+        [{ text: '↩ Change amount', callback_data: 'ui:copy' }],
+        [{ text: '⟵ Back', callback_data: 'ui:trade_menu' }],
+    ] } });
+});
+
+bot.action(/^copy:confirm:(.+)$/, async (ctx) => {
+    await ctx.answerCbQuery().catch(() => { });
+    const amount = parseFloat(ctx.match[1]);
+    if (isNaN(amount) || amount < COPY_MIN_AMOUNT) {
+        await ctx.reply(`Minimum copy amount is $${COPY_MIN_AMOUNT}.`);
         return;
     }
     const uid = ctx.from.id;
     const result = await startCopying(uid, amount);
     if (!result.ok) {
+        if (result.acceptance_required) {
+            await ctx.reply(`◆ Copy Trading — ACCESS CODE REQUIRED\n\nEnter the acceptance code admin sent you, as a message here.`, { reply_markup: { inline_keyboard: [
+                [{ text: '⟵ Back', callback_data: 'ui:trade_menu' }],
+            ] } });
+            return;
+        }
         await ctx.reply(`⚠️ ${result.error}`);
         return;
     }
-    const stats = copyTodayStats(uid);
-    await ctx.reply(`◆ Copy Trading — ACTIVE\n\nCopying admin · $${amount} per trade\n\n${copyAdminLine()}\n\n· Trades today: ${stats.n}\n\nYou can stop anytime.`, { reply_markup: { inline_keyboard: [
-        [{ text: '■ Stop Copying', callback_data: 'copy:stop' }],
-        [{ text: '⟵ Back', callback_data: 'ui:trade_menu' }],
+    await ctx.reply(`◆ Copy Trading — ACTIVE\n\n✓ Connected. Copying admin at $${amount} per trade.\n\n${copyAdminLine()}`, { reply_markup: { inline_keyboard: [
+        [{ text: '■ Disconnect', callback_data: 'copy:stop' }],
     ] } });
 });
 
@@ -4057,12 +4122,14 @@ bot.action('copy:activity', async (ctx) => {
 
 bot.action('copy:stop', async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
-    stopCopying(ctx.from.id);
-    await ctx.reply(`◆ Copy Trading — stopped\n\nMirroring paused. Admin keeps trading — your account no longer follows.\n\nStart again anytime.`, { reply_markup: { inline_keyboard: [
+    const uid = ctx.from.id;
+    stopCopying(uid);
+    await ctx.reply(`◆ Copy Trading — Disconnected\n\nYour account no longer mirrors admin trades.\n\nYou can reconnect anytime.`, { reply_markup: { inline_keyboard: [
         [{ text: '⟡ Start Copying', callback_data: 'ui:copy' }],
         [{ text: '⟵ Back', callback_data: 'ui:trade_menu' }],
     ] } });
 });
+
 bot.action('ui:history', async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
     await ctx.reply('· History has been removed from the bot.', { reply_markup: backKeyboard() }).catch(() => { });
@@ -5760,6 +5827,10 @@ bot.action('admin:copy', async (ctx) => {
                 [
                     { text: '✦ View Copiers', callback_data: 'admin:copy:copiers' },
                 ],
+                [
+                    { text: '🎟 Generate Code', callback_data: 'admin:copy:gencode' },
+                    { text: '🔌 Users & Swap', callback_data: 'admin:copy:users' },
+                ],
                 [{ text: '⟵ Admin Menu', callback_data: 'admin:back' }],
             ] } });
 });
@@ -5832,6 +5903,73 @@ function copyAssetsKeyboard(activeSet) {
     rows.push([{ text: '✅ Done', callback_data: 'admin:copy' }]);
     return rows;
 }
+
+bot.action('admin:copy:gencode', async (ctx) => {
+    await ctx.answerCbQuery().catch(() => { });
+    if (ctx.from?.id !== getAdminId())
+        return;
+    const code = generateCopyCode(ctx.from.id);
+    await ctx.reply(`🎟 Acceptance code generated\n\nCode: \`${code}\`\n\nSingle-use · expires in 7 days\n\nSend it to the user who should get Copy Trading access.`, {
+        parse_mode: 'Markdown',
+        reply_markup: { inline_keyboard: [
+            [{ text: '🎟 Generate another', callback_data: 'admin:copy:gencode' }],
+            [{ text: '⟵ Back to Copy Trading', callback_data: 'admin:copy' }],
+        ] }
+    });
+});
+
+bot.action('admin:copy:users', async (ctx) => {
+    await ctx.answerCbQuery().catch(() => { });
+    if (ctx.from?.id !== getAdminId())
+        return;
+    const rows = getCopyUsersAdmin();
+    if (!rows || rows.length === 0) {
+        await ctx.reply('No users in the Copy Trading program yet.', {
+            reply_markup: { inline_keyboard: [[{ text: '⟵ Back', callback_data: 'admin:copy' }]] }
+        });
+        return;
+    }
+    let msg = `🔌 Copy Trading users (${rows.length})\n`;
+    const buttons = [];
+    for (const u of rows) {
+        const name = u.first_name || u.username || String(u.telegram_id);
+        const bal = (u.funded_balance_usd ?? 0).toFixed(2);
+        const conn = u.conn === 'h20' ? '🌊 h20' : (u.conn === 'copy' ? '◆ copy' : '— none');
+        const amt = u.copy_amount ? ` · $${u.copy_amount}/trade` : '';
+        msg += `\n${name} — $${bal}${amt} · ${conn}`;
+        buttons.push([
+            { text: `${u.conn === 'copy' ? '✓ ' : ''}◆ copy`, callback_data: `admin:copy:plug:${u.telegram_id}:copy` },
+            { text: `${u.conn === 'h20' ? '✓ ' : ''}🌊 h20`, callback_data: `admin:copy:plug:${u.telegram_id}:h20` },
+        ]);
+    }
+    msg += '\n\nTap a connection to assign or swap that user.';
+    const kb = [...buttons, [{ text: '⟵ Back', callback_data: 'admin:copy' }]];
+    await ctx.reply(msg, { reply_markup: { inline_keyboard: kb } });
+});
+
+bot.action(/^admin:copy:plug:(\d+):(copy|h20)$/, async (ctx) => {
+    await ctx.answerCbQuery().catch(() => { });
+    if (ctx.from?.id !== getAdminId())
+        return;
+    const uid = parseInt(ctx.match[1]);
+    const conn = ctx.match[2];
+    const res = setCopyConnection(uid, conn);
+    if (!res.ok) {
+        await ctx.reply(`⚠️ ${res.error}`);
+        return;
+    }
+    const u = getUser(uid);
+    const name = u?.first_name || u?.username || String(uid);
+    const line = conn === 'copy'
+        ? '◆ Copy account — mirrors dmwferdinand trades (compounding).'
+        : '🌊 h20 — drain engine assigned.';
+    await ctx.reply(`🔌 ${name} → ${conn.toUpperCase()}\n\n${line}`, {
+        reply_markup: { inline_keyboard: [
+            [{ text: '🔌 Users & Swap', callback_data: 'admin:copy:users' }],
+            [{ text: '⟵ Back to Copy Trading', callback_data: 'admin:copy' }],
+        ] }
+    });
+});
 
 bot.action('admin:copy:assets', async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
@@ -7049,6 +7187,28 @@ bot.on('text', async (ctx) => {
                 await ctx.reply('❌ An error occurred. Check server logs.', { reply_markup: adminBackKeyboard() });
             }
         }
+    }
+    // ── Copy Trading acceptance-code entry ─────────────────────────────────────
+    // If a user tapped Copy Trading while not accepted, their next text message
+    // is treated as the acceptance code until a session entry is created.
+    const copyCodeSess = copyCodeSessions.get(ctx.chat.id);
+    if (copyCodeSess && ctx.message?.text && !ctx.message.text.startsWith('/')) {
+        copyCodeSessions.delete(ctx.chat.id); // single attempt consumes the session
+        const res = redeemCopyCode(copyCodeSess.uid, ctx.message.text);
+        if (res.ok) {
+            await ctx.reply(`✓ Accepted — Copy Trading is unlocked for your account.\n\nPress Start when you\u2019re ready to begin.`, { reply_markup: { inline_keyboard: [
+                [{ text: '⟡ Start Copying', callback_data: 'copy:start' }],
+                [{ text: '· How it works', callback_data: 'copy:how' }],
+                [{ text: '⟵ Back', callback_data: 'ui:trade_menu' }],
+            ] } });
+        }
+        else {
+            copyCodeSessions.set(ctx.chat.id, { uid: copyCodeSess.uid, at: Date.now() }); // allow retry
+            await ctx.reply(`✕ ${res.error}\n\nSend the code again, or cancel to leave.`, { reply_markup: { inline_keyboard: [
+                [{ text: '✕ Cancel', callback_data: 'copy:code:cancel' }],
+            ] } });
+        }
+        return;
     }
     // ── Upgrade token entry ───────────────────────────────────────────────────
     if (upgradeSessions.has(chatId) && !connectSessions.get(chatId)) {
