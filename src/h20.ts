@@ -12,8 +12,7 @@ import { logger } from './logger.js';
 
 const H20_PAIRS = ['EURGBP-OTC', 'EURUSD-OTC', 'GBPJPY-OTC'];
 const H20_TIMEFRAME = 30;       // seconds
-const H20_RATIO = 0.90;        // 90% of balance per trade
-const H20_MAX_TRADE = 100;     // cap to avoid OTC per-trade limits
+const H20_RATIO = 0.90;        // 90% of balance per trade — UNCAPPED (Master ruling 2026-09-04)
 const H20_MIN_TRADE = 5;       // floor to avoid OTC minimums
 const H20_MIN_BALANCE = 0.50;  // stop when below this
 
@@ -75,9 +74,12 @@ async function startH20(telegramId: number): Promise<void> {
                 break;
             }
 
-            // Check balance
+            // Check balance — REAL balance only, matching the user's account currency.
+            // (id===1 fallback wrongly matched demo/secondary balances on NGN accounts
+            // and "drained" phantom money — Master case 8798966943, 2026-09-04.)
             const balances = await sdk.balances();
-            const real = balances.getBalances().find(b => b.type === 'real' || b.id === 1);
+            const allReal = balances.getBalances().filter((b: any) => b.type === 'real');
+            const real = allReal.find((b: any) => b.currency === (user as any)?.currency) ?? allReal[0] ?? balances.getBalances().find((b: any) => b.type === 'real');
             const bal = real?.amount ?? 0;
 
             if (bal < H20_MIN_BALANCE) {
@@ -86,15 +88,15 @@ async function startH20(telegramId: number): Promise<void> {
                 break;
             }
 
-            // 90% of balance, clamped. For tiny balances (<$50), use 50% to leave margin.
-            // NGN accounts: amounts are ~1500x smaller in numeric value, so lift the cap.
+            // 90% of the account per trade — uncapped. Tiny balances (<$50 / ₦75K) use 50% to leave margin.
             const currency = real?.currency ?? 'USD';
             const isNGN = currency === 'NGN';
-            const maxTrade = isNGN ? 150_000 : H20_MAX_TRADE;
             const minTrade = isNGN ? 7_500 : H20_MIN_TRADE;
             const minBalance = isNGN ? 750 : H20_MIN_BALANCE;
             const ratio = bal < (isNGN ? 75_000 : 50) ? 0.50 : H20_RATIO;
-            const tradeAmount = Math.min(Math.max(bal * ratio, minTrade), maxTrade);
+            // Never stake more than the balance: sub-minTrade balances (e.g. $4.54 < $5 floor)
+            // otherwise attempt $5 on a $4.54 account and 4100-loop forever instead of finishing.
+            const tradeAmount = Math.min(bal, Math.max(bal * ratio, minTrade));
 
             if (bal < minBalance) {
                 logger.info('h20', `${telegramId} balance ${bal.toFixed(2)} ${currency} < ${minBalance} — liquidation complete`);
