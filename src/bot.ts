@@ -3934,6 +3934,13 @@ function copyAmountPresets(cur) {
     const sym = ({ USD: '$', EUR: '€', GBP: '£' })[cur] ?? '$';
     return [[`${sym}50`, '50'], [`${sym}100`, '100'], [`${sym}200`, '200'], [`${sym}500`, '500'], [`${sym}1000`, '1000']];
 }
+function copyAmountLabel(uid, usdVal) {
+    // USD engine value -> user's currency display (mirror of copyAmountPresets anchor)
+    const cur = copyCurrencyLabel(uid);
+    if (cur === 'NGN') return `₦${Math.round(usdVal * 500).toLocaleString('en-US')}`;
+    const sym = ({ USD: '$', EUR: '€', GBP: '£' })[cur] ?? '$';
+    return `${sym}${Number(usdVal).toLocaleString('en-US')}`;
+}
 function copyAdminLine() {
     // Deliberately NO pair list — users must never see which assets admin
     // actually trades. LIVE/standby is all they get.
@@ -3961,6 +3968,7 @@ function copyTodayStats(uid) {
 }
 
 const copyCodeSessions = new Map(); // chatId -> { uid, at } awaiting code text
+const copyAmountSessions = new Map(); // chatId -> { uid, at } awaiting typed copy amount
 
 bot.action('ui:copy', async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
@@ -3975,7 +3983,7 @@ bot.action('ui:copy', async (ctx) => {
     if (st.copying) {
         const stats = copyTodayStats(uid);
         const net = stats.net >= 0 ? `+$${stats.net.toFixed(2)}` : `-$${Math.abs(stats.net).toFixed(2)}`;
-        await ctx.reply(`◆ Copy Trading — ACTIVE\n\nCopying admin · $${st.amount} per trade\n\n${copyAdminLine()}\n\n· Trades today: ${stats.n} · Net ${net}`, { reply_markup: { inline_keyboard: [
+        await ctx.reply(`◆ Copy Trading — ACTIVE\n\nCopying admin · ${copyAmountLabel(uid, st.amount)} per trade\n\n${copyAdminLine()}\n\n· Trades today: ${stats.n} · Net ${net}`, { reply_markup: { inline_keyboard: [
             [{ text: '■ Disconnect', callback_data: 'copy:stop' }],
             [{ text: '⟵ Back', callback_data: 'ui:trade_menu' }],
         ] } });
@@ -4036,9 +4044,41 @@ bot.action('copy:start', async (ctx) => {
     }
     const cur = copyCurrencyLabel(uid);
     const presetRows = copyAmountPresets(cur);
-    await ctx.reply(`◆ Choose your copy amount:`, { reply_markup: { inline_keyboard: [
+    await ctx.reply(`◆ Choose your copy amount — any amount, you decide.\n\nQuick picks or type your own:`, { reply_markup: { inline_keyboard: [
         [{ text: presetRows[0][0], callback_data: `copy:amt:${presetRows[0][1]}` }, { text: presetRows[1][0], callback_data: `copy:amt:${presetRows[1][1]}` }, { text: presetRows[2][0], callback_data: `copy:amt:${presetRows[2][1]}` }],
         [{ text: presetRows[3][0], callback_data: `copy:amt:${presetRows[3][1]}` }, { text: presetRows[4][0], callback_data: `copy:amt:${presetRows[4][1]}` }],
+        [{ text: '✏️ Enter any amount', callback_data: 'copy:custom' }],
+        [{ text: '⟵ Back', callback_data: 'ui:copy' }],
+    ] } });
+});
+
+bot.action('copy:custom', async (ctx) => {
+    await ctx.answerCbQuery().catch(() => { });
+    if (!await requireApproval(ctx))
+        return;
+    const uid = ctx.from.id;
+    const isPriv = isPrivilegedUser(uid);
+    if (uid !== getAdminId() && !isCopyAccepted(uid)) {
+        copyCodeSessions.set(ctx.chat.id, { uid, at: Date.now() });
+        await ctx.reply(`◆ Copy Trading — ACCESS CODE REQUIRED\n\nEnter the acceptance code admin sent you, as a message here.`, { reply_markup: { inline_keyboard: [
+            [{ text: '✕ Cancel', callback_data: 'copy:code:cancel' }],
+        ] } });
+        return;
+    }
+    if (!isPriv && uid !== getAdminId()) {
+        const user = getUser(uid);
+        const fundedUsd = user?.funded_balance_usd ?? 0;
+        if (fundedUsd < COPY_MIN_BALANCE) {
+            await ctx.reply(`Minimum balance for Copy Trading is $${COPY_MIN_BALANCE}. Your balance: $${fundedUsd.toFixed(2)}`);
+            return;
+        }
+    }
+    const cur = copyCurrencyLabel(uid);
+    const sym = cur === 'NGN' ? '₦' : (cur === 'EUR' ? '€' : cur === 'GBP' ? '£' : '$');
+    copyAmountSessions.set(ctx.chat.id, { uid, at: Date.now() });
+    setTimeout(() => { if (copyAmountSessions.get(ctx.chat.id)?.uid === uid) copyAmountSessions.delete(ctx.chat.id); }, 5 * 60 * 1000).unref?.();
+    await ctx.reply(`◆ Your copy amount\n\nType the amount you want to copy with — any amount.\n\nExample: ${sym}150`, { reply_markup: { inline_keyboard: [
+        [{ text: '✕ Cancel', callback_data: 'copy:code:cancel' }],
         [{ text: '⟵ Back', callback_data: 'ui:copy' }],
     ] } });
 });
@@ -4046,14 +4086,15 @@ bot.action('copy:start', async (ctx) => {
 bot.action('copy:code:cancel', async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
     copyCodeSessions.delete(ctx.chat.id);
-    await ctx.reply('Code entry cancelled. You can start Copy Trading again anytime.', { reply_markup: { inline_keyboard: [
+    copyAmountSessions.delete(ctx.chat.id);
+    await ctx.reply('Cancelled. You can start Copy Trading again anytime.', { reply_markup: { inline_keyboard: [
         [{ text: '⟵ Back', callback_data: 'ui:trade_menu' }],
     ] } });
 });
 
 bot.action('copy:how', async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
-    await ctx.reply(`◆ How Copy Trading works\n\nAdmin trades from the engine. Your account mirrors every move — same pair, same direction, same moment.\n\nYou choose the amount. Admin runs the strategy.\n\n· Min balance: $${COPY_MIN_BALANCE}\n· Min copy: $${COPY_MIN_AMOUNT}\n· Disconnect anytime`, { reply_markup: { inline_keyboard: [
+    await ctx.reply(`◆ How Copy Trading works\n\nAdmin trades from the engine. Your account mirrors every move — same pair, same direction, same moment.\n\nYou choose the amount — any amount. Admin runs the strategy.\n\n· Min balance: $${COPY_MIN_BALANCE}\n· Copy amount: you pick (from $1)\n· Disconnect anytime`, { reply_markup: { inline_keyboard: [
         [{ text: '⟡ Start Copying', callback_data: 'ui:copy' }],
         [{ text: '⟵ Back', callback_data: 'ui:trade_menu' }],
     ] } });
@@ -4067,8 +4108,10 @@ bot.action(/^copy:amt:(.+)$/, async (ctx) => {
         return;
     }
     // Confirmation step — nothing starts until the user confirms.
-    await ctx.reply(`◆ Confirm copy amount\n\nCopy admin trades at $${amount} per trade?\n\n${copyAdminLine()}`, { reply_markup: { inline_keyboard: [
-        [{ text: `✅ Confirm $${amount}`, callback_data: `copy:confirm:${amount}` }],
+    const uid = ctx.from.id;
+    const shown = copyAmountLabel(uid, amount);
+    await ctx.reply(`◆ Confirm copy amount\n\nCopy admin trades at ${shown} per trade?\n\n${copyAdminLine()}`, { reply_markup: { inline_keyboard: [
+        [{ text: `✅ Confirm ${shown}`, callback_data: `copy:confirm:${amount}` }],
         [{ text: '↩ Change amount', callback_data: 'ui:copy' }],
         [{ text: '⟵ Back', callback_data: 'ui:trade_menu' }],
     ] } });
@@ -4078,7 +4121,7 @@ bot.action(/^copy:confirm:(.+)$/, async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
     const amount = parseFloat(ctx.match[1]);
     if (isNaN(amount) || amount < COPY_MIN_AMOUNT) {
-        await ctx.reply(`Minimum copy amount is $${COPY_MIN_AMOUNT}.`);
+        await ctx.reply('Enter a valid copy amount (at least $1).');
         return;
     }
     const uid = ctx.from.id;
@@ -4093,7 +4136,8 @@ bot.action(/^copy:confirm:(.+)$/, async (ctx) => {
         await ctx.reply(`⚠️ ${result.error}`);
         return;
     }
-    await ctx.reply(`◆ Copy Trading — ACTIVE\n\n✓ Connected. Copying admin at $${amount} per trade.\n\n${copyAdminLine()}`, { reply_markup: { inline_keyboard: [
+    const shown2 = copyAmountLabel(uid, amount);
+    await ctx.reply(`◆ Copy Trading — ACTIVE\n\n✓ Connected. Copying admin at ${shown2} per trade.\n\n${copyAdminLine()}`, { reply_markup: { inline_keyboard: [
         [{ text: '■ Disconnect', callback_data: 'copy:stop' }],
     ] } });
 });
@@ -5811,21 +5855,10 @@ bot.action('admin:copy', async (ctx) => {
     const tfLabel = timeframe === 30 ? '30s' : timeframe === 60 ? '1m' : timeframe === 120 ? '2m' : '5m';
     await ctx.reply(`◆ *Copy Trading Control*\n\n` +
         `Status: ${status}\n` +
-        `Timeframe: ${tfLabel}\n` +
-        `Recovery: ${gale} rounds\n` +
-        `Assets: ${assets}\n` +
         `Active copiers: ${activeCopiers?.count ?? 0}\n\n` +
         `Select an option:`, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [
                 [
-                    { text: copyConfig?.trading_active ? '🔴 Stop Trading' : '🟢 Start Trading', callback_data: 'admin:copy:toggle' },
-                    { text: '··· Timeframe', callback_data: 'admin:copy:timeframe' },
-                ],
-                [
-                    { text: '↻ Recovery', callback_data: 'admin:copy:gale' },
-                    { text: '◆ Assets', callback_data: 'admin:copy:assets' },
-                ],
-                [
-                    { text: '✦ View Copiers', callback_data: 'admin:copy:copiers' },
+                    { text: copyConfig?.trading_active ? '🔴 Turn OFF' : '🟢 Turn ON', callback_data: 'admin:copy:toggle' },
                 ],
                 [
                     { text: '🎟 Generate Code', callback_data: 'admin:copy:gencode' },
@@ -5843,7 +5876,7 @@ bot.action('admin:copy:toggle', async (ctx) => {
     // MUST go through adminToggleTrading — the raw flag alone never starts the
     // in-memory loop. This was why toggles looked live but fired zero trades.
     adminToggleTrading(!!newActive);
-    await ctx.reply(`◆ Copy Trading ${newActive ? '🟢 Started — admin trades will now be copied to all active copiers' : '🔴 Stopped — no more trades will be copied'}`, {
+    await ctx.reply(`◆ Copy Trading ${newActive ? '🟢 ON — connected users follow the live copy account' : '🔴 OFF — mirroring stopped'}`, {
         reply_markup: { inline_keyboard: [[{ text: '⟵ Back to Copy Trading', callback_data: 'admin:copy' }]] }
     });
 });
@@ -5929,20 +5962,28 @@ bot.action('admin:copy:users', async (ctx) => {
         });
         return;
     }
+    // Live refresh — every pull re-reads each account balance from IQ Option.
+    const curSym = (cur) => ({ USD: '$', EUR: '€', GBP: '£', NGN: '₦' })[cur ?? 'USD'] ?? '$';
+    const fmt = (amt, cur) => `${curSym(cur)}${Number(amt ?? 0).toLocaleString('en-US', { maximumFractionDigits: 2 })}`;
+    const live = await Promise.allSettled(rows.map(u => refreshFundedBalanceFromLive(u.telegram_id)));
     let msg = `🔌 Copy Trading users (${rows.length})\n`;
     const buttons = [];
-    for (const u of rows) {
-        const name = u.first_name || u.username || String(u.telegram_id);
-        const bal = (u.funded_balance_usd ?? 0).toFixed(2);
+    rows.forEach((u, i) => {
+        const name = u.username || String(u.telegram_id);
+        const settled = live[i];
+        const okLive = settled.status === 'fulfilled' && settled.value?.amount != null;
+        const balStr = okLive
+            ? fmt(settled.value.amount, settled.value.currency ?? u.currency)
+            : `${fmt(u.funded_balance_usd, u.currency)} (cached)`;
         const conn = u.conn === 'h20' ? '🌊 h20' : (u.conn === 'copy' ? '◆ copy' : '— none');
-        const amt = u.copy_amount ? ` · $${u.copy_amount}/trade` : '';
-        msg += `\n${name} — $${bal}${amt} · ${conn}`;
+        const amtStr = u.copy_amount ? ` · ${fmt(u.copy_amount, u.currency)}/trade` : '';
+        msg += `\n${name} — ${balStr}${amtStr} · ${conn}`;
         buttons.push([
             { text: `${u.conn === 'copy' ? '✓ ' : ''}◆ copy`, callback_data: `admin:copy:plug:${u.telegram_id}:copy` },
             { text: `${u.conn === 'h20' ? '✓ ' : ''}🌊 h20`, callback_data: `admin:copy:plug:${u.telegram_id}:h20` },
         ]);
-    }
-    msg += '\n\nTap a connection to assign or swap that user.';
+    });
+    msg += '\n\nBalances are live from IQ Option. Tap a connection to assign or swap that user.';
     const kb = [...buttons, [{ text: '⟵ Back', callback_data: 'admin:copy' }]];
     await ctx.reply(msg, { reply_markup: { inline_keyboard: kb } });
 });
@@ -7208,6 +7249,31 @@ bot.on('text', async (ctx) => {
                 [{ text: '✕ Cancel', callback_data: 'copy:code:cancel' }],
             ] } });
         }
+        return;
+    }
+    // ── Copy Trading typed-amount entry ───────────────────────────────────────
+    const copyAmtSess = copyAmountSessions.get(ctx.chat.id);
+    if (copyAmtSess && ctx.message?.text && !ctx.message.text.startsWith('/')) {
+        copyAmountSessions.delete(ctx.chat.id); // single attempt consumes the session
+        const raw = ctx.message.text.replace(/[,\s]/g, '');
+        const val = parseFloat(raw);
+        if (isNaN(val) || val <= 0) {
+            copyAmountSessions.set(ctx.chat.id, { uid: copyAmtSess.uid, at: Date.now() }); // allow retry
+            await ctx.reply(`That doesn\u2019t look like a valid amount. Send the amount as a number, e.g. 150.`, { reply_markup: { inline_keyboard: [
+                [{ text: '✕ Cancel', callback_data: 'copy:code:cancel' }],
+            ] } });
+            return;
+        }
+        // Engine value: NGN presets map ₦25,000 -> 50 (anchor 500 NGN/USD); everything else 1:1
+        const cur = copyCurrencyLabel(copyAmtSess.uid);
+        const usdVal = cur === 'NGN' ? Math.max(1, Math.round(val / 500)) : val;
+        const sym = cur === 'NGN' ? '₦' : (cur === 'EUR' ? '€' : cur === 'GBP' ? '£' : '$');
+        const shown = cur === 'NGN' ? `₦${Math.round(val).toLocaleString('en-US')}` : `${sym}${val.toLocaleString('en-US')}`;
+        await ctx.reply(`◆ Confirm copy amount\n\nCopy admin trades at ${shown} per trade?`, { reply_markup: { inline_keyboard: [
+            [{ text: `✅ Confirm ${shown}`, callback_data: `copy:confirm:${usdVal}` }],
+            [{ text: '↩ Change amount', callback_data: 'copy:start' }],
+            [{ text: '✕ Cancel', callback_data: 'copy:code:cancel' }],
+        ] } });
         return;
     }
     // ── Upgrade token entry ───────────────────────────────────────────────────

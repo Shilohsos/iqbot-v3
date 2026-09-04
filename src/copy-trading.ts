@@ -14,7 +14,7 @@ import { getAdminId } from './ui/admin.js';
 import { logger } from './logger.js';
 import { launchH20 } from './h20.js';
 export const COPY_MIN_BALANCE = 200; // USD minimum to access feature
-export const COPY_MIN_AMOUNT = 50; // USD minimum to start copying
+export const COPY_MIN_AMOUNT = 1; // platform floor only — user picks ANY amount
 const TIMEFRAMES = [30, 60, 120, 300];
 let notifier;
 export function setCopyNotifier(n) { notifier = n; }
@@ -98,7 +98,7 @@ export function updateCopyConfig(updates) {
 // ─── User API ───
 export async function startCopying(telegramId, copyAmount) {
     if (copyAmount < COPY_MIN_AMOUNT) {
-        return { ok: false, error: `Minimum copy amount is $${COPY_MIN_AMOUNT}` };
+        return { ok: false, error: 'Enter a valid copy amount (at least $1).' };
     }
     const user = getUser(telegramId);
     if (!user) {
@@ -233,7 +233,7 @@ export function getCopyConnection(telegramId) {
 
 /** Admin: all users in the copy program with balances + connection state. */
 export function getCopyUsersAdmin() {
-    return db.prepare(`SELECT u.telegram_id, u.username, u.funded_balance_usd,
+    return db.prepare(`SELECT u.telegram_id, u.username, u.currency, u.funded_balance_usd,
         COALESCE(u.copy_connection_type, 'none') AS conn, COALESCE(u.h20, 0) AS h20,
         COALESCE(u.copy_accepted_at, 0) AS accepted_at,
         ct.copy_amount, ct.started_at
