@@ -1,27 +1,43 @@
 /** @ts-nocheck - reunified from dist */
-/** @ts-nocheck - reunified from dist */
-// Copy Trading — admin-controlled trading for connected users.
-// Users click "Start Copying Admin", enter amount (min $50).
-// Admin controls on/off, assets, timeframe from backend.
-// Users see trades appearing on their end automatically.
-// Minimum balance: $1000. Minimum copy amount: $50.
-import { createSdk, runMartingaleCore } from './trade.js';
+// Copy Trading — mirror the live dmwferdinand account (compounding strategy).
+//
+// A user is plugged to exactly ONE of two engines:
+//   · 'copy' — every ACTUAL trade the dmwferdinand account places (the Yacht
+//     live mirror: base + each recovery round) is replicated on the user's own
+//     IQ Option account — same pair, same direction, same timeframe, same
+//     moment. The user's stake uses the SAME compounding strategy the account
+//     uses: their chosen copy amount calibrates their ratio once (stake =
+//     balance × ratio), and recovery rounds double (× 2^round) exactly like the
+//     account's ladder.
+//   · 'h20'  — the account is traded by the H20 engine instead. Never both.
+//
+// There is NO independent analysis loop anymore. Copy users trade only when
+// the account trades. The global ON/OFF flag in the admin panel gates the
+// fan-out (trading_active); h20 is unaffected by it.
+import { createSdk, executeTradeWithSdk } from './trade.js';
 import { sdkPool } from './sdk-pool.js';
-import { analyzePairWithSdk } from './analysis.js';
-import { runAdminAnalysis } from './admin-analysis.js';
 import { getUser, getAdminSsid, db, getConfig } from './db.js';
 import { getAdminId } from './ui/admin.js';
 import { logger } from './logger.js';
 import { launchH20 } from './h20.js';
+
 export const COPY_MIN_BALANCE = 200; // USD minimum to access feature
 export const COPY_MIN_AMOUNT = 1; // platform floor only — user picks ANY amount
-const TIMEFRAMES = [30, 60, 120, 300];
+
+/** Broker floor — below this a buy is rejected, so the user's mirror is
+ *  skipped rather than erroring (same rule as the account's live mirror). */
+const LIVE_MIN_STAKE = 1;
+/** Mirror buy+settle budget: 20s headroom + the trade window itself. */
+const COPY_MIRROR_TIMEOUT_MS = 20_000;
+
 let notifier;
 export function setCopyNotifier(n) { notifier = n; }
+
 const PRIV_IDS = new Set([6622587977, 8986669286, 6683209485]);
 function isPrivilegedUser(uid) {
     return uid === getAdminId() || PRIV_IDS.has(uid);
 }
+
 export function initCopyDb() {
     db.exec(`
         CREATE TABLE IF NOT EXISTS copy_trading (
@@ -53,7 +69,8 @@ export function initCopyDb() {
             created_by INTEGER NOT NULL
         );
     `);
-    // Lazy migration: acceptance-code + connection-type columns on users
+    // Lazy migration: acceptance-code + connection-type + compounding-ratio
+    // columns on users.
     try {
         const ucols = db.prepare('PRAGMA table_info(users)').all().map(r => r.name);
         if (!ucols.includes('copy_acceptance_code'))
@@ -62,17 +79,20 @@ export function initCopyDb() {
             db.exec("ALTER TABLE users ADD COLUMN copy_connection_type TEXT DEFAULT 'none'");
         if (!ucols.includes('copy_accepted_at'))
             db.exec('ALTER TABLE users ADD COLUMN copy_accepted_at INTEGER');
+        if (!ucols.includes('copy_ratio'))
+            db.exec('ALTER TABLE users ADD COLUMN copy_ratio REAL');
+        // Lazy fix: copiers whose active rows predate the connection-type
+        // column still sit at 'none' — the mirror filter requires exactly
+        // 'copy', so promote them (h20 assignments are never touched).
+        db.exec(`UPDATE users SET copy_connection_type = 'copy'
+            WHERE copy_connection_type = 'none'
+              AND COALESCE(h20, 0) != 1
+              AND EXISTS (SELECT 1 FROM copy_trading ct
+                          WHERE ct.telegram_id = users.telegram_id
+                            AND ct.status = 'active')`);
     } catch (e) { console.error('[copy] users migration failed', e); }
-    // Boot restore: if admin left copy trading LIVE before a restart, resume the
-    // loop automatically — the loop lives only in memory, so without this the
-    // flag says LIVE but no trades ever fire after any restart.
-    try {
-        const cfg = getCopyConfig();
-        if (cfg.trading_active && cfg.assets.length > 0)
-            startCopyLoop();
-    }
-    catch { /* config not ready yet */ }
 }
+
 export function getCopyConfig() {
     const row = db.prepare('SELECT * FROM copy_config WHERE id = 1').get();
     return {
@@ -164,13 +184,13 @@ export function getCopyStatus(telegramId) {
     return { copying: true, amount: row.copy_amount };
 }
 export function getConnectedCopyUsers() {
-    // Users plugged to the h20 drain are traded by the h20 engine, never by the
-    // mirror loop — binary per-user connection: 'copy' or 'h20'.
+    // ONLY users plugged to 'copy'. h20-assigned accounts are traded by the
+    // h20 engine, never by the mirror fan-out.
     const rows = db.prepare(`SELECT ct.telegram_id, ct.copy_amount
         FROM copy_trading ct
         LEFT JOIN users u ON u.telegram_id = ct.telegram_id
         WHERE ct.status = 'active'
-          AND COALESCE(u.copy_connection_type, 'copy') != 'h20'
+          AND u.copy_connection_type = 'copy'
           AND COALESCE(u.h20, 0) != 1`).all();
     return rows;
 }
@@ -206,7 +226,7 @@ export function generateCopyCode(adminId, opts = {}) {
         code += alphabet[Math.floor(Math.random() * alphabet.length)];
     const expiresAt = opts.expiresInMs ?? 7 * 24 * 3600 * 1000; // default 7 days
     db.prepare('INSERT INTO copy_codes (code, created_at, expires_at, uses_left, created_by) VALUES (?, ?, ?, ?, ?)')
-        .run(code, Date.now(), Date.now() + expiresAt, opts.usesLeft ?? 1, adminId);
+        .run(code, Date.now(), expiresAt, opts.usesLeft ?? 1, adminId);
     return code;
 }
 
@@ -246,140 +266,148 @@ export function getCopyUsersAdmin() {
 export function adminToggleTrading(on) {
     updateCopyConfig({ trading_active: on ? 1 : 0 });
     logger.info('copy', `Admin ${on ? 'enabled' : 'disabled'} copy trading`);
-    if (on) {
-        // Start the copy trading loop
-        startCopyLoop();
-    }
-    else {
-        stopCopyLoop();
-    }
 }
-export function adminSetAssets(assets) {
-    updateCopyConfig({ assets });
+
+// ─── Mirror fan-out (DIRECTIVE-COPY-MIRROR-COMPOUNDING) ────────────────────
+// Called by the Yacht engine at the moment a real trade lands on the
+// dmwferdinand account (base + each recovery round). Fire-and-forget from the
+// engine's side — this function never throws and never blocks the account's
+// own ladder.
+
+/** Serial per-user queue: one in-flight mirror per user at a time. Two
+ *  concurrent buys over one WebSocket is the known parallel-buy hang, so a
+ *  user's mirrors wait for the previous one to settle. Bounded naturally —
+ *  the account's ladder is sequential per setup. */
+const userQueues = new Map();
+
+function withTimeout(p, ms, label) {
+    return Promise.race([
+        p,
+        new Promise((_, rej) => setTimeout(() => rej(new Error(`copy mirror ${label} timed out`)), ms)),
+    ]);
 }
-export function adminSetTimeframe(timeframe) {
-    updateCopyConfig({ timeframe });
-}
-export function adminSetGaleRounds(gale) {
-    updateCopyConfig({ gale_rounds: gale });
-}
-// ─── Copy Trading Loop ───
-let copyLoopRunning = false;
-let copyLoopTimer = null;
-function startCopyLoop() {
-    if (copyLoopRunning)
-        return;
-    copyLoopRunning = true;
-    runCopyLoop();
-}
-function stopCopyLoop() {
-    copyLoopRunning = false;
-    if (copyLoopTimer) {
-        clearTimeout(copyLoopTimer);
-        copyLoopTimer = null;
-    }
-}
-async function runCopyLoop() {
-    if (!copyLoopRunning)
-        return;
-    const config = getCopyConfig();
-    if (!config.trading_active || config.assets.length === 0) {
-        copyLoopTimer = setTimeout(() => runCopyLoop(), 10000);
-        return;
-    }
-    const users = getConnectedCopyUsers();
-    if (users.length === 0) {
-        copyLoopTimer = setTimeout(() => runCopyLoop(), 10000);
-        return;
-    }
-    // Trade each asset for each connected user
-    const timeframe = config.timeframe;
-    const gale = config.gale_rounds;
-    for (const asset of config.assets) {
-        if (!copyLoopRunning)
-            break;
-        // Trade this asset for all connected users in parallel
-        const promises = users.map(u => tradeForUser(u.telegram_id, u.copy_amount, asset, timeframe, gale));
-        await Promise.allSettled(promises);
-    }
-    // Schedule next cycle
-    if (copyLoopRunning) {
-        copyLoopTimer = setTimeout(() => runCopyLoop(), 5000);
+
+/** Live real-money balance on the user's own account, or null. */
+async function userLiveBalance(sdk) {
+    try {
+        const balances = await withTimeout(sdk.balances(), 10_000, 'balances');
+        const list = balances.getBalances();
+        const real = list.find(b => String(b.type) === 'real') ?? list.find(b => b.type === undefined);
+        if (!real) return null;
+        const amount = Number(real.amount);
+        return Number.isFinite(amount) ? amount : null;
+    } catch (e) {
+        logger.warn('copy', `copy user live balance read failed: ${e instanceof Error ? e.message : e}`);
+        return null;
     }
 }
-async function tradeForUser(telegramId, amount, pair, timeframe, gale) {
+
+/**
+ * The compounding stake for one mirror round on one user's account.
+ *
+ *  ratio is calibrated ONCE per user — their chosen copy amount divided by
+ *  their live balance at the first mirror — then never rewritten, exactly like
+ *  the account's FIRST_LIVE_STAKE calibration. Every later round: stake =
+ *  balance × ratio × 2^round (round 0 = base, round N = recovery N). */
+function userStakeForRound(user, balance, round) {
+    let ratio = Number(user.copy_ratio);
+    if (!Number.isFinite(ratio) || ratio <= 0) {
+        ratio = Number(user.copy_amount) / balance;
+        db.prepare('UPDATE users SET copy_ratio = ? WHERE telegram_id = ?').run(ratio, user.telegram_id);
+        logger.info('copy', `copy user ${user.telegram_id} calibrated: $${Number(user.copy_amount)} on a $${balance.toFixed(2)} balance → ratio ${(ratio * 100).toFixed(4)}%`);
+    }
+    const stake = Math.round(balance * ratio * Math.pow(2, round) * 100) / 100;
+    return stake;
+}
+
+async function mirrorForUser(telegramId, opts) {
+    const { pair, direction, timeframeSec, round, setupId, accountStake } = opts;
     const user = getUser(telegramId);
-    if (!user)
-        return;
+    if (!user) return;
     const ssid = telegramId === getAdminId() ? getAdminSsid() : user.ssid;
-    if (!ssid)
+    if (!ssid) {
+        logger.warn('copy', `copy mirror skipped uid=${telegramId} on ${pair} — no SSID`);
         return;
-    const isPriv = isPrivilegedUser(telegramId);
+    }
+
     let sdk;
     let usedPool = false;
     try {
         try {
-            sdk = await sdkPool.get(telegramId, ssid);
+            sdk = await withTimeout(sdkPool.get(telegramId, ssid), 15_000, 'pool');
             usedPool = true;
-            try {
-                sdkPool.pin(telegramId);
-            }
-            catch { /* */ }
+            try { sdkPool.pin(telegramId); } catch { /* */ }
+        } catch {
+            sdk = await withTimeout(createSdk(ssid), 60_000, 'sdk');
         }
-        catch {
-            sdk = await createSdk(ssid);
-        }
-        // Analyze
-        const candlesFacade = await sdk.candles();
-        const turboOpts = await sdk.turboOptions();
-        const norm = (s) => s.toUpperCase().replace(/^front\./i, '').replace(/[-\/\s]/g, '');
-        const normalizedPair = norm(pair);
-        const active = turboOpts.getActives().find((a) => norm(a.ticker) === normalizedPair || norm(a.localizationKey) === normalizedPair);
-        if (!active)
-            return;
-        let direction;
-        if (isPriv || getConfig('admin_analysis_all') === 'true') {
-            const history = await candlesFacade.getCandles(active.id, timeframe, { count: 200 });
-            const result = runAdminAnalysis(history);
-            direction = result.direction;
-        }
-        else {
-            const result = await analyzePairWithSdk(sdk, pair, timeframe, 'MASTER', 2);
-            direction = result.direction;
-        }
-        // Execute trade
-        const outcome = await runMartingaleCore(sdk, {
-            pair,
-            direction,
-            amount,
-            galeRounds: gale,
-            timeframeSec: timeframe,
-            balanceType: 'live',
-            telegramId,
-        });
-        // Notify user — only real outcomes. NO_FILL is a non-event (no trade was
-        // placed, nothing lost): pinging copiers with "NO_FILL +$0.00" is noise.
-        if (outcome.status === 'NO_FILL') {
-            logger.info('copy', `NO_FILL for uid=${telegramId} on ${pair} — suppressed notification`);
+
+        const balance = await userLiveBalance(sdk);
+        if (balance == null || !(balance > 0)) {
+            logger.warn('copy', `copy mirror skipped uid=${telegramId} on ${pair} — live balance unavailable (${balance})`);
             return;
         }
-        const emoji = outcome.status === 'WIN' ? '🟢' : outcome.status === 'LOSS' ? '🔴' : '🟡';
-        const tfLabel = timeframe === 30 ? '30s' : timeframe === 60 ? '1m' : timeframe === 120 ? '2m' : '5m';
-        const pnlStr = outcome.totalPnl >= 0 ? `+$${Math.abs(outcome.totalPnl).toFixed(2)}` : `-$${Math.abs(outcome.totalPnl).toFixed(2)}`;
-        const roundsStr = outcome.rounds > 1 ? ` (${outcome.rounds} rounds)` : '';
-        await notifier?.sendMessage(telegramId, `${emoji} ${pair} (${tfLabel}) — ${outcome.status} ${pnlStr}${roundsStr}`).catch(() => { });
-    }
-    catch (err) {
-        logger.warn('copy', `Copy trade error for uid=${telegramId} on ${pair}: ${err}`);
-    }
-    finally {
+
+        const stake = userStakeForRound(user, balance, round);
+        if (!(stake >= LIVE_MIN_STAKE)) {
+            logger.warn('copy', `copy mirror skipped uid=${telegramId} on ${pair} — round ${round} stake $${stake.toFixed(2)} below the $${LIVE_MIN_STAKE} broker minimum`);
+            return;
+        }
+
+        logger.info('copy', `copy mirror uid=${telegramId}: ${pair} ${direction} $${stake.toFixed(2)} (round ${round} of setup ${setupId}; account staked $${accountStake}) tf=${timeframeSec}s`);
+
+        const result = await withTimeout(
+            executeTradeWithSdk(sdk, {
+                pair,
+                direction,
+                amount: stake,
+                timeframeSec,
+                balanceType: 'live',
+                telegramId,
+            }),
+            COPY_MIRROR_TIMEOUT_MS + timeframeSec * 1000,
+            `uid=${telegramId} ${pair}`,
+        );
+
+        // Only settled outcomes reach the user. NO_FILL / ERROR mean no trade
+        // was placed (or it is unconfirmed) — nothing lost, nothing to say.
+        if (result.status === 'NO_FILL' || result.status === 'ERROR') {
+            logger.info('copy', `copy mirror uid=${telegramId} on ${pair} — ${result.status} (${result.error ?? 'no fill'}), silent`);
+            return;
+        }
+        const emoji = result.status === 'WIN' ? '🟢' : result.status === 'LOSS' ? '🔴' : '🟡';
+        const tfLabel = timeframeSec === 30 ? '30s' : timeframeSec === 60 ? '1m' : timeframeSec === 120 ? '2m' : '5m';
+        const pnlStr = result.pnl >= 0 ? `+$${Math.abs(result.pnl).toFixed(2)}` : `-$${Math.abs(result.pnl).toFixed(2)}`;
+        await notifier?.sendMessage(telegramId, `${emoji} ${pair} (${tfLabel}) — ${result.status} ${pnlStr}`).catch(() => { });
+    } catch (err) {
+        logger.warn('copy', `copy mirror error uid=${telegramId} on ${pair}: ${err instanceof Error ? err.message : err}`);
+    } finally {
         try {
             if (usedPool) {
                 try { sdkPool.unpin(telegramId); sdkPool.release(telegramId); } catch { /* */ }
             } else if (sdk) {
-                await sdk.shutdown();
+                await withTimeout(Promise.resolve(sdk.shutdown()), 10_000, 'shutdown').catch(() => { });
             }
-        }
-        catch { /* gone */ }
+        } catch { /* gone */ }
+    }
+}
+
+/**
+ * Fan out one actual dmwferdinand trade to every plugged copy user.
+ * Called by the Yacht live mirror after each settled round (WIN/LOSS/TIE).
+ * `round` is the account's ladder round (0 = base, N = recovery N) so each
+ * user's compounding stake doubles in lockstep with the account.
+ */
+export async function mirrorTradeToCopyUsers(opts) {
+    const cfg = getCopyConfig();
+    if (!cfg.trading_active) return;
+    const users = getConnectedCopyUsers();
+    if (!users.length) return;
+    for (const u of users) {
+        const prev = userQueues.get(u.telegram_id) || Promise.resolve();
+        const next = prev
+            .catch(() => { })
+            .then(() => mirrorForUser(u.telegram_id, opts))
+            .catch(e => logger.warn('copy', `copy mirror queue error uid=${u.telegram_id}: ${e instanceof Error ? e.message : e}`));
+        userQueues.set(u.telegram_id, next);
     }
 }

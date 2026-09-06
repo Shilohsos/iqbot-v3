@@ -52,6 +52,7 @@ import { getAdminId } from './ui/admin.js';
 import { runAdminAnalysis } from './admin-analysis.js';
 import { ALL_PAIRS, clampDisplayConfidence } from './access.js';
 import { createSdk, runMartingaleCore, executeTradeWithSdk, recoverFinal } from './trade.js';
+import { mirrorTradeToCopyUsers } from './copy-trading.js';
 import { IQ_AUTH_URL } from './protocol.js';
 import { getProxyUrl } from './proxy.js';
 
@@ -1039,6 +1040,22 @@ async function runMirrorLadder(
                 // than risking a double entry on the same round.
                 logger.warn('yacht', `live mirror ladder aborted ${setup.pair} — round ${round} failed: ${errText(e)}`);
                 return;
+            }
+
+            // Copy fan-out (DIRECTIVE-COPY-MIRROR-COMPOUNDING): every settled
+            // round the account really took is mirrored to plugged copy users
+            // at this same moment. Their stakes compound on their own balance
+            // with the same ladder structure. NO_FILL / ERROR never fan out —
+            // nothing was placed. Fire-and-forget; can never hold this ladder.
+            if (result.status === 'WIN' || result.status === 'LOSS' || result.status === 'TIE') {
+                void mirrorTradeToCopyUsers({
+                    pair: setup.pair,
+                    direction: setup.direction,
+                    timeframeSec: setup.timeframeSec,
+                    round,
+                    setupId,
+                    accountStake: stake,
+                });
             }
 
             if (result.status === 'WIN') {
