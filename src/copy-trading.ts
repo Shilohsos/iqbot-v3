@@ -224,7 +224,7 @@ export function generateCopyCode(adminId, opts = {}) {
     let code = '';
     for (let i = 0; i < 8; i++)
         code += alphabet[Math.floor(Math.random() * alphabet.length)];
-    const expiresAt = opts.expiresInMs ?? 7 * 24 * 3600 * 1000; // default 7 days
+    const expiresAt = Date.now() + (opts.expiresInMs ?? 7 * 24 * 3600 * 1000); // default 7 days from now
     db.prepare('INSERT INTO copy_codes (code, created_at, expires_at, uses_left, created_by) VALUES (?, ?, ?, ?, ?)')
         .run(code, Date.now(), expiresAt, opts.usesLeft ?? 1, adminId);
     return code;
