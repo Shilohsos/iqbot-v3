@@ -40,10 +40,10 @@ const COPY_FLOW_TOL_FRAC = 0.02;
 
 export const COPY_TERMS_TEXT = '✦ Compounding — Terms\n\n' +
     'The goal of compounding is simple: 10x your capital.\n\n' +
-    '• Do not withdraw before your account reaches 10x in profit. Withdrawing early violates the rules — and you will be disconnected.\n' +
+    '• Do not withdraw before your account reaches 10x in profit. Withdrawing early violates the rules.\n' +
     '• Reach 10x and you may withdraw — then start again with a small capital.\n' +
     '• Stop at any time with Disconnect. Restart at any time.\n' +
-    '• Each Compounding code lasts only one week. When it expires, request another code.\n' +
+    '• Each Compounding code lasts only one month. When it expires, request another code.\n' +
     '• The engine sizes every setup off its confidence — stronger reads take a larger position.';
 
 const chainBases = new Map();        // setupId:uid -> chain base stake (native)
@@ -298,7 +298,7 @@ export function generateCopyCode(adminId, opts = {}) {
     let code = '';
     for (let i = 0; i < 8; i++)
         code += alphabet[Math.floor(Math.random() * alphabet.length)];
-    const expiresAt = Date.now() + (opts.expiresInMs ?? 7 * 24 * 3600 * 1000); // default 7 days from now
+    const expiresAt = Date.now() + (opts.expiresInMs ?? 30 * 24 * 3600 * 1000); // default 30 days from now
     db.prepare('INSERT INTO copy_codes (code, created_at, expires_at, uses_left, created_by) VALUES (?, ?, ?, ?, ?)')
         .run(code, Date.now(), expiresAt, opts.usesLeft ?? 1, adminId);
     return code;

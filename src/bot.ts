@@ -6005,7 +6005,7 @@ bot.action('admin:copy:gencode', async (ctx) => {
     if (ctx.from?.id !== getAdminId())
         return;
     const code = generateCopyCode(ctx.from.id);
-    await ctx.reply(`🎟 Acceptance code generated\n\nCode: \`${code}\`\n\nSingle-use · expires in 7 days\n\nSend it to the user who should get Compounding access.`, {
+    await ctx.reply(`🎟 Acceptance code generated\n\nCode: \`${code}\`\n\nSingle-use · expires in 30 days\n\nSend it to the user who should get Compounding access.`, {
         parse_mode: 'Markdown',
         reply_markup: { inline_keyboard: [
             [{ text: '🎟 Generate another', callback_data: 'admin:copy:gencode' }],
