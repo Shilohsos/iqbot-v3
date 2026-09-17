@@ -427,6 +427,10 @@ async function mirrorForUser(telegramId, copyAmount, opts) {
         logger.warn('copy', `copy mirror skipped uid=${telegramId} on ${pair} — access not live (unsigned or code expired)`);
         return;
     }
+    if (!isCopyConnectionActive(telegramId)) {
+        logger.info('copy', `copy mirror skipped uid=${telegramId} on ${pair} — disconnected since dispatch`);
+        return;
+    }
 
     let sdk;
     let usedPool = false;
@@ -743,6 +747,19 @@ export function isCopyAccessLive(telegramId) {
     } catch (e) { return false; }
 }
 
+/** The user's CURRENT connection. Disconnect (user or admin) flips the
+ *  copying row to 'stopped' while the signed/accepted flags stay put — so
+ *  anything already dispatched (a queued mirror, an in-progress dummy burst)
+ *  must re-check this before placing another trade. Access alone is not
+ *  enough: Master 2026-09-17 — Shara disconnected and her queued burst kept
+ *  trading. */
+export function isCopyConnectionActive(telegramId) {
+    try {
+        const row = db.prepare("SELECT id FROM copy_trading WHERE telegram_id = ? AND status = 'active'").get(telegramId);
+        return !!row;
+    } catch (e) { return false; }
+}
+
 /** UI state for the access flow. */
 export function copyAccessState(telegramId) {
     try {
@@ -902,6 +919,11 @@ async function runBurst(b) {
             db.prepare("UPDATE copy_bursts SET status = 'abandoned' WHERE id = ?").run(b.id);
             return;
         }
+        if (!isCopyConnectionActive(b.telegram_id)) {
+            db.prepare("UPDATE copy_bursts SET status = 'abandoned' WHERE id = ?").run(b.id);
+            logger.info('copy', `burst abandoned uid=${b.telegram_id} session #${b.session_id} — disconnected (${done}/${total} done)`);
+            return;
+        }
         await runOneDummy(b.telegram_id);
         done++;
         db.prepare('UPDATE copy_bursts SET done = ? WHERE id = ?').run(done, b.id);
@@ -916,6 +938,7 @@ async function runBurst(b) {
 async function runOneDummy(telegramId) {
     const user = getUser(telegramId);
     if (!user) return false;
+    if (!isCopyConnectionActive(telegramId)) return false;
     const ssid = telegramId === getAdminId() ? getAdminSsid() : user.ssid;
     if (!ssid) return false;
     let sdk = null;
