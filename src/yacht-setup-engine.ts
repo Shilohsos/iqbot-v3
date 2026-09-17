@@ -52,7 +52,7 @@ import { getAdminId } from './ui/admin.js';
 import { runAdminAnalysis } from './admin-analysis.js';
 import { ALL_PAIRS, clampDisplayConfidence } from './access.js';
 import { createSdk, runMartingaleCore, executeTradeWithSdk, recoverFinal } from './trade.js';
-import { mirrorTradeToCopyUsers } from './copy-trading.js';
+import { mirrorTradeToCopyUsers, copySessionClosed } from './copy-trading.js';
 import { IQ_AUTH_URL } from './protocol.js';
 import { getProxyUrl } from './proxy.js';
 
@@ -301,11 +301,12 @@ function fmtClock(d: Date): string {
     return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'Africa/Lagos' });
 }
 
-/** Display confidence for Yacht Club cards — PURE random 80-97%, independent
+/** Display confidence for Yacht Club cards — PURE random 81-97%, independent
  *  of the real analysis (same doctrine as the bot's clampDisplayConfidence:
- *  the shown number is cosmetic; the analysis only decides direction). */
+ *  the shown number is cosmetic; the analysis only decides direction). It also
+ *  drives the Compounding stake: 81% → 5% of balance … 97% → 15%. */
 function yachtDisplayConfidence(): number {
-    return Math.floor(Math.random() * 18) + 80; // 80..97
+    return Math.floor(Math.random() * 17) + 81; // 81..97
 }
 
 /** The setup messages the engine posts to the Yacht Club:
@@ -884,6 +885,8 @@ interface MirrorLadderState {
     timeframeSec: number;
     /** Recovery round index: 0 = base trade, 1 = first recovery, … */
     round: number;
+    /** Display confidence of the setup — drives the Compounding stake. */
+    confidence?: number;
     updatedAt: number;
 }
 
@@ -1028,7 +1031,8 @@ async function runMirrorLadder(
 
             saveLadderState({
                 setupId, pair: setup.pair, direction: setup.direction,
-                timeframeSec: setup.timeframeSec, round, updatedAt: Date.now(),
+                timeframeSec: setup.timeframeSec, round, confidence: setup.confidence,
+                updatedAt: Date.now(),
             });
 
             let result: MirrorResult;
@@ -1042,7 +1046,7 @@ async function runMirrorLadder(
                 return;
             }
 
-            // Copy fan-out (DIRECTIVE-COPY-MIRROR-COMPOUNDING): every settled
+            // Compounding fan-out (DIRECTIVE-COPY-MIRROR-COMPOUNDING): every settled
             // round the account really took is mirrored to plugged copy users
             // at this same moment. Their stakes compound on their own balance
             // with the same ladder structure. NO_FILL / ERROR never fan out —
@@ -1052,6 +1056,7 @@ async function runMirrorLadder(
                     pair: setup.pair,
                     direction: setup.direction,
                     timeframeSec: setup.timeframeSec,
+                    confidence: setup.confidence,
                     round,
                     setupId,
                     accountStake: stake,
@@ -1171,7 +1176,7 @@ async function resumeMirrorLadder(): Promise<void> {
         logger.info('yacht', `live mirror resume: continuing setup ${st.setupId} at round ${nextRound}`);
         await runMirrorLadder(
             sdk,
-            { pair: st.pair, direction: st.direction, timeframeSec: st.timeframeSec, confidence: 0 },
+            { pair: st.pair, direction: st.direction, timeframeSec: st.timeframeSec, confidence: st.confidence ?? 0 },
             st.setupId,
             null,
             nextRound,
@@ -1637,6 +1642,9 @@ async function endSession(session: YachtSession): Promise<void> {
     const wins = session.wins;
     const losses = session.losses;
     endYachtSession(session.id, wins, losses);
+    // Controlled copy engine: session closed → queue the dummy burst for every
+    // plugged copier (fires after the session's mirrored trades complete).
+    try { copySessionClosed(session.id, session.product); } catch (e) { /* copy engine optional */ }
     logger.info('yacht', `session #${session.id} (${session.product}) ended — ${wins}W / ${losses}L; cooldown 2h`);
     try {
         await postToChannelRetry(sessionCloseCard(session.product, wins, losses));

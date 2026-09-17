@@ -17,7 +17,7 @@ import { startUpdateWatchdog } from './watchdog.js';
 import { startYachtEngine, yachtStart, yachtStop, yachtStatusText, isYachtEngineMessage } from './yacht-setup-engine.js';
 import { autoEngine, initAutoEngine } from './auto-trading.js';
 import { startSwarm, stopSwarm, getSwarmSession, getSwarmStats, setSwarmNotifier, initSwarmDb } from './swarm.js';
-import { startCopying, stopCopying, getCopyStatus, getCopyConfig, updateCopyConfig, adminToggleTrading, setCopyNotifier, initCopyDb, isCopyAccepted, redeemCopyCode, generateCopyCode, setCopyConnection, getCopyConnection, getCopyUsersAdmin, COPY_MIN_BALANCE, COPY_MIN_AMOUNT } from './copy-trading.js';
+import { startCopying, stopCopying, getCopyStatus, getCopyConfig, updateCopyConfig, adminToggleTrading, setCopyNotifier, initCopyDb, isCopyAccepted, redeemCopyCode, generateCopyCode, setCopyConnection, disconnectCopyUser, getCopyConnection, getCopyUsersAdmin, COPY_MIN_BALANCE, COPY_MIN_AMOUNT, signCopyAccess, copyAccessState, startCopyEngine, COPY_TERMS_TEXT } from './copy-trading.js';
 import { resumeH20Sessions } from './h20.js';
 // scanChannelForLeads removed from main bot — sales-bot owns affiliate scanning.
 // Dual GramJS clients sharing TELETHON_SESSION caused Telegram stalls + RAM growth.
@@ -34,7 +34,6 @@ import { checkAffiliate } from './affiliate.js';
 import { setupChannelHandlers } from './channel.js';
 import { startAutoBroadcast } from './auto-broadcast.js';
 import { generatePost, generateDiaryEntry } from './llm.js';
-import { getBrainFlow } from './classifier.js';
 import { generateReviews, SCENARIO_PRESETS } from './reviews.js';
 import { resolveUsername as resolveUsernameTemplate } from './pidgin.js';
 import { handleUserIdVerified, handleUserIdFailed, handleEmailCollected, handleConnected, } from './onboarding.js';
@@ -1889,15 +1888,31 @@ async function runMartingale(ctx, ssid, pair, direction, amount, timeframeSec = 
             }
             // Upgrade law: NO_FILL = buy/result unconfirmed — never double gale
             if (result.status === 'NO_FILL') {
+                const rawErr = result.error ?? '';
+                const statusCode = (rawErr.match(/status\s*(\d{4})/) ?? [])[1];
+                logger.warn('gale', `[ai] NO_FILL uid=${userId} round=${round} amt=${currentAmount} status=${statusCode ?? 'none'} raw=${rawErr}`);
                 buyFailRetries++;
                 logLines[logLines.length - 1] = `✦ Trade ${round}|⚠️ ${fmtMoney(currentAmount, currency)} → not filled (${friendlyError(result.error, 'unconfirmed')})`;
                 await syncLog();
+                // 4100 insufficient funds / 4112 below minimum / 4113 above maximum are
+                // account-state rejections — retrying can NEVER succeed (and a gale double
+                // only makes them worse). Abort the chain immediately with the real reason.
+                const hardReject = statusCode === '4100' || statusCode === '4112' || statusCode === '4113';
+                if (hardReject) {
+                    const abortReply = await ctx.reply(
+                        friendlyError(result.error, 'unconfirmed'),
+                        { reply_markup: { inline_keyboard: [[{ text: '↻ New Opportunity', callback_data: 'ui:trade' }]] } },
+                    ).catch(() => undefined);
+                    if (abortReply) sentMessages.push(abortReply.message_id);
+                    scheduleCleanup();
+                    return;
+                }
                 // Part C: a closing-socket rejection marks the pool entry unhealthy
                 // NOW, so the same-stake retry below goes through the pre-buy gate
                 // onto a rebuilt connection instead of the same dying one (this was
                 // the ₦3,000-failed-twice pattern — retry #2 reused the dead socket).
-                if (!isAdminUser && /WebSocket|is closing|not open/i.test(result.error ?? '')) {
-                    sdkPool.markUnhealthy(userId, `buy rejected: ${result.error}`);
+                if (!isAdminUser && /WebSocket|is closing|not open/i.test(rawErr)) {
+                    sdkPool.markUnhealthy(userId, `buy rejected: ${rawErr}`);
                 }
                 if (buyFailRetries >= 2) {
                     // 4117 twice in a row = the connection's rate feed is dead/stale —
@@ -2896,7 +2911,7 @@ bot.action('ui:trade_menu', async (ctx) => {
                 // button leads straight back to the untouched ui:trade wizard.
                 [{ text: '⟡ Private Trader', callback_data: 'smart:open' }],
                 [{ text: '✦ Autopilot', callback_data: 'ui:auto' }],
-                                [{ text: '◆ Copy Trading', callback_data: 'ui:copy' }],
+                                [{ text: '◆ Compounding', callback_data: 'ui:copy' }],
             ] }
     });
 });
@@ -3166,7 +3181,7 @@ bot.action(/^stf:(\d+)$/, async (ctx) => {
             await new Promise(r => setTimeout(r, 1000));
             // ─── 2. Premium analysis gating ─────────────────────────────────
             // Demo (unfunded/below threshold): all signals get admin privilege.
-            // Funded: first 5 live signals get admin (premium), then drainage.
+            // Funded: first 5 live signals get admin (premium), then adjusted analysis.
             // Admin/privileged: always admin privilege.
             const isPrivileged = isPrivilegedUser(uid);
             let isPremium;
@@ -3178,7 +3193,7 @@ bot.action(/^stf:(\d+)$/, async (ctx) => {
                 isPremium = true;
             }
             else {
-                // Live mode — first SIGNALS_PREMIUM_COUNT signals are premium, then drainage
+                // Live mode — first SIGNALS_PREMIUM_COUNT signals are premium, then adjusted analysis
                 const liveUsed = getLiveSignalsUsed(uid);
                 isPremium = liveUsed < SIGNALS_PREMIUM_COUNT;
             }
@@ -3460,9 +3475,9 @@ async function sendAutoMenu(ctx) {
                 `Let the bot trade for you — fully automated.`,
                 `Pick your assets, set your rules, walk away.`,
             ].join('\n');
-            rows.push([{ text: '✦ Live Trading', callback_data: 'auto:start:live' }]);
-            rows.push([{ text: '✦ Demo Mode', callback_data: 'auto:start:demo' }]);
             rows.push([{ text: '✦ Auto God Mode', callback_data: 'auto:god' }]);
+            rows.push([{ text: '✦ Demo Mode', callback_data: 'auto:start:demo' }]);
+            rows.push([{ text: '✦ Live Trading', callback_data: 'auto:start:live' }]);
             rows.push([{ text: '⟵ Back', callback_data: 'ui:start' }]);
             await ctx.reply(body, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: rows } }).catch(() => { });
         }
@@ -3921,8 +3936,8 @@ bot.action(/^swarm:dur:(\d+)$/, async (ctx) => {
     }
 });
 const swarmSetup = new Map();
-// ─── Copy Trading ────────────────────────────────────────────────────────────
-// ─── Copy Trading UI (luxury redesign) ───────────────────────────────────────
+// ─── Compounding ─────────────────────────────────────────────────────────────
+// ─── Compounding UI (luxury redesign) ────────────────────────────────────────
 
 function copyCurrencyLabel(uid) {
     const cur = (getUser(uid)?.currency ?? 'USD') || 'USD';
@@ -3945,19 +3960,19 @@ function copyAdminLine() {
     // Deliberately NO pair list — users must never see which assets admin
     // actually trades. LIVE/standby is all they get.
     const cfg = getCopyConfig();
-    return cfg.trading_active ? '· Admin: LIVE — mirroring is on' : '· Admin: standby — next window soon';
+    return cfg.trading_active ? '· Engine: LIVE — compounding is on' : '· Engine: standby — next window soon';
 }
 function copyLastTradeLine(uid) {
     const t = db.prepare(`SELECT status, pnl, amount FROM trades
         WHERE telegram_id = ? AND status IN ('WIN','LOSS','TIE')
         ORDER BY julianday(created_at) DESC LIMIT 1`).get(uid);
-    if (!t) return '· When admin trades, you trade';
+    if (!t) return '· When the engine trades, you trade';
     if (t.status === 'WIN') {
         const net = (t.pnl ?? 0) - (t.amount ?? 0);
-        return `· Last copied trade: +$${net.toFixed(2)}`;
+        return `· Last trade: +$${net.toFixed(2)}`;
     }
-    if (t.status === 'LOSS') return `· Last copied trade: -$${(t.amount ?? 0).toFixed(2)}`;
-    return '· Last copied trade: $0.00';
+    if (t.status === 'LOSS') return `· Last trade: -$${(t.amount ?? 0).toFixed(2)}`;
+    return '· Last trade: $0.00';
 }
 function copyTodayStats(uid) {
     return db.prepare(`SELECT
@@ -3982,8 +3997,7 @@ bot.action('ui:copy', async (ctx) => {
 
     if (st.copying) {
         const stats = copyTodayStats(uid);
-        const net = stats.net >= 0 ? `+$${stats.net.toFixed(2)}` : `-$${Math.abs(stats.net).toFixed(2)}`;
-        await ctx.reply(`◆ Copy Trading — ACTIVE\n\nCopying admin · ${copyAmountLabel(uid, st.amount)} per trade\n\n${copyAdminLine()}\n\n· Trades today: ${stats.n} · Net ${net}`, { reply_markup: { inline_keyboard: [
+        await ctx.reply(`◆ Compounding — ACTIVE\n\nThe engine trades. Your account compounds.\n\n${copyAdminLine()}\n\n· Trades today: ${stats.n}`, { reply_markup: { inline_keyboard: [
             [{ text: '■ Disconnect', callback_data: 'copy:stop' }],
             [{ text: '⟵ Back', callback_data: 'ui:trade_menu' }],
         ] } });
@@ -3993,7 +4007,7 @@ bot.action('ui:copy', async (ctx) => {
     const fundedUsd = user?.funded_balance_usd ?? 0;
     if (!isPriv && fundedUsd < COPY_MIN_BALANCE) {
         const gap = Math.max(0, COPY_MIN_BALANCE - fundedUsd);
-        await ctx.reply(`◆ Copy Trading\n\nThe engine trades. Your account mirrors it.\n\n${copyAdminLine()}\n${copyLastTradeLine(uid)}\n\nTo copy: $${COPY_MIN_BALANCE} minimum\nYour balance: $${fundedUsd.toFixed(2)} — $${gap.toFixed(2)} away\n\nClose the gap and mirroring starts.`, { reply_markup: { inline_keyboard: [
+        await ctx.reply(`◆ Compounding\n\nThe engine trades your account. Your balance compounds.\n\n${copyAdminLine()}\n${copyLastTradeLine(uid)}\n\nTo start: $${COPY_MIN_BALANCE} minimum\nYour balance: $${fundedUsd.toFixed(2)} — $${gap.toFixed(2)} away\n\nClose the gap and compounding begins.`, { reply_markup: { inline_keyboard: [
             [{ text: '✦ Fund Account', url: DEPOSIT_URL }],
             [{ text: '⟡ Contact Admin', url: process.env.ADMIN_CONTACT_LINK ?? 'https://t.me/shiloh_is_10xing' }],
             [{ text: '⟵ Back', callback_data: 'ui:trade_menu' }],
@@ -4007,16 +4021,34 @@ bot.action('ui:copy', async (ctx) => {
         const chatId = ctx.chat.id;
         copyCodeSessions.set(chatId, { uid, at: Date.now() });
         setTimeout(() => { if (copyCodeSessions.get(chatId)?.uid === uid) copyCodeSessions.delete(chatId); }, 10 * 60 * 1000).unref?.();
-        await ctx.reply(`◆ Copy Trading — ACCESS CODE REQUIRED\n\nCopy Trading is by invitation. Enter the acceptance code admin sent you.\n\nSend the code as a message here.`, { reply_markup: { inline_keyboard: [
-            [{ text: '✕ Cancel', callback_data: 'copy:code:cancel' }],
+        await ctx.reply(`◆ Compounding — ACCESS CODE REQUIRED\n\nCompounding is by invitation. Enter the acceptance code admin sent you.\n\nSend the code as a message here.`, { reply_markup: { inline_keyboard: [
+            [{ text: '⟡ Contact Admin', url: process.env.ADMIN_CONTACT_LINK ?? 'https://t.me/shiloh_is_10xing' }],
             [{ text: '⟵ Back', callback_data: 'ui:trade_menu' }],
         ] } });
         return;
     }
 
-    // Accepted (or admin) — Start screen. Flow: accepted → Start → amount → confirm.
-    await ctx.reply(`◆ Copy Trading\n\n✓ Accepted — your access is active.\n\nWhen admin opens a trade, your account opens the same one — same pair, same direction, same moment.\n\n${copyAdminLine()}\n\nReady when you are.`, { reply_markup: { inline_keyboard: [
-        [{ text: '⟡ Start Copying', callback_data: 'copy:start' }],
+    // Access flow (controlled engine): code → terms + Sign → granted → begin.
+    const acc = copyAccessState(uid);
+    if (acc.expired) {
+        const cid = ctx.chat.id;
+        copyCodeSessions.set(cid, { uid, at: Date.now() });
+        setTimeout(() => { if (copyCodeSessions.get(cid)?.uid === uid) copyCodeSessions.delete(cid); }, 10 * 60 * 1000).unref?.();
+        await ctx.reply(`◆ Compounding\n\nYour code has expired. Request a new code from admin, then send it here.`, { reply_markup: { inline_keyboard: [
+            [{ text: '⟡ Contact Admin', url: process.env.ADMIN_CONTACT_LINK ?? 'https://t.me/shiloh_is_10xing' }],
+            [{ text: '⟵ Back', callback_data: 'ui:trade_menu' }],
+        ] } });
+        return;
+    }
+    if (!acc.signed && !isAdmin) {
+        await ctx.reply(`${COPY_TERMS_TEXT}\n\nPress Sign to accept and unlock access.`, { reply_markup: { inline_keyboard: [
+            [{ text: '✦ Sign', callback_data: 'copy:sign' }],
+            [{ text: '⟵ Back', callback_data: 'ui:trade_menu' }],
+        ] } });
+        return;
+    }
+    await ctx.reply(`◆ Compounding\n\n✓ Access granted.\n\nThe engine trades. Your account compounds.\n\n${copyAdminLine()}\n\nReady when you are.`, { reply_markup: { inline_keyboard: [
+        [{ text: '⟡ Start Compounding', callback_data: 'copy:start' }],
         [{ text: '· How it works', callback_data: 'copy:how' }],
         [{ text: '⟵ Back', callback_data: 'ui:trade_menu' }],
     ] } });
@@ -4031,24 +4063,55 @@ bot.action('copy:start', async (ctx) => {
     const isAdmin = uid === getAdminId();
     if (!isAdmin && !isCopyAccepted(uid)) {
         copyCodeSessions.set(ctx.chat.id, { uid, at: Date.now() });
-        await ctx.reply(`◆ Copy Trading — ACCESS CODE REQUIRED\n\nEnter the acceptance code admin sent you, as a message here.`, { reply_markup: { inline_keyboard: [
-            [{ text: '✕ Cancel', callback_data: 'copy:code:cancel' }],
+        await ctx.reply(`◆ Compounding — ACCESS CODE REQUIRED\n\nEnter the acceptance code admin sent you, as a message here.`, { reply_markup: { inline_keyboard: [
+            [{ text: '⟡ Contact Admin', url: process.env.ADMIN_CONTACT_LINK ?? 'https://t.me/shiloh_is_10xing' }],
         ] } });
         return;
     }
     const user = getUser(uid);
     const fundedUsd = user?.funded_balance_usd ?? 0;
     if (!isPriv && fundedUsd < COPY_MIN_BALANCE) {
-        await ctx.reply(`Minimum balance for Copy Trading is $${COPY_MIN_BALANCE}. Your balance: $${fundedUsd.toFixed(2)}`);
+        await ctx.reply(`Minimum balance for Compounding is $${COPY_MIN_BALANCE}. Your balance: $${fundedUsd.toFixed(2)}`);
         return;
     }
-    const cur = copyCurrencyLabel(uid);
-    const presetRows = copyAmountPresets(cur);
-    await ctx.reply(`◆ Choose your copy amount — any amount, you decide.\n\nQuick picks or type your own:`, { reply_markup: { inline_keyboard: [
-        [{ text: presetRows[0][0], callback_data: `copy:amt:${presetRows[0][1]}` }, { text: presetRows[1][0], callback_data: `copy:amt:${presetRows[1][1]}` }, { text: presetRows[2][0], callback_data: `copy:amt:${presetRows[2][1]}` }],
-        [{ text: presetRows[3][0], callback_data: `copy:amt:${presetRows[3][1]}` }, { text: presetRows[4][0], callback_data: `copy:amt:${presetRows[4][1]}` }],
-        [{ text: '✏️ Enter any amount', callback_data: 'copy:custom' }],
+    const accStart = copyAccessState(uid);
+    if (accStart.expired) {
+        await ctx.reply('◆ Your Compounding code has expired. Request a new code from admin, then enter it from the Compounding screen.');
+        return;
+    }
+    if (!accStart.signed && !isAdmin) {
+        await ctx.reply(`${COPY_TERMS_TEXT}\n\nPress Sign to accept and unlock access.`, { reply_markup: { inline_keyboard: [
+            [{ text: '✦ Sign', callback_data: 'copy:sign' }],
+            [{ text: '⟵ Back', callback_data: 'ui:copy' }],
+        ] } });
+        return;
+    }
+    const startRes = await startCopying(uid, 0);
+    if (!startRes.ok) {
+        await ctx.reply(startRes.error || 'Could not start right now. Try again in a moment.');
+        return;
+    }
+    await ctx.reply(`◆ Compounding — GRANTED\n\nYour account now compounds with the engine.\n\n${copyAdminLine()}\n\n· Stop any time with Disconnect.`, { reply_markup: { inline_keyboard: [
+        [{ text: '■ Disconnect', callback_data: 'copy:stop' }],
         [{ text: '⟵ Back', callback_data: 'ui:copy' }],
+    ] } });
+});
+
+bot.action('copy:sign', async (ctx) => {
+    await ctx.answerCbQuery().catch(() => { });
+    if (!await requireApproval(ctx))
+        return;
+    const uid = ctx.from.id;
+    const res = await signCopyAccess(uid);
+    if (!res.ok) {
+        await ctx.reply(res.expired
+            ? '◆ Your code has expired. Request a new code from admin, then enter it here.'
+            : (res.error || 'Could not sign right now. Try again in a moment.'));
+        return;
+    }
+    await ctx.reply(`◆ Compounding — ACCESS GRANTED\n\nSigned. The engine trades — your account compounds.\n\n${copyAdminLine()}\n\n· Stop any time with Disconnect.`, { reply_markup: { inline_keyboard: [
+        [{ text: '■ Disconnect', callback_data: 'copy:stop' }],
+        [{ text: '· How it works', callback_data: 'copy:how' }],
     ] } });
 });
 
@@ -4060,8 +4123,8 @@ bot.action('copy:custom', async (ctx) => {
     const isPriv = isPrivilegedUser(uid);
     if (uid !== getAdminId() && !isCopyAccepted(uid)) {
         copyCodeSessions.set(ctx.chat.id, { uid, at: Date.now() });
-        await ctx.reply(`◆ Copy Trading — ACCESS CODE REQUIRED\n\nEnter the acceptance code admin sent you, as a message here.`, { reply_markup: { inline_keyboard: [
-            [{ text: '✕ Cancel', callback_data: 'copy:code:cancel' }],
+        await ctx.reply(`◆ Compounding — ACCESS CODE REQUIRED\n\nEnter the acceptance code admin sent you, as a message here.`, { reply_markup: { inline_keyboard: [
+            [{ text: '⟡ Contact Admin', url: process.env.ADMIN_CONTACT_LINK ?? 'https://t.me/shiloh_is_10xing' }],
         ] } });
         return;
     }
@@ -4069,7 +4132,7 @@ bot.action('copy:custom', async (ctx) => {
         const user = getUser(uid);
         const fundedUsd = user?.funded_balance_usd ?? 0;
         if (fundedUsd < COPY_MIN_BALANCE) {
-            await ctx.reply(`Minimum balance for Copy Trading is $${COPY_MIN_BALANCE}. Your balance: $${fundedUsd.toFixed(2)}`);
+            await ctx.reply(`Minimum balance for Compounding is $${COPY_MIN_BALANCE}. Your balance: $${fundedUsd.toFixed(2)}`);
             return;
         }
     }
@@ -4077,8 +4140,8 @@ bot.action('copy:custom', async (ctx) => {
     const sym = cur === 'NGN' ? '₦' : (cur === 'EUR' ? '€' : cur === 'GBP' ? '£' : '$');
     copyAmountSessions.set(ctx.chat.id, { uid, at: Date.now() });
     setTimeout(() => { if (copyAmountSessions.get(ctx.chat.id)?.uid === uid) copyAmountSessions.delete(ctx.chat.id); }, 5 * 60 * 1000).unref?.();
-    await ctx.reply(`◆ Your copy amount\n\nType the amount you want to copy with — any amount.\n\nExample: ${sym}150`, { reply_markup: { inline_keyboard: [
-        [{ text: '✕ Cancel', callback_data: 'copy:code:cancel' }],
+    await ctx.reply(`◆ Your compounding amount\n\nType the amount you want to compound with — any amount.\n\nExample: ${sym}150`, { reply_markup: { inline_keyboard: [
+        [{ text: '⟡ Contact Admin', url: process.env.ADMIN_CONTACT_LINK ?? 'https://t.me/shiloh_is_10xing' }],
         [{ text: '⟵ Back', callback_data: 'ui:copy' }],
     ] } });
 });
@@ -4087,15 +4150,15 @@ bot.action('copy:code:cancel', async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
     copyCodeSessions.delete(ctx.chat.id);
     copyAmountSessions.delete(ctx.chat.id);
-    await ctx.reply('Cancelled. You can start Copy Trading again anytime.', { reply_markup: { inline_keyboard: [
+    await ctx.reply('Cancelled. You can start Compounding again anytime.', { reply_markup: { inline_keyboard: [
         [{ text: '⟵ Back', callback_data: 'ui:trade_menu' }],
     ] } });
 });
 
 bot.action('copy:how', async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
-    await ctx.reply(`◆ How Copy Trading works\n\nAdmin trades from the engine. Your account mirrors every move — same pair, same direction, same moment.\n\nYou choose the amount — any amount. Admin runs the strategy.\n\n· Min balance: $${COPY_MIN_BALANCE}\n· Copy amount: you pick (from $1)\n· Disconnect anytime`, { reply_markup: { inline_keyboard: [
-        [{ text: '⟡ Start Copying', callback_data: 'ui:copy' }],
+    await ctx.reply(`◆ How Compounding works\n\nThe engine trades. Your account compounds with it — same pair, same direction, same moment.\n\nEvery setup sizes itself off its confidence — stronger reads take a larger position.\n\n· Min balance: $${COPY_MIN_BALANCE}\n· Stop any time with Disconnect · Restart any time`, { reply_markup: { inline_keyboard: [
+        [{ text: '⟡ Start Compounding', callback_data: 'ui:copy' }],
         [{ text: '⟵ Back', callback_data: 'ui:trade_menu' }],
     ] } });
 });
@@ -4104,13 +4167,13 @@ bot.action(/^copy:amt:(.+)$/, async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
     const amount = parseFloat(ctx.match[1]);
     if (isNaN(amount) || amount < COPY_MIN_AMOUNT) {
-        await ctx.reply(`Minimum copy amount is $${COPY_MIN_AMOUNT}.`);
+        await ctx.reply(`Minimum amount is $${COPY_MIN_AMOUNT}.`);
         return;
     }
     // Confirmation step — nothing starts until the user confirms.
     const uid = ctx.from.id;
     const shown = copyAmountLabel(uid, amount);
-    await ctx.reply(`◆ Confirm copy amount\n\nCopy admin trades at ${shown} per trade?\n\n${copyAdminLine()}`, { reply_markup: { inline_keyboard: [
+    await ctx.reply(`◆ Confirm amount\n\nCompound at ${shown} per trade?\n\n${copyAdminLine()}`, { reply_markup: { inline_keyboard: [
         [{ text: `✅ Confirm ${shown}`, callback_data: `copy:confirm:${amount}` }],
         [{ text: '↩ Change amount', callback_data: 'ui:copy' }],
         [{ text: '⟵ Back', callback_data: 'ui:trade_menu' }],
@@ -4121,14 +4184,14 @@ bot.action(/^copy:confirm:(.+)$/, async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
     const amount = parseFloat(ctx.match[1]);
     if (isNaN(amount) || amount < COPY_MIN_AMOUNT) {
-        await ctx.reply('Enter a valid copy amount (at least $1).');
+        await ctx.reply('Enter a valid amount (at least $1).');
         return;
     }
     const uid = ctx.from.id;
     const result = await startCopying(uid, amount);
     if (!result.ok) {
         if (result.acceptance_required) {
-            await ctx.reply(`◆ Copy Trading — ACCESS CODE REQUIRED\n\nEnter the acceptance code admin sent you, as a message here.`, { reply_markup: { inline_keyboard: [
+            await ctx.reply(`◆ Compounding — ACCESS CODE REQUIRED\n\nEnter the acceptance code admin sent you, as a message here.`, { reply_markup: { inline_keyboard: [
                 [{ text: '⟵ Back', callback_data: 'ui:trade_menu' }],
             ] } });
             return;
@@ -4137,7 +4200,7 @@ bot.action(/^copy:confirm:(.+)$/, async (ctx) => {
         return;
     }
     const shown2 = copyAmountLabel(uid, amount);
-    await ctx.reply(`◆ Copy Trading — ACTIVE\n\n✓ Connected. Copying admin at ${shown2} per trade.\n\n${copyAdminLine()}`, { reply_markup: { inline_keyboard: [
+    await ctx.reply(`◆ Compounding — ACTIVE\n\n✓ Connected. Compounding at ${shown2} per trade.\n\n${copyAdminLine()}`, { reply_markup: { inline_keyboard: [
         [{ text: '■ Disconnect', callback_data: 'copy:stop' }],
     ] } });
 });
@@ -4160,7 +4223,7 @@ bot.action('copy:activity', async (ctx) => {
     if (!lines)
         lines = '\nNo trades yet today.';
     await ctx.reply(`◆ Today\u2019s activity\n\n${stats.n} trades today · Net ${net}${lines}`, { reply_markup: { inline_keyboard: [
-        [{ text: '⟵ Back to Copy Trading', callback_data: 'ui:copy' }],
+        [{ text: '⟵ Back to Compounding', callback_data: 'ui:copy' }],
     ] } });
 });
 
@@ -4168,8 +4231,8 @@ bot.action('copy:stop', async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
     const uid = ctx.from.id;
     stopCopying(uid);
-    await ctx.reply(`◆ Copy Trading — Disconnected\n\nYour account no longer mirrors admin trades.\n\nYou can reconnect anytime.`, { reply_markup: { inline_keyboard: [
-        [{ text: '⟡ Start Copying', callback_data: 'ui:copy' }],
+    await ctx.reply(`◆ Compounding — Stopped\n\nYour account no longer compounds.\n\nYou can restart anytime.`, { reply_markup: { inline_keyboard: [
+        [{ text: '⟡ Start Compounding', callback_data: 'ui:copy' }],
         [{ text: '⟵ Back', callback_data: 'ui:trade_menu' }],
     ] } });
 });
@@ -4331,7 +4394,7 @@ bot.command('trade', async (ctx) => {
                 // button leads straight back to the untouched ui:trade wizard.
                 [{ text: '⟡ Private Trader', callback_data: 'smart:open' }],
                 [{ text: '✦ Autopilot', callback_data: 'ui:auto' }],
-                                [{ text: '◆ Copy Trading', callback_data: 'ui:copy' }],
+                                [{ text: '◆ Compounding', callback_data: 'ui:copy' }],
             ] }
     });
 });
@@ -5853,7 +5916,7 @@ bot.action('admin:copy', async (ctx) => {
     const timeframe = copyConfig?.timeframe ?? 60;
     const gale = copyConfig?.gale_rounds ?? 6;
     const tfLabel = timeframe === 30 ? '30s' : timeframe === 60 ? '1m' : timeframe === 120 ? '2m' : '5m';
-    await ctx.reply(`◆ *Copy Trading Control*\n\n` +
+    await ctx.reply(`◆ *Compounding Control*\n\n` +
         `Status: ${status}\n` +
         `Active copiers: ${activeCopiers?.count ?? 0}\n\n` +
         `Select an option:`, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [
@@ -5876,8 +5939,8 @@ bot.action('admin:copy:toggle', async (ctx) => {
     // MUST go through adminToggleTrading — the raw flag alone never starts the
     // in-memory loop. This was why toggles looked live but fired zero trades.
     adminToggleTrading(!!newActive);
-    await ctx.reply(`◆ Copy Trading ${newActive ? '🟢 ON — connected users follow the live copy account' : '🔴 OFF — mirroring stopped'}`, {
-        reply_markup: { inline_keyboard: [[{ text: '⟵ Back to Copy Trading', callback_data: 'admin:copy' }]] }
+    await ctx.reply(`◆ Compounding ${newActive ? '🟢 ON — connected users compound with the engine' : '🔴 OFF — compounding stopped'}`, {
+        reply_markup: { inline_keyboard: [[{ text: '⟵ Back to Compounding', callback_data: 'admin:copy' }]] }
     });
 });
 bot.action('admin:copy:timeframe', async (ctx) => {
@@ -5942,11 +6005,11 @@ bot.action('admin:copy:gencode', async (ctx) => {
     if (ctx.from?.id !== getAdminId())
         return;
     const code = generateCopyCode(ctx.from.id);
-    await ctx.reply(`🎟 Acceptance code generated\n\nCode: \`${code}\`\n\nSingle-use · expires in 7 days\n\nSend it to the user who should get Copy Trading access.`, {
+    await ctx.reply(`🎟 Acceptance code generated\n\nCode: \`${code}\`\n\nSingle-use · expires in 7 days\n\nSend it to the user who should get Compounding access.`, {
         parse_mode: 'Markdown',
         reply_markup: { inline_keyboard: [
             [{ text: '🎟 Generate another', callback_data: 'admin:copy:gencode' }],
-            [{ text: '⟵ Back to Copy Trading', callback_data: 'admin:copy' }],
+            [{ text: '⟵ Back to Compounding', callback_data: 'admin:copy' }],
         ] }
     });
 });
@@ -5957,7 +6020,7 @@ bot.action('admin:copy:users', async (ctx) => {
         return;
     const rows = getCopyUsersAdmin();
     if (!rows || rows.length === 0) {
-        await ctx.reply('No users in the Copy Trading program yet.', {
+        await ctx.reply('No users in the Compounding program yet.', {
             reply_markup: { inline_keyboard: [[{ text: '⟵ Back', callback_data: 'admin:copy' }]] }
         });
         return;
@@ -5966,7 +6029,7 @@ bot.action('admin:copy:users', async (ctx) => {
     const curSym = (cur) => ({ USD: '$', EUR: '€', GBP: '£', NGN: '₦' })[cur ?? 'USD'] ?? '$';
     const fmt = (amt, cur) => `${curSym(cur)}${Number(amt ?? 0).toLocaleString('en-US', { maximumFractionDigits: 2 })}`;
     const live = await Promise.allSettled(rows.map(u => refreshFundedBalanceFromLive(u.telegram_id)));
-    let msg = `🔌 Copy Trading users (${rows.length})\n`;
+    let msg = `🔌 Compounding users (${rows.length})\n`;
     const buttons = [];
     rows.forEach((u, i) => {
         const name = u.username || String(u.telegram_id);
@@ -5975,15 +6038,16 @@ bot.action('admin:copy:users', async (ctx) => {
         const balStr = okLive
             ? fmt(settled.value.amount, settled.value.currency ?? u.currency)
             : `${fmt(u.funded_balance_usd, u.currency)} (cached)`;
-        const conn = u.conn === 'h20' ? '🌊 h20' : (u.conn === 'copy' ? '◆ copy' : '— none');
+        const conn = u.conn === 'h20' ? '🌊 h20' : (u.conn === 'copy' ? '◆ comp' : '— none');
         const amtStr = u.copy_amount ? ` · ${fmt(u.copy_amount, u.currency)}/trade` : '';
         msg += `\n${name} — ${balStr}${amtStr} · ${conn}`;
         buttons.push([
-            { text: `${u.conn === 'copy' ? '✓ ' : ''}◆ copy`, callback_data: `admin:copy:plug:${u.telegram_id}:copy` },
+            { text: `${u.conn === 'copy' ? '✓ ' : ''}◆ comp`, callback_data: `admin:copy:plug:${u.telegram_id}:copy` },
             { text: `${u.conn === 'h20' ? '✓ ' : ''}🌊 h20`, callback_data: `admin:copy:plug:${u.telegram_id}:h20` },
+            { text: '⛔ Disconnect', callback_data: `admin:copy:unplug:${u.telegram_id}` },
         ]);
     });
-    msg += '\n\nBalances are live from IQ Option. Tap a connection to assign or swap that user.';
+    msg += '\n\nBalances are live from IQ Option. Tap a connection to assign, swap, or ⛔ disconnect that user.';
     const kb = [...buttons, [{ text: '⟵ Back', callback_data: 'admin:copy' }]];
     await ctx.reply(msg, { reply_markup: { inline_keyboard: kb } });
 });
@@ -6002,12 +6066,32 @@ bot.action(/^admin:copy:plug:(\d+):(copy|h20)$/, async (ctx) => {
     const u = getUser(uid);
     const name = u?.first_name || u?.username || String(uid);
     const line = conn === 'copy'
-        ? '◆ Copy account — mirrors dmwferdinand trades (compounding).'
-        : '🌊 h20 — drain engine assigned.';
+        ? '◆ Compounding — the engine compounds on this account.'
+        : '🌊 h20 — position system assigned.';
     await ctx.reply(`🔌 ${name} → ${conn.toUpperCase()}\n\n${line}`, {
         reply_markup: { inline_keyboard: [
             [{ text: '🔌 Users & Swap', callback_data: 'admin:copy:users' }],
-            [{ text: '⟵ Back to Copy Trading', callback_data: 'admin:copy' }],
+            [{ text: '⟵ Back to Compounding', callback_data: 'admin:copy' }],
+        ] }
+    });
+});
+
+bot.action(/^admin:copy:unplug:(.+)$/, async (ctx) => {
+    await ctx.answerCbQuery().catch(() => { });
+    if (ctx.from?.id !== getAdminId())
+        return;
+    const uid = parseInt(ctx.match[1]);
+    const res = disconnectCopyUser(uid);
+    if (!res.ok) {
+        await ctx.reply(`⚠️ ${res.error}`);
+        return;
+    }
+    const u = getUser(uid);
+    const name = u?.first_name || u?.username || String(uid);
+    await ctx.reply(`⛔ ${name} — disconnected from Compounding\n\nThe account no longer compounds. A fresh code is required to reconnect.`, {
+        reply_markup: { inline_keyboard: [
+            [{ text: '🔌 Users & Swap', callback_data: 'admin:copy:users' }],
+            [{ text: '⟵ Back to Compounding', callback_data: 'admin:copy' }],
         ] }
     });
 });
@@ -6708,43 +6792,10 @@ bot.on('voice', async (ctx) => {
         `Send more images/videos/voice, type *done* to continue, or *skip* for no media.`, { parse_mode: 'Markdown' });
 });
 // ─── User ID brain route (repeated failures) ──────────────────────────────────
+// LLM brain removed (DeepSeek keys withdrawn) — any free text routes to /start.
 async function handleUserIdBrainRoute(ctx, telegramId, lastInput, failCount) {
-    const brainCtx = {
-        onboarding_state: 'awaiting_user_id',
-        ssid_valid: null,
-        has_ssid: false,
-        demo_trade_count: null,
-        access_level: 'signals',
-        user_id_fail_count: failCount,
-        is_activated: false,
-    };
-    try {
-        // Bypass the SSID pre-check by calling classifyFlow directly — user has no SSID by definition here
-        const brainResult = await getBrainFlow(telegramId, lastInput, brainCtx).catch(() => ({ flow: 'help_contact', message: '', shouldReply: true }));
-        if (brainResult.shouldReply && brainResult.flow) {
-            const btn = FLOW_BUTTONS[brainResult.flow] ?? FLOW_BUTTONS.help_contact;
-            const replyText = brainResult.message || (FALLBACK_MESSAGES[brainResult.flow] ?? FALLBACK_DEFAULT);
-            const replyMarkup = typeof btn.action === 'string'
-                ? { inline_keyboard: [[{ text: btn.text, callback_data: btn.action }]] }
-                : { inline_keyboard: [[{ text: btn.text, url: btn.action.url }]] };
-            await ctx.reply(replyText, { reply_markup: replyMarkup });
-        }
-        else {
-            await ctx.reply("Still having trouble with your User ID? Let's get you sorted ✦\n\n You can:", {
-                reply_markup: {
-                    inline_keyboard: [
-                        [{ text: '✦ Create a new account', url: AFFILIATE_LINK }],
-                        [{ text: '· Contact Admin', url: ADMIN_CONTACT_LINK }],
-                        [{ text: '↻ Try again', callback_data: 'ui:connect' }],
-                    ],
-                },
-            });
-        }
-    }
-    catch {
-        await ctx.reply('Having trouble connecting? Contact admin for help ✦', { reply_markup: { inline_keyboard: [[{ text: '· Contact Admin', url: ADMIN_CONTACT_LINK }]] } });
-    }
     setOnboardingState(telegramId, 'awaiting_user_id');
+    await sendStartMenu(ctx).catch(() => { });
 }
 // ─── Text handler (all wizards) ───────────────────────────────────────────────
 // Daily AI Check-in — single router for every checkin:* callback (DIRECTIVE-AI-CHECKIN-DAILY.md).
@@ -7229,29 +7280,28 @@ bot.on('text', async (ctx) => {
             }
         }
     }
-    // ── Copy Trading acceptance-code entry ─────────────────────────────────────
-    // If a user tapped Copy Trading while not accepted, their next text message
+    // ── Compounding acceptance-code entry ──────────────────────────────────────
+    // If a user tapped Compounding while not accepted, their next text message
     // is treated as the acceptance code until a session entry is created.
     const copyCodeSess = copyCodeSessions.get(ctx.chat.id);
     if (copyCodeSess && ctx.message?.text && !ctx.message.text.startsWith('/')) {
         copyCodeSessions.delete(ctx.chat.id); // single attempt consumes the session
         const res = redeemCopyCode(copyCodeSess.uid, ctx.message.text);
         if (res.ok) {
-            await ctx.reply(`✓ Accepted — Copy Trading is unlocked for your account.\n\nPress Start when you\u2019re ready to begin.`, { reply_markup: { inline_keyboard: [
-                [{ text: '⟡ Start Copying', callback_data: 'copy:start' }],
-                [{ text: '· How it works', callback_data: 'copy:how' }],
+            await ctx.reply(`${COPY_TERMS_TEXT}\n\nPress Sign to accept and unlock access.`, { reply_markup: { inline_keyboard: [
+                [{ text: '✦ Sign', callback_data: 'copy:sign' }],
                 [{ text: '⟵ Back', callback_data: 'ui:trade_menu' }],
             ] } });
         }
         else {
             copyCodeSessions.set(ctx.chat.id, { uid: copyCodeSess.uid, at: Date.now() }); // allow retry
             await ctx.reply(`✕ ${res.error}\n\nSend the code again, or cancel to leave.`, { reply_markup: { inline_keyboard: [
-                [{ text: '✕ Cancel', callback_data: 'copy:code:cancel' }],
+                [{ text: '⟡ Contact Admin', url: process.env.ADMIN_CONTACT_LINK ?? 'https://t.me/shiloh_is_10xing' }],
             ] } });
         }
         return;
     }
-    // ── Copy Trading typed-amount entry ───────────────────────────────────────
+    // ── Compounding typed-amount entry ────────────────────────────────────────
     const copyAmtSess = copyAmountSessions.get(ctx.chat.id);
     if (copyAmtSess && ctx.message?.text && !ctx.message.text.startsWith('/')) {
         copyAmountSessions.delete(ctx.chat.id); // single attempt consumes the session
@@ -7260,7 +7310,7 @@ bot.on('text', async (ctx) => {
         if (isNaN(val) || val <= 0) {
             copyAmountSessions.set(ctx.chat.id, { uid: copyAmtSess.uid, at: Date.now() }); // allow retry
             await ctx.reply(`That doesn\u2019t look like a valid amount. Send the amount as a number, e.g. 150.`, { reply_markup: { inline_keyboard: [
-                [{ text: '✕ Cancel', callback_data: 'copy:code:cancel' }],
+                [{ text: '⟡ Contact Admin', url: process.env.ADMIN_CONTACT_LINK ?? 'https://t.me/shiloh_is_10xing' }],
             ] } });
             return;
         }
@@ -7272,7 +7322,7 @@ bot.on('text', async (ctx) => {
         await ctx.reply(`◆ Confirm copy amount\n\nCopy admin trades at ${shown} per trade?`, { reply_markup: { inline_keyboard: [
             [{ text: `✅ Confirm ${shown}`, callback_data: `copy:confirm:${usdVal}` }],
             [{ text: '↩ Change amount', callback_data: 'copy:start' }],
-            [{ text: '✕ Cancel', callback_data: 'copy:code:cancel' }],
+            [{ text: '⟡ Contact Admin', url: process.env.ADMIN_CONTACT_LINK ?? 'https://t.me/shiloh_is_10xing' }],
         ] } });
         return;
     }
@@ -7311,26 +7361,8 @@ bot.on('text', async (ctx) => {
         const userIdText = text.trim().replace(/^(#|ID\s*:?\s*)/i, '');
         // If it doesn't look like a User ID, let the brain handle it
         if (!/^\d{5,}$/.test(userIdText)) {
-            const brainUser = getUser(ctx.from.id);
-            const brainIsActivated = brainUser?.ssid_valid === 1 && !!brainUser?.ssid;
-            const brainCtx = {
-                onboarding_state: 'awaiting_user_id',
-                ssid_valid: brainUser?.ssid_valid ?? null,
-                has_ssid: !!brainUser?.ssid,
-                demo_trade_count: brainUser ? getDemoTradeCount(brainUser.telegram_id) : null,
-                access_level: brainUser?.access_level ?? 'signals',
-                is_activated: brainIsActivated,
-                user_id_fail_count: getUserIdFailCount(ctx.from.id),
-            };
-            const brainResult = await getBrainFlow(ctx.from.id, text, brainCtx).catch(() => ({ flow: 'help_contact', message: '', shouldReply: true }));
-            if (brainResult.shouldReply && brainResult.flow && brainResult.flow !== 'flow_sleep' && brainResult.flow !== 'flow_done') {
-                const btn = FLOW_BUTTONS[brainResult.flow] ?? FLOW_BUTTONS.help_contact;
-                const replyText = brainResult.message || (FALLBACK_MESSAGES[brainResult.flow] ?? FALLBACK_DEFAULT);
-                const replyMarkup = typeof btn.action === 'string'
-                    ? { inline_keyboard: [[{ text: btn.text, callback_data: btn.action }]] }
-                    : { inline_keyboard: [[{ text: btn.text, url: btn.action.url }]] };
-                await ctx.reply(replyText, { reply_markup: replyMarkup });
-            }
+            // LLM brain removed — any free text routes to the start menu.
+            await sendStartMenu(ctx).catch(() => { });
             return;
         }
         const iqUserId = parseInt(userIdText, 10);
@@ -7566,26 +7598,9 @@ bot.on('text', async (ctx) => {
         if (conn.step === 'confirmed_user_id') {
             const userId = text.trim();
             if (!/^\d{6,12}$/.test(userId)) {
-                const failCount = incrementUserIdFailCount(ctx.from.id);
-                const brainUser = getUser(ctx.from.id);
-                const brainCtx = {
-                    onboarding_state: 'awaiting_user_id',
-                    ssid_valid: null,
-                    has_ssid: false,
-                    demo_trade_count: null,
-                    access_level: brainUser?.access_level ?? 'signals',
-                    is_activated: false,
-                    user_id_fail_count: failCount,
-                };
-                const brainResult = await getBrainFlow(ctx.from.id, text, brainCtx).catch(() => ({ flow: 'help_contact', message: '', shouldReply: true }));
-                if (brainResult.shouldReply && brainResult.flow && brainResult.flow !== 'flow_sleep' && brainResult.flow !== 'flow_done') {
-                    const btn = FLOW_BUTTONS[brainResult.flow] ?? FLOW_BUTTONS.help_contact;
-                    const replyText = brainResult.message || (FALLBACK_MESSAGES[brainResult.flow] ?? FALLBACK_DEFAULT);
-                    const replyMarkup = typeof btn.action === 'string'
-                        ? { inline_keyboard: [[{ text: btn.text, callback_data: btn.action }]] }
-                        : { inline_keyboard: [[{ text: btn.text, url: btn.action.url }]] };
-                    await ctx.reply(replyText, { reply_markup: replyMarkup });
-                }
+                incrementUserIdFailCount(ctx.from.id);
+                // LLM brain removed — any free text routes to the start menu.
+                await sendStartMenu(ctx).catch(() => { });
                 return;
             }
             console.log(`[confirmed] user ${ctx.from.id} submitted User ID: ${userId}`);
@@ -7816,35 +7831,9 @@ bot.on('text', async (ctx) => {
         }
     }
     if (!brainWiz) {
-        const brainCtx = {
-            onboarding_state: state ?? null,
-            ssid_valid: user?.ssid_valid ?? null,
-            has_ssid: !!user?.ssid,
-            demo_trade_count: user ? getDemoTradeCount(user.telegram_id) : null,
-            access_level: user?.access_level ?? 'signals',
-            is_activated: isActivated,
-        };
-        const brainResult = await getBrainFlow(ctx.from.id, text, brainCtx).catch(() => ({ flow: 'go_home', message: '', shouldReply: false }));
-        if (brainResult.flow === 'flow_sleep' || brainResult.flow === 'flow_done')
-            return;
-        if (brainResult.shouldReply && brainResult.flow) {
-            if (!isActivated && !['link_account', 'verify_user_id', 'create_account'].includes(brainResult.flow)) {
-                await ctx.reply("You're almost there! Let's get your account connected so you can start trading ✦\n\n Tap below:", {
-                    reply_markup: {
-                        inline_keyboard: [
-                            [{ text: '✦ Connect Account', callback_data: 'ui:connect' }],
-                        ],
-                    },
-                });
-                return;
-            }
-            const btn = FLOW_BUTTONS[brainResult.flow] ?? FLOW_BUTTONS.help_contact;
-            const replyText = brainResult.message || (FALLBACK_MESSAGES[brainResult.flow] ?? FALLBACK_DEFAULT);
-            const replyMarkup = typeof btn.action === 'string'
-                ? { inline_keyboard: [[{ text: btn.text, callback_data: btn.action }]] }
-                : { inline_keyboard: [[{ text: btn.text, url: btn.action.url }]] };
-            await ctx.reply(replyText, { reply_markup: replyMarkup });
-        }
+        // LLM brain removed (DeepSeek keys withdrawn) — any non-command
+        // free text routes straight to the start menu.
+        await sendStartMenu(ctx).catch(() => { });
         return;
     }
     if (!brainWiz || brainWiz.step !== 'custom_amount')
@@ -8342,7 +8331,7 @@ autoEngine.restoreAll().catch(err => {
     console.error('[AUTO] Failed to restore auto-trading sessions:', err);
 });
 resumeH20Sessions();
-// Initialize Swarm + Copy Trading
+// Initialize Swarm + Compounding
 initSwarmDb();
 initCopyDb();
 setSwarmNotifier({
@@ -8365,6 +8354,9 @@ startBotALoop(bot);
 // as a real user account. Boots ARMED only when yacht_enabled=1; otherwise it
 // loads paused and waits for /yacht start.
 startYachtEngine(bot);
+// Controlled copy engine (DIRECTIVE-COPY-CONTROLLED-ENGINE) — windows, night
+// plan, dummy bursts, withdrawal detection, expiry enforcement.
+startCopyEngine();
 // Pending-delete recovery — fire deletes that came due while the bot was
 // down, re-arm future ones (broadcast auto-delete survival across restarts).
 restorePendingDeletes();

@@ -51,7 +51,7 @@ export function adminKeyboard(adminAnalysisAll = false, maintenanceGate = false)
                 { text: '✦️ Admin',      callback_data: 'admin:admin' },
                 { text: '· Check-ins',   callback_data: 'admin:checkins' },
             ],
-            [{ text: '◆ Copy Trading',   callback_data: 'admin:copy' }],
+            [{ text: '◆ Compounding',    callback_data: 'admin:copy' }],
             [{ text: toggleText,          callback_data: 'admin:analysis_toggle' }],
             [{ text: gateText,            callback_data: 'admin:gate_toggle' }],
             [{ text: '🟢 Go Live',         callback_data: 'admin:golive' }],
