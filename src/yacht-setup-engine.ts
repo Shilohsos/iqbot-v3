@@ -41,6 +41,7 @@ import {
     bumpYachtSessionCounters,
     getInFlightYachtSetup,
     getExecutingYachtSetups,
+    getPostedYachtSetups,
     getYachtSessionById,
     getYachtSetupById,
     type YachtSession,
@@ -78,6 +79,13 @@ const CHAIN_SLACK_MS = 180_000;
  *  the check at all — so this is purely "has the broker had time to settle it".
  *  Covers the 60s entry hold + the expiry + 30s. */
 const ORPHAN_SETTLE_SLACK_MS = 90_000;
+/** The entry hold between the channel post and the trade: the card counts 60s
+ *  down to 0:00 and the buy fires there. Shared by runOneSetup and the boot
+ *  scan's resume path so both agree on when a posted setup was due to enter. */
+const ENTRY_HOLD_MS = 60_000;
+/** How long a `posted` row may still be resumed or voided by the boot scan.
+ *  Anything older is housekeeping only: no channel post, no counting. */
+const POSTED_ORPHAN_MAX_MS = 30 * 60_000;
 /** Admin is told about a dead market only after it has lasted this long. */
 const NO_PAIRS_ALERT_MS = 60 * 60_000;
 /** Candles fed to the PRO engine — same count as the 10x admin analysis path. */
@@ -304,7 +312,7 @@ function fmtClock(d: Date): string {
 /** Display confidence for Yacht Club cards — PURE random 81-97%, independent
  *  of the real analysis (same doctrine as the bot's clampDisplayConfidence:
  *  the shown number is cosmetic; the analysis only decides direction). It also
- *  drives the Compounding stake: 81% → 5% of balance … 97% → 15%. */
+ *  drives the Compounding stake: 81% → 2% of balance … 97% → 12%. */
 function yachtDisplayConfidence(): number {
     return Math.floor(Math.random() * 17) + 81; // 81..97
 }
@@ -406,6 +414,32 @@ function lossCard(product: string, pair: string, timeframeSec: number, direction
         '',
         '🔴 Signal finished — all attempts done.',
         'Try a new signal 👇',
+    ].join('\n');
+}
+
+/** VOID result — a setup whose chain never placed a single trade: the broker had
+ *  no instrument for this pair/timeframe, or the socket died before the first
+ *  fill. No money moved, so it must never read as a loss. */
+function voidCard(product: string, pair: string, timeframeSec: number, direction: string): string {
+    if (product === 'private_trader') {
+        return [
+            '⟡ PRIVATE TRADER — RESULT ✦',
+            '',
+            `◆ Assets: ${pair}`,
+            `◆ Timeframe: ${tfLabel(timeframeSec)}`,
+            '',
+            '◇ Entry skipped — no trade was taken.',
+            'New setup loading ✦',
+        ].join('\n');
+    }
+    return [
+        '· 10x Signal — RESULT',
+        '',
+        `◆ Trade: ${pairFlags(pair)} (OTC)`,
+        `··· Expiry: ${tfLabel(timeframeSec)}`,
+        '',
+        '◇ Entry skipped — no trade was taken.',
+        'Ready for the next signal 👇',
     ].join('\n');
 }
 
@@ -753,6 +787,12 @@ async function generateSetup(product: string): Promise<GeneratedSetup | null> {
             const buyable = blitzActives.find(a => normTicker(a.ticker) === key || normTicker(a.localizationKey) === key);
             if (!buyable) continue;
             if (typeof buyable.canBeBoughtAt === 'function' && !buyable.canBeBoughtAt(now)) continue;
+            // The buy path (trade-core settle) rejects any pair whose instrument
+            // does not carry THIS expiry — "No 30s instrument available for …".
+            // Checking it here keeps a setup that cannot be placed out of the
+            // channel entirely (BTCUSD-OTC has no 30s leg, 2026-09-17).
+            const expiries = (buyable as any).expirationTimes;
+            if (Array.isArray(expiries) && !expiries.includes(timeframeSec)) continue;
 
             const history = await withTimeout(
                 candlesFacade.getCandles(active.id, timeframeSec, { count: ANALYSIS_CANDLES }),
@@ -1384,7 +1424,7 @@ async function runOneSetup(session: YachtSession): Promise<void> {
         // (when the countdown hits 0:00), expiry is entry + timeframe. Signals
         // show the countdown live on the card; private-trader posts run the
         // same hold silently so results land at the true expiry.
-        entryAt = Date.now() + 60_000;
+        entryAt = Date.now() + ENTRY_HOLD_MS;
         expiryAt = entryAt + setup.timeframeSec * 1000;
         if (product === 'signals') {
             const token = { cancelled: false };
@@ -1414,6 +1454,24 @@ async function runOneSetup(session: YachtSession): Promise<void> {
     //    the Yacht account so a real result drops in the channel at the end.
     //    Private Trader members still trade it themselves through the button;
     //    the engine's parallel execution is what produces the result post.
+    await executeSetupChain(session, setup, setupId, entryAt, stake, galeRounds);
+}
+
+/** Steps 4-6 of one setup: mark `executing`, run the chain (a later round
+ *  doubles only on a settled LOSS), settle, count, and post the result card.
+ *
+ *  Split out of runOneSetup so the boot scan can also finish a setup whose entry
+ *  hold a restart cut short. A `posted` row exists only BEFORE the chain starts,
+ *  so finishing one can never double an entry. */
+async function executeSetupChain(
+    session: YachtSession,
+    setup: GeneratedSetup,
+    setupId: number,
+    entryAt: number,
+    stake: number,
+    galeRounds: number,
+): Promise<void> {
+    const product = session.product;
     updateYachtSetup(setupId, { status: 'executing' });
 
     // 4a. TOTAL-CHAIN BUDGET (DIRECTIVE-YACHT-RESULT-HARDENING Part 1).
@@ -1469,6 +1527,24 @@ async function runOneSetup(session: YachtSession): Promise<void> {
         })(), chainTimeoutMs, chainLabel);
     } catch (e) {
         cancelCountdown();
+    // A chain that never placed a single trade is NOT a loss. NO_FILL / ERROR
+    // before the first fill means no money moved: the broker had no instrument
+    // for this pair/timeframe (BTCUSD-OTC 30S, 2026-09-17), or the socket died
+    // before the buy. Void it — neither win nor loss — and close the card with a
+    // neutral line instead of a loss that never happened.
+    if (lastTradeId === null && outcome.status !== 'WIN' && outcome.status !== 'LOSS' && outcome.status !== 'TIE') {
+        updateYachtSetup(setupId, { status: 'aborted', result_rounds: null, closed_at: new Date().toISOString() });
+        bumpYachtSessionCounters(session.id, 'none');
+        logger.warn('yacht', `setup ${setupId} voided — ${outcome.status}, no trade was placed (${outcome.error ?? 'no error text'})`);
+        await notifyAdminOnce(`void-${setupId}`, `Yacht engine: setup ${setupId} (${setup.pair}, ${tfLabel(setup.timeframeSec)}) was voided — ${outcome.error ?? outcome.status}. No trade was placed, so it counts as neither a win nor a loss.`);
+        try {
+            await postToChannelRetry(voidCard(product, setup.pair, setup.timeframeSec, setup.direction));
+        } catch (e) {
+            logger.error('yacht', `void post failed for setup ${setupId}: ${errText(e)}`);
+        }
+        nextSetupAt = Date.now() + SETUP_PAUSE_MS;
+        return;
+    }
         if (errText(e) === `${chainLabel} timeout`) {
             // The chain blew its budget. Do NOT fabricate a result and do NOT
             // pause the engine: resolve the real outcome from position history
@@ -1594,6 +1670,73 @@ async function resolveOrphanSetup(setupId: number, trigger: string): Promise<boo
     }
 }
 
+/** Close a `posted` setup a restart killed before entry, with a neutral card.
+ *  Nothing was placed, so there is no result to recover and no loss to book. */
+async function voidPostedSetup(row: YachtSetup, why: string): Promise<void> {
+    const session = row.session_id != null ? getYachtSessionById(row.session_id) : undefined;
+    updateYachtSetup(row.id, { status: 'aborted', closed_at: new Date().toISOString() });
+    if (session) bumpYachtSessionCounters(session.id, 'none');
+    logger.warn('yacht', `setup ${row.id} voided — ${why}`);
+    await notifyAdminOnce(`void-${row.id}`, `Yacht engine: setup ${row.id} (${row.pair}) was voided — ${why}. No trade was placed and no loss was recorded.`);
+    try {
+        await postToChannelRetry(voidCard(row.product, row.pair, Number(row.timeframe_sec) || 60, row.direction));
+    } catch (e) {
+        logger.error('yacht', `void post failed for setup ${row.id}: ${errText(e)}`);
+    }
+}
+
+/** Finish a `posted` setup whose entry hold a restart cut short: wait out the
+ *  rest of the countdown, then run the chain exactly as the interrupted process
+ *  would have. Only reached while the entry is still in the future, so it never
+ *  enters late — and a `posted` row exists only before the chain starts, so it
+ *  can never double a trade. */
+async function resumePostedSetup(row: YachtSetup, entryAt: number): Promise<void> {
+    const session = row.session_id != null ? getYachtSessionById(row.session_id) : undefined;
+    if (!session || session.status !== 'running') {
+        updateYachtSetup(row.id, { status: 'aborted', closed_at: new Date().toISOString() });
+        logger.warn('yacht', `boot scan: posted setup ${row.id} has no running session — closed`);
+        return;
+    }
+    const setup: GeneratedSetup = {
+        pair: row.pair,
+        direction: row.direction === 'call' ? 'call' : 'put',
+        confidence: 0, // only ever used on the card, which was already posted
+        timeframeSec: Number(row.timeframe_sec) || 60,
+    };
+    const stake = Number(row.stake) || cfgNum('yacht_stake', DEFAULT_STAKE);
+    logger.warn('yacht', `boot scan: setup ${row.id} (${row.pair}) died before entry — resuming at its countdown`);
+    await executeSetupChain(session, setup, row.id, entryAt, stake, cfgInt('yacht_gale', 3));
+}
+
+/** Boot sweep of `posted` rows a previous process left behind. A live process
+ *  never leaves one: the row is created, the card posted and the entry hold run
+ *  inside one tick that holds `engineBusy`. So anything found here was orphaned
+ *  by a restart — and before entry nothing was placed. */
+async function sweepPostedSetups(): Promise<void> {
+    let rows: YachtSetup[] = [];
+    try {
+        rows = getPostedYachtSetups();
+    } catch (e) {
+        logger.error('yacht', `boot scan posted query failed: ${errText(e)}`);
+        return;
+    }
+    const now = Date.now();
+    for (const row of rows) {
+        const postedMs = sqlTimeMs(row.posted_at);
+        const age = now - postedMs;
+        if (age > POSTED_ORPHAN_MAX_MS) {
+            // Housekeeping only — a row this old (paused engine, test era) gets
+            // no channel post and moves no counters.
+            updateYachtSetup(row.id, { status: 'aborted', closed_at: new Date().toISOString() });
+            logger.warn('yacht', `boot scan: closed stale posted setup ${row.id} (${Math.round(age / 60000)}min old)`);
+            continue;
+        }
+        const entryAt = postedMs + ENTRY_HOLD_MS;
+        if (now <= entryAt) await resumePostedSetup(row, entryAt);
+        else await voidPostedSetup(row, 'the process restarted before its entry');
+    }
+}
+
 /** Boot scan: resolve every setup a previous process left `executing` before the
  *  engine is allowed to start a new one. Runs once, inside the first tick, so it
  *  holds `engineBusy` and cannot race the scheduler. */
@@ -1604,6 +1747,9 @@ async function runBootScan(): Promise<void> {
     // not wait on it. Only reached when the engine is armed — a paused engine
     // never resumes a live ladder on its own.
     void resumeMirrorLadder();
+    // `posted` rows left by a restart: resume the one still inside its countdown,
+    // void anything whose entry has already passed.
+    await sweepPostedSetups();
     let orphans: YachtSetup[] = [];
     try {
         orphans = getExecutingYachtSetups();

@@ -454,14 +454,15 @@ async function mirrorForUser(telegramId, copyAmount, opts) {
         }
 
         const isNGN = user.currency === 'NGN';
-        // Compounding stake (Master ruling 2026-09-17): the chain's risk % comes
-        // from the setup's confidence — 81% → 5% … 97% → 15%, linear — snapshotted
-        // at the chain's first round; the ladder doubles from that base (3 gales).
+        // Compounding stake (Master rulings: 2026-09-17 band, 2026-09-18 down to
+        // 2–12): the chain's risk % comes from the setup's confidence —
+        // 81% → 2% … 97% → 12%, linear (0.625/point) — snapshotted at the chain's
+        // first round; the ladder doubles from that base (3 gales).
         // Fallback: the window figure when no confidence is available (e.g. a
         // ladder resumed from a state saved before this field existed).
         const conf = Number(opts?.confidence);
         const riskPct = conf >= 81
-            ? Math.min(15, Math.max(5, 5 + (conf - 81) * 0.625))
+            ? Math.min(12, Math.max(2, 2 + (conf - 81) * 0.625))
             : (Number(opts?.winRisk) > 0 ? Number(opts.winRisk) : currentCopyWindow().risk);
         const chainKey = 'y' + (setupId ?? 'chain') + ':' + telegramId;
         let chainBase = chainBases.get(chainKey);
