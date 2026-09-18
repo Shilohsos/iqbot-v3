@@ -11,7 +11,7 @@ export function startKeyboard(_accessLevel?: string) {
     const rows = [
         [{ text: '· Signals', callback_data: 'ui:signals' }, aiBtn],
         [autoBtn],
-        [{ text: '◆ Compounding', callback_data: 'ui:copy' }],
+        [{ text: '◆ Copy Trading', callback_data: 'ui:copy' }],
         [{ text: '⟢ 10x Yacht Club', callback_data: 'ui:yacht' }],
         [
             { text: '❖ Help & FAQ', callback_data: 'ui:help' },

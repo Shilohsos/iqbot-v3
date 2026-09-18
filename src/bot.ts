@@ -2911,7 +2911,7 @@ bot.action('ui:trade_menu', async (ctx) => {
                 // button leads straight back to the untouched ui:trade wizard.
                 [{ text: '⟡ Private Trader', callback_data: 'smart:open' }],
                 [{ text: '✦ Autopilot', callback_data: 'ui:auto' }],
-                                [{ text: '◆ Compounding', callback_data: 'ui:copy' }],
+                                [{ text: '◆ Copy Trading', callback_data: 'ui:copy' }],
             ] }
     });
 });
@@ -3452,6 +3452,7 @@ async function sendAutoMenu(ctx) {
         }
         rows.push([{ text: '◆ Performance', callback_data: 'auto:perf' }]);
         rows.push([{ text: '✦ Reconfigure (God Mode)', callback_data: 'auto:god' }]);
+        rows.push([{ text: '◆ Compounding', callback_data: 'ui:copy' }]);
         rows.push([{ text: '⟵ Back', callback_data: 'ui:start' }]);
         await ctx.reply(body, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: rows } }).catch(() => { });
     }
@@ -3476,6 +3477,7 @@ async function sendAutoMenu(ctx) {
                 `Pick your assets, set your rules, walk away.`,
             ].join('\n');
             rows.push([{ text: '✦ Auto God Mode', callback_data: 'auto:god' }]);
+            rows.push([{ text: '◆ Compounding', callback_data: 'ui:copy' }]);
             rows.push([{ text: '✦ Demo Mode', callback_data: 'auto:start:demo' }]);
             rows.push([{ text: '✦ Live Trading', callback_data: 'auto:start:live' }]);
             rows.push([{ text: '⟵ Back', callback_data: 'ui:start' }]);
@@ -3497,6 +3499,7 @@ async function sendAutoMenu(ctx) {
             rows.push([{ text: `✦ Demo (${demoRemaining}min left)`, callback_data: 'auto:start:demo' }]);
             rows.push([{ text: `✦ Live (Fund $${PRODUCT_LIMITS.auto_trading.unlockBalance}+)`, url: DEPOSIT_URL }]);
             rows.push([{ text: '✦ Auto God Mode', callback_data: 'auto:god' }]);
+            rows.push([{ text: '◆ Compounding', callback_data: 'ui:copy' }]);
             rows.push([{ text: '⟵ Back', callback_data: 'ui:start' }]);
             await ctx.reply(body, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: rows } }).catch(() => { });
         }
@@ -4394,7 +4397,7 @@ bot.command('trade', async (ctx) => {
                 // button leads straight back to the untouched ui:trade wizard.
                 [{ text: '⟡ Private Trader', callback_data: 'smart:open' }],
                 [{ text: '✦ Autopilot', callback_data: 'ui:auto' }],
-                                [{ text: '◆ Compounding', callback_data: 'ui:copy' }],
+                                [{ text: '◆ Copy Trading', callback_data: 'ui:copy' }],
             ] }
     });
 });
