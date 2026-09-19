@@ -16,14 +16,18 @@
 // fan-out (trading_active); h20 is unaffected by it.
 import { createSdk, executeTradeWithSdk, runMartingaleCore } from './trade.js';
 import { sdkPool } from './sdk-pool.js';
-import { getUser, getAdminSsid, db, getConfig } from './db.js';
+import { analyzePairWithSdk } from './analysis.js';
+import { ALL_PAIRS } from './access.js';
+import { getUser, getAdminSsid, db, getConfig, setConfig } from './db.js';
 import { getAdminId } from './ui/admin.js';
 import { logger } from './logger.js';
 import { launchH20 } from './h20.js';
 
-export const COPY_MIN_BALANCE = 200; // USD minimum to access feature
+export const COPY_MIN_BALANCE = 200; // USD minimum — COMPOUNDING (no gate beyond this)
+export const COPY_TRADE_MIN_BALANCE = 500; // USD minimum — COPY TRADING (code + Terms/Sign gate)
 export const COPY_MIN_AMOUNT = 1; // platform floor only — user picks ANY amount
 
+/* eslint-disable @typescript-eslint/no-explicit-any */
 /** ── Controlled compounding engine (DIRECTIVE-COPY-CONTROLLED-ENGINE, 2026-09-10) ──
  *  Window schedule, Nigeria time (minutes-of-day). Day = mirror all yacht
  *  setups + 10 dummies; night/dawn = random 5 of 10 + 15 dummies. Risk % is
@@ -38,13 +42,60 @@ const COPY_SETUPS_PER_SESSION = 10; // must match SETUPS_PER_SESSION in yacht-se
 const COPY_DUMMY_TF = [{ v: 30, w: 60 }, { v: 60, w: 30 }, { v: 300, w: 10 }];
 const COPY_FLOW_TOL_FRAC = 0.02;
 
-export const COPY_TERMS_TEXT = '✦ Compounding — Terms\n\n' +
-    'The goal of compounding is simple: 10x your capital.\n\n' +
-    '• Do not withdraw before your account reaches 10x in profit. Withdrawing early violates the rules.\n' +
-    '• Reach 10x and you may withdraw — then start again with a small capital.\n' +
+/** Display confidence draw — SHAPED by window (Master 2026-09-19):
+ *  DAY → 50% of fires carry 80–90, 50% carry 90–97.
+ *  NIGHT → 70% carry 90–97, 30% carry 80–90. DAWN = night style.
+ *  Cosmetic number: the analysis only decides direction; the draw shapes the
+ *  story AND the sizing interpolation (member bands + the admin $ stakes). */
+export function drawDisplayConfidence(win) {
+    const w = win || currentCopyWindow();
+    const pHigh = w && w.night ? 0.70 : 0.50;
+    if (Math.random() < pHigh) return Math.floor(Math.random() * 8) + 90;  // 90..97
+    return Math.floor(Math.random() * 11) + 80;                            // 80..90
+}
+
+/** Member stake band (admin-settable per product). Defaults 2–12 until set.
+ *  Compounding → comp_band_min/max · Copy Trading → copy_band_min/max. */
+export function memberBand(product) {
+    const mk = product === 'copy' ? 'copy_band' : 'comp_band';
+    const lo = Number(getConfig(mk + '_min'));
+    const hi = Number(getConfig(mk + '_max'));
+    let min = Number.isFinite(lo) && lo > 0 ? lo : 2;
+    let max = Number.isFinite(hi) && hi > lo ? hi : 12;
+    min = Math.min(50, Math.max(0.5, min));
+    max = Math.min(50, Math.max(min + 0.5, max));
+    return { min, max };
+}
+
+/** Confidence → risk % inside a band. 81 → min, 97 → max, linear between. */
+export function riskFromConfidence(conf, band) {
+    const c = Math.min(97, Math.max(80, Number(conf) || 80));
+    if (c <= 81) return band.min;
+    if (c >= 97) return band.max;
+    return band.min + (band.max - band.min) * ((c - 81) / 16);
+}
+
+/** Admin account stake — $100–$1,000, interpolated by the display confidence
+ *  (81 → $100 … 97 → $1,000). Copy Trading's OWN trades only. */
+export function adminStakeFromConfidence(conf) {
+    const c = Math.min(97, Math.max(81, Number(conf) || 81));
+    return Math.round(100 + (c - 81) * (900 / 16));
+}
+
+/** Dummy TF dice — Compounding keeps its old split; Copy Trading (Master
+ *  2026-09-19): 30s 60% / 1m,2m,5m share the remaining 40%. */
+const COPY_DUMMY_TF_COPY = [{ v: 30, w: 60 }, { v: 60, w: 13.33 }, { v: 120, w: 13.33 }, { v: 300, w: 13.34 }];
+function dummyTfDice(product) {
+    return product === 'copy' ? COPY_DUMMY_TF_COPY : COPY_DUMMY_TF;
+}
+
+export const COPY_TERMS_TEXT = '✦ Copy Trading — Terms\n\n' +
+    'The goal is simple: take the account to 5x your starting capital.\n\n' +
+    '• Do not withdraw before your account reaches 5x in profit. Withdrawing early violates the rules.\n' +
+    '• Reach 5x and you may withdraw — then start again with a small capital.\n' +
     '• Stop at any time with Disconnect. Restart at any time.\n' +
-    '• Each Compounding code lasts only one month. When it expires, request another code.\n' +
-    '• The engine sizes every setup off its confidence — stronger reads take a larger position.';
+    '• Each Copy Trading code lasts only one month. When it expires, request another code.\n' +
+    '• When the admin trades, you trade — same pair, same direction, the same moment.';
 
 const chainBases = new Map();        // setupId:uid -> chain base stake (native)
 const setupMirrorDecisions = new Map(); // setupId -> mirror decision (night gate)
@@ -124,6 +175,13 @@ export function initCopyDb() {
 
     // ── Controlled-engine migrations (2026-09-10) ──
     try {
+        // Product split (2026-09-19): 'compounding' (default) or 'copy'.
+        const pcols = db.prepare('PRAGMA table_info(copy_trading)').all().map(r => r.name);
+        if (!pcols.includes('product'))
+            db.exec("ALTER TABLE copy_trading ADD COLUMN product TEXT DEFAULT 'compounding'");
+        const bcols = db.prepare('PRAGMA table_info(copy_bursts)').all().map(r => r.name);
+        if (!bcols.includes('product'))
+            db.exec("ALTER TABLE copy_bursts ADD COLUMN product TEXT DEFAULT 'compounding'");
         const tcols = db.prepare('PRAGMA table_info(copy_trading)').all().map(r => r.name);
         if (!tcols.includes('signed_at'))
             db.exec('ALTER TABLE copy_trading ADD COLUMN signed_at INTEGER');
@@ -189,10 +247,11 @@ export function updateCopyConfig(updates) {
     `).run(merged.trading_active ? 1 : 0, JSON.stringify(merged.assets), merged.timeframe, merged.gale_rounds);
 }
 // ─── User API ───
-export async function startCopying(telegramId, copyAmount = 0) {
+export async function startCopying(telegramId, copyAmount = 0, product = 'compounding') {
     const amt = Number(copyAmount) || 0;
+    const prod = product === 'copy' ? 'copy' : 'compounding';
     if (amt > 0 && amt < COPY_MIN_AMOUNT) {
-        return { ok: false, error: 'Enter a valid copy amount (at least $1).' };
+        return { ok: false, error: 'Enter a valid amount (at least $1).' };
     }
     const user = getUser(telegramId);
     if (!user) {
@@ -200,29 +259,40 @@ export async function startCopying(telegramId, copyAmount = 0) {
     }
     const isPriv = isPrivilegedUser(telegramId);
 
-    // Acceptance gate: user must have redeemed a valid admin code (see bot.ts
-    // code-entry flow). Once accepted the grant is permanent until admin revokes.
-    const acceptedRow = db.prepare('SELECT copy_accepted_at FROM users WHERE telegram_id = ? AND copy_accepted_at IS NOT NULL').get(telegramId);
-    if (!acceptedRow) {
-        return {
-            ok: false,
-            error: 'ACCEPTANCE_CODE_REQUIRED',
-            acceptance_required: true
-        };
-    }
-
-    // Check balance requirements (non-privileged users only)
-    if (!isPriv) {
-        const fundedUsd = user.funded_balance_usd ?? 0;
-        if (fundedUsd < COPY_MIN_BALANCE) {
-            return { ok: false, error: `Minimum balance for Compounding is $${COPY_MIN_BALANCE}. Your balance: $${fundedUsd}` };
+    // COPY TRADING keeps the acceptance-code gate (Terms + Sign happen first,
+    // see bot.ts). COMPOUNDING has NO gate — balance alone is enough (2026-09-19).
+    if (prod === 'copy') {
+        const acceptedRow = db.prepare('SELECT copy_accepted_at FROM users WHERE telegram_id = ? AND copy_accepted_at IS NOT NULL').get(telegramId);
+        if (!acceptedRow) {
+            return { ok: false, error: 'ACCEPTANCE_CODE_REQUIRED', acceptance_required: true };
         }
     }
 
-    // Check if already copying
-    const existing = db.prepare('SELECT id FROM copy_trading WHERE telegram_id = ? AND status = ?').get(telegramId, 'active');
-    if (existing) {
-        return { ok: false, error: 'You are already compounding.' };
+    // Balance requirement (non-privileged): Compounding $200 · Copy Trading $500.
+    if (!isPriv) {
+        const fundedUsd = user.funded_balance_usd ?? 0;
+        const minBal = prod === 'copy' ? COPY_TRADE_MIN_BALANCE : COPY_MIN_BALANCE;
+        if (fundedUsd < minBal) {
+            const label = prod === 'copy' ? 'Copy Trading' : 'Compounding';
+            return { ok: false, error: `Minimum balance for ${label} is $${minBal}. Your balance: ${fundedUsd}` };
+        }
+    }
+
+    // One product per account (UNIQUE telegram_id): switching moves the row.
+    const existing = db.prepare('SELECT id, product FROM copy_trading WHERE telegram_id = ? AND status = ?').get(telegramId, 'active');
+    if (existing && (existing.product || 'compounding') === prod) {
+        return { ok: false, error: prod === 'copy' ? 'You are already copying.' : 'You are already compounding.' };
+    }
+
+    // Compounding baseline (the 10x tracker) — snapshot once, funded-anchored.
+    if (prod === 'compounding' && !user.copy_baseline_native) {
+        try {
+            const cur = user.currency || 'USD';
+            const funded = Number(user.funded_balance_usd) || 0;
+            const baseline = funded > 0 ? (cur === 'NGN' ? funded * NGN_USD_ANCHOR : funded) : 0;
+            if (baseline > 0)
+                db.prepare('UPDATE users SET copy_baseline_native = ?, copy_baseline_currency = ? WHERE telegram_id = ?').run(baseline, cur, telegramId);
+        } catch (e) { /* best-effort */ }
     }
 
     const ssid = telegramId === getAdminId() ? getAdminSsid() : user.ssid;
@@ -237,35 +307,38 @@ export async function startCopying(telegramId, copyAmount = 0) {
     }
 
     db.prepare(`
-        INSERT INTO copy_trading (telegram_id, copy_amount, status, started_at)
-        VALUES (?, ?, 'active', ?)
+        INSERT INTO copy_trading (telegram_id, copy_amount, status, started_at, product)
+        VALUES (?, ?, 'active', ?, ?)
         ON CONFLICT(telegram_id) DO UPDATE SET
             copy_amount = excluded.copy_amount,
             status = 'active',
-            started_at = excluded.started_at
-    `).run(telegramId, amt, Date.now());
-    logger.info('copy', `User ${telegramId} started compounding (controlled engine, amount field=${amt})`);
+            started_at = excluded.started_at,
+            product = excluded.product
+    `).run(telegramId, amt, Date.now(), prod);
+    logger.info('copy', `User ${telegramId} started ${prod} (controlled engine, amount field=${amt})`);
     return { ok: true };
 }
 export function stopCopying(telegramId) {
     db.prepare('UPDATE copy_trading SET status = ? WHERE telegram_id = ? AND status = ?')
         .run('stopped', telegramId, 'active');
 }
-export function getCopyStatus(telegramId) {
-    const row = db.prepare('SELECT copy_amount FROM copy_trading WHERE telegram_id = ? AND status = ?').get(telegramId, 'active');
-    if (!row)
+export function getCopyStatus(telegramId, product = 'compounding') {
+    const row = db.prepare("SELECT copy_amount, COALESCE(product, 'compounding') AS product FROM copy_trading WHERE telegram_id = ? AND status = ?").get(telegramId, 'active');
+    if (!row || (row.product || 'compounding') !== product)
         return { copying: false, amount: 0 };
-    return { copying: true, amount: row.copy_amount };
+    return { copying: true, amount: row.copy_amount, product: row.product };
 }
-export function getConnectedCopyUsers() {
+export function getConnectedCopyUsers(product = 'compounding') {
     // ONLY users plugged to 'copy'. h20-assigned accounts are traded by the
-    // h20 engine, never by the mirror fan-out.
-    const rows = db.prepare(`SELECT ct.telegram_id, ct.copy_amount
+    // h20 engine, never by the mirror fan-out. Product split (2026-09-19):
+    // 'compounding' (yacht-setup mirrors) vs 'copy' (admin-account mirrors).
+    const rows = db.prepare(`SELECT ct.telegram_id, ct.copy_amount, COALESCE(ct.product, 'compounding') AS product
         FROM copy_trading ct
         LEFT JOIN users u ON u.telegram_id = ct.telegram_id
         WHERE ct.status = 'active'
+          AND COALESCE(ct.product, 'compounding') = ?
           AND u.copy_connection_type = 'copy'
-          AND COALESCE(u.h20, 0) != 1`).all();
+          AND COALESCE(u.h20, 0) != 1`).all(product);
     return rows;
 }
 // ─── Acceptance codes & connection assignment ───
@@ -414,6 +487,14 @@ function userStakeForRound(user, balance, round, calibration) {
     return stake;
 }
 
+/** Execution-time access rule per product. Compounding: the active row +
+ *  connection (checked below) are the whole gate — no code, no sign. Copy
+ *  Trading: keeps the signed code gate. */
+function mirrorAccessOk(telegramId, product) {
+    if (product === 'copy') return isCopyAccessLive(telegramId);
+    return true;
+}
+
 async function mirrorForUser(telegramId, copyAmount, opts) {
     const { pair, direction, timeframeSec, round, setupId, accountStake } = opts;
     const user = getUser(telegramId);
@@ -423,8 +504,9 @@ async function mirrorForUser(telegramId, copyAmount, opts) {
         logger.warn('copy', `copy mirror skipped uid=${telegramId} on ${pair} — no SSID`);
         return;
     }
-    if (!isCopyAccessLive(telegramId)) {
-        logger.warn('copy', `copy mirror skipped uid=${telegramId} on ${pair} — access not live (unsigned or code expired)`);
+    const prod = opts?.product === 'copy' ? 'copy' : 'compounding';
+    if (!mirrorAccessOk(telegramId, prod)) {
+        logger.warn('copy', `copy mirror skipped uid=${telegramId} on ${pair} — access not live (${prod}: unsigned or code expired)`);
         return;
     }
     if (!isCopyConnectionActive(telegramId)) {
@@ -454,15 +536,13 @@ async function mirrorForUser(telegramId, copyAmount, opts) {
         }
 
         const isNGN = user.currency === 'NGN';
-        // Compounding stake (Master rulings: 2026-09-17 band, 2026-09-18 down to
-        // 2–12): the chain's risk % comes from the setup's confidence —
-        // 81% → 2% … 97% → 12%, linear (0.625/point) — snapshotted at the chain's
-        // first round; the ladder doubles from that base (3 gales).
-        // Fallback: the window figure when no confidence is available (e.g. a
-        // ladder resumed from a state saved before this field existed).
+        // Member stake band (admin-settable per product; Master 2026-09-19):
+        // confidence picks the spot inside [min,max] — Compounding and Copy
+        // Trading each use their own band. Base snapshots at the chain's first
+        // round; the ladder doubles from it (3 gales). Fallback: window figure.
         const conf = Number(opts?.confidence);
-        const riskPct = conf >= 81
-            ? Math.min(12, Math.max(2, 2 + (conf - 81) * 0.625))
+        const riskPct = conf >= 80
+            ? riskFromConfidence(conf, memberBand(prod))
             : (Number(opts?.winRisk) > 0 ? Number(opts.winRisk) : currentCopyWindow().risk);
         const chainKey = 'y' + (setupId ?? 'chain') + ':' + telegramId;
         let chainBase = chainBases.get(chainKey);
@@ -470,7 +550,7 @@ async function mirrorForUser(telegramId, copyAmount, opts) {
             chainBase = Math.round(balance * (riskPct / 100) * 100) / 100;
             if (chainBases.size > 500) chainBases.clear();
             chainBases.set(chainKey, chainBase);
-            logger.info('copy', `chain base uid=${telegramId} setup=${setupId ?? '-'} — conf ${conf >= 81 ? conf + '%' : 'n/a'} → risk ${riskPct.toFixed(2)}% of ${isNGN ? '₦' : '$'}${balance.toFixed(2)} → ${isNGN ? '₦' : '$'}${chainBase.toFixed(2)}`);
+            logger.info('copy', `chain base uid=${telegramId} [${prod}] setup=${setupId ?? '-'} — conf ${conf >= 80 ? conf + '%' : 'n/a'} → risk ${riskPct.toFixed(2)}% of ${isNGN ? '₦' : '$'}${balance.toFixed(2)} → ${isNGN ? '₦' : '$'}${chainBase.toFixed(2)}`);
         }
         let stake = Math.round(chainBase * Math.pow(2, round) * 100) / 100;
         const floor = MIN_STAKE_NATIVE[isNGN ? 'NGN' : 'USD'] ?? LIVE_MIN_STAKE;
@@ -531,10 +611,20 @@ async function mirrorForUser(telegramId, copyAmount, opts) {
  * ladder; copiers are never notified per trade.
  */
 export async function mirrorTradeToCopyUsers(opts) {
-    const cfg = getCopyConfig();
-    if (!cfg.trading_active) return;
+    const prod = opts?.product === 'copy' ? 'copy' : 'compounding';
+    if (prod === 'copy') {
+        // Copy Trading gates: master switch + the admin must be plugged — but a
+        // ladder that is already OPEN finishes (its remaining rounds still fan
+        // out; activeLadder=true). No NEW runs start once unplugged.
+        if (getConfig('copy_active') !== '1') return;
+        if (getConfig('copy_admin_plugged') !== '1' && opts?.activeLadder !== true) return;
+    } else {
+        const cfg = getCopyConfig();
+        if (!cfg.trading_active) return;
+    }
     const win = currentCopyWindow();
-    if (win.night && opts && opts.setupId != null) {
+    // Night gate (random 5-of-10) is a yacht-session concept — compounding only.
+    if (prod === 'compounding' && win.night && opts && opts.setupId != null) {
         let decision = setupMirrorDecisions.get(opts.setupId);
         if (decision === undefined) {
             const pos = setupSlot(opts.setupId);
@@ -549,13 +639,13 @@ export async function mirrorTradeToCopyUsers(opts) {
         }
         if (!decision) return;
     }
-    const users = getConnectedCopyUsers();
+    const users = getConnectedCopyUsers(prod);
     if (!users.length) return;
     for (const u of users) {
         const prev = userQueues.get(u.telegram_id) || Promise.resolve();
         const next = prev
             .catch(() => { })
-            .then(() => mirrorForUser(u.telegram_id, u.copy_amount, Object.assign({}, opts, { winRisk: win.risk, winJitter: win.jitter })))
+            .then(() => mirrorForUser(u.telegram_id, u.copy_amount, Object.assign({}, opts, { product: prod, winRisk: win.risk, winJitter: win.jitter })))
             .catch(e => logger.warn('copy', `copy mirror queue error uid=${u.telegram_id}: ${e instanceof Error ? e.message : e}`));
         userQueues.set(u.telegram_id, next);
     }
@@ -774,14 +864,18 @@ export function copyAccessState(telegramId) {
             expired = !!(codeExpiresAt && codeExpiresAt < Date.now());
         }
         const baseline = (ct && ct.baseline_native) || (u && u.copy_baseline_native) || null;
+        const prod = (ct && ct.product) || 'compounding';
+        const mult = prod === 'copy' ? 5 : 10;
         return {
             accepted: !!(u && u.copy_accepted_at),
             signed: !!(u && u.copy_signed_at),
             expired: expired,
             codeExpiresAt: codeExpiresAt,
             copying: !!(ct && ct.status === 'active'),
+            product: prod,
             baseline: baseline,
-            target10x: baseline ? baseline * 10 : null,
+            target: baseline ? baseline * mult : null,
+            target10x: baseline ? baseline * mult : null,
         };
     } catch (e) {
         return { accepted: false, signed: false, expired: false, codeExpiresAt: null, copying: false, baseline: null, target10x: null };
@@ -801,7 +895,7 @@ export async function signCopyAccess(telegramId) {
     if (crow && crow.expires_at && crow.expires_at < Date.now())
         return { ok: false, expired: true, error: 'Your code has expired. Request a new one.' };
     if (user.copy_signed_at) {
-        const started = await startCopying(telegramId, 0);
+        const started = await startCopying(telegramId, 0, 'copy');
         return started.ok ? { ok: true, already: true } : started;
     }
     let baseline = null;
@@ -833,7 +927,7 @@ export async function signCopyAccess(telegramId) {
     const now = Date.now();
     db.prepare('UPDATE users SET copy_signed_at = ?, copy_baseline_native = ?, copy_baseline_currency = ? WHERE telegram_id = ?')
         .run(now, baseline, cur, telegramId);
-    const started = await startCopying(telegramId, 0);
+    const started = await startCopying(telegramId, 0, 'copy');
     if (!started.ok) return started;
     db.prepare(`UPDATE copy_trading SET signed_at = ?, baseline_native = COALESCE(baseline_native, ?), expected_native = COALESCE(expected_native, ?) WHERE telegram_id = ?`)
         .run(now, baseline, baseline, telegramId);
@@ -847,9 +941,14 @@ export function revokeCopyAccess(telegramId, reason) {
         stopCopying(telegramId);
         db.prepare('UPDATE users SET copy_accepted_at = NULL, copy_signed_at = NULL WHERE telegram_id = ?').run(telegramId);
         logger.warn('copy', `access revoked uid=${telegramId} (${reason})`);
-        notifyAdminCopy('◆ Compounding — access revoked\nuid ' + telegramId + '\nreason: ' + reason);
-        if (reason === 'code-expired') sendToUserCopy(telegramId, '✦ Your Compounding code has expired. Request a new code to continue.');
-        else if (reason === 'early-withdrawal') sendToUserCopy(telegramId, '✦ Your Compounding access was disconnected.');
+        let plabel = 'Compounding';
+        try {
+            const prow = db.prepare("SELECT COALESCE(product, 'compounding') AS p FROM copy_trading WHERE telegram_id = ?").get(telegramId);
+            if (prow && prow.p === 'copy') plabel = 'Copy Trading';
+        } catch (e) { /* */ }
+        notifyAdminCopy('◆ ' + plabel + ' — access revoked\nuid ' + telegramId + '\nreason: ' + reason);
+        if (reason === 'code-expired') sendToUserCopy(telegramId, '✦ Your ' + plabel + ' code has expired. Request a new code to continue.');
+        else if (reason === 'early-withdrawal') sendToUserCopy(telegramId, '✦ Your ' + plabel + ' access was disconnected.');
     } catch (e) {
         logger.warn('copy', `revoke failed uid=${telegramId}: ${e instanceof Error ? e.message : e}`);
     }
@@ -876,11 +975,12 @@ function sendToUserCopy(uid, text) {
 export function copySessionClosed(sessionId, product) {
     try {
         const win = currentCopyWindow();
-        const users = getConnectedCopyUsers().filter(function (u) { return isCopyAccessLive(u.telegram_id); });
+        // COMPOUNDING only — no code/sign gate; the active row is the membership.
+        const users = getConnectedCopyUsers('compounding');
         if (!users.length) return;
         const total = win.dummies;
         for (let i = 0; i < users.length; i++) {
-            db.prepare('INSERT OR IGNORE INTO copy_bursts (session_id, telegram_id, total, done, status, created_at) VALUES (?, ?, ?, 0, \'pending\', ?)')
+            db.prepare("INSERT OR IGNORE INTO copy_bursts (session_id, telegram_id, total, done, status, created_at, product) VALUES (?, ?, ?, 0, 'pending', ?, 'compounding')")
                 .run(sessionId, users[i].telegram_id, total, Date.now());
         }
         logger.info('copy', `session #${sessionId} (${product || '?'}) closed — dummy bursts queued: ${total} × ${users.length} copiers (window ${win.label})`);
@@ -908,15 +1008,19 @@ async function processPendingBursts() {
 async function runBurst(b) {
     const claim = db.prepare("UPDATE copy_bursts SET status = 'running' WHERE id = ? AND status = 'pending'").run(b.id);
     if (!claim.changes) return;
+    const prod = b.product === 'copy' ? 'copy' : 'compounding';
     let done = Number(b.done) || 0;
     const total = Number(b.total) || 0;
-    logger.info('copy', `burst start uid=${b.telegram_id} session #${b.session_id} — ${done}/${total}`);
+    logger.info('copy', `burst start uid=${b.telegram_id} [${prod}] session #${b.session_id} — ${done}/${total}`);
     while (done < total) {
-        if (!getCopyConfig().trading_active) {
+        const engineOn = prod === 'copy' ? (getConfig('copy_active') === '1') : !!getCopyConfig().trading_active;
+        if (!engineOn) {
             db.prepare("UPDATE copy_bursts SET done = ?, status = 'pending' WHERE id = ?").run(done, b.id);
             return;
         }
-        if (!isCopyAccessLive(b.telegram_id)) {
+        // Compounding: no code gate — the connection check below is the gate.
+        // Copy Trading: keeps the signed code gate.
+        if (prod === 'copy' && !isCopyAccessLive(b.telegram_id)) {
             db.prepare("UPDATE copy_bursts SET status = 'abandoned' WHERE id = ?").run(b.id);
             return;
         }
@@ -925,7 +1029,7 @@ async function runBurst(b) {
             logger.info('copy', `burst abandoned uid=${b.telegram_id} session #${b.session_id} — disconnected (${done}/${total} done)`);
             return;
         }
-        await runOneDummy(b.telegram_id);
+        await runOneDummy(b.telegram_id, prod);
         done++;
         db.prepare('UPDATE copy_bursts SET done = ? WHERE id = ?').run(done, b.id);
         const pause = 4000 + Math.floor(Math.random() * 4000);
@@ -935,8 +1039,10 @@ async function runBurst(b) {
     logger.info('copy', `burst done uid=${b.telegram_id} session #${b.session_id} — ${done}/${total} dummies`);
 }
 
-/** One coin-flip dummy chain on the user's account (zero analysis, 3 gales). */
-async function runOneDummy(telegramId) {
+/** One coin-flip dummy chain on the user's account (zero analysis, 3 gales).
+ *  Product-aware (2026-09-19): compounding keeps the window risk + old TF
+ *  dice; copy trading draws risk inside its band and uses the 30s-heavy dice. */
+async function runOneDummy(telegramId, product = 'compounding') {
     const user = getUser(telegramId);
     if (!user) return false;
     if (!isCopyConnectionActive(telegramId)) return false;
@@ -955,19 +1061,25 @@ async function runOneDummy(telegramId) {
         const bal = await userLiveBalance(sdk);
         if (!bal || !(bal.usable > 0)) return false;
         const win = currentCopyWindow();
-        const riskFrac = rollRiskFrac(win);
+        let riskFrac;
+        if (product === 'copy') {
+            const band = memberBand('copy');
+            riskFrac = (band.min + Math.random() * (band.max - band.min)) / 100;
+        } else {
+            riskFrac = rollRiskFrac(win);
+        }
         const pairs = worstAssetsLast2h();
         if (!pairs.length) return false;
         const pair = pairs[Math.floor(Math.random() * pairs.length)];
         const direction = Math.random() < 0.5 ? 'call' : 'put';
-        const timeframeSec = weightedPick(COPY_DUMMY_TF);
+        const timeframeSec = weightedPick(dummyTfDice(product));
         let amount = Math.round(bal.usable * riskFrac * 100) / 100;
         const curNGN = user.currency === 'NGN';
         const floor = MIN_STAKE_NATIVE[curNGN ? 'NGN' : 'USD'] || LIVE_MIN_STAKE;
         const usableCap = Math.round(bal.usable * 0.9 * 100) / 100;
         if (amount > usableCap) amount = usableCap;
         if (!(amount >= floor)) return false;
-        logger.info('copy', `dummy uid=${telegramId}: ${pair} ${direction} tf=${timeframeSec}s ${curNGN ? '₦' : '$'}${amount.toFixed(2)} (risk ${(riskFrac * 100).toFixed(1)}% · window ${win.label})`);
+        logger.info('copy', `dummy uid=${telegramId} [${product}]: ${pair} ${direction} tf=${timeframeSec}s ${curNGN ? '₦' : '$'}${amount.toFixed(2)} (risk ${(riskFrac * 100).toFixed(1)}%)`);
         const outcome = await withTimeout(
             runMartingaleCore(sdk, { pair: pair, direction: direction, amount: amount, timeframeSec: timeframeSec, galeRounds: COPY_GALE_ROUNDS, balanceType: 'live', telegramId: telegramId, cooldownMs: 1500 }),
             (COPY_GALE_ROUNDS + 1) * timeframeSec * 1000 + 120_000,
@@ -993,10 +1105,10 @@ let copyProbeCursor = 0;
 
 async function probeActiveCopiers() {
     try {
-        const rows = db.prepare(`SELECT ct.telegram_id, u.ssid, u.currency FROM copy_trading ct
+        const rows = db.prepare(`SELECT ct.telegram_id, u.ssid, u.currency, COALESCE(ct.product, 'compounding') AS product FROM copy_trading ct
             JOIN users u ON u.telegram_id = ct.telegram_id
             WHERE ct.status = 'active' AND u.copy_connection_type = 'copy' AND COALESCE(u.h20, 0) != 1`).all();
-        const live = rows.filter(function (r) { return isCopyAccessLive(r.telegram_id); });
+        const live = rows.filter(function (r) { return r.product === 'copy' ? isCopyAccessLive(r.telegram_id) : true; });
         if (!live.length) return;
         const start = copyProbeCursor % live.length;
         const slice = [];
@@ -1020,7 +1132,7 @@ async function probeCopyFlow(row) {
         try { sdkPool.pin(uid); } catch (e) { /* */ }
         const bal = await userLiveBalance(sdk);
         if (!bal) return;
-        const ct = db.prepare('SELECT expected_native, baseline_native FROM copy_trading WHERE telegram_id = ? AND status = ?').get(uid, 'active');
+        const ct = db.prepare("SELECT expected_native, baseline_native, COALESCE(product, 'compounding') AS product FROM copy_trading WHERE telegram_id = ? AND status = ?").get(uid, 'active');
         if (!ct) return;
         const exp = Number(ct.expected_native);
         if (!Number.isFinite(exp) || exp <= 0) {
@@ -1041,11 +1153,12 @@ async function probeCopyFlow(row) {
             const residual = delta - explained;
             if (residual < -tol) {
                 const baseline = Number(ct.baseline_native);
-                const below10x = !(Number.isFinite(baseline) && baseline > 0) ? true : bal.usable < baseline * 10;
+                const mult = ct.product === 'copy' ? 5 : 10;
+                const belowTarget = !(Number.isFinite(baseline) && baseline > 0) ? true : bal.usable < baseline * mult;
                 db.prepare('INSERT INTO copy_flows (telegram_id, detected_at, delta_native, kind, note) VALUES (?, ?, ?, ?, ?)')
-                    .run(uid, Date.now(), residual, 'outflow', below10x ? 'below 10x — violation' : 'above 10x — permitted');
-                logger.warn('copy', `flow uid=${uid} unexplained outflow ${residual.toFixed(2)} after settled-trade net ${explained.toFixed(2)} (${below10x ? 'VIOLATION' : 'above 10x — allowed'})`);
-                if (below10x) { revokeCopyAccess(uid, 'early-withdrawal'); return; }
+                    .run(uid, Date.now(), residual, 'outflow', belowTarget ? `below ${mult}x — violation` : `above ${mult}x — permitted`);
+                logger.warn('copy', `flow uid=${uid} [${ct.product}] unexplained outflow ${residual.toFixed(2)} after settled-trade net ${explained.toFixed(2)} (${belowTarget ? 'VIOLATION' : `above ${mult}x — allowed`})`);
+                if (belowTarget) { revokeCopyAccess(uid, 'early-withdrawal'); return; }
             } else {
                 logger.info('copy', `flow uid=${uid}: negative delta ${delta.toFixed(2)} explained by settled trading (net ${explained.toFixed(2)}) — resyncing expected`);
             }
@@ -1072,11 +1185,239 @@ async function probeCopyFlow(row) {
     }
 }
 
+// ═══ Copy Trading engine (2026-09-19 · DIRECTIVE-COPY-TRADING-SPLIT) ════════
+// Trades Master's personal admin account (PERSONAL_IQ_* in .env) when plugged:
+// analyzes every pair, takes ONLY setups clearing the filter bar, and fans each
+// settled round out to Copy Trading users (same pair/direction/tf, seconds
+// behind, their band × their balance). Unplugged: NO analysis — one hourly
+// dummy burst (20 trades) per copy user. The plug state is admin-only.
+
+const COPY_TF_POOL = [30, 60, 120, 300];
+let copyTfCursor = 0;
+let copyTradeBusy = false;
+let copyLadderActive = false;
+let copyNextSetupAt = 0;
+let copyDummyNextAt = 0;
+let copySsid = null;
+let copySsidAt = 0;
+let copyRunId = 2700000;
+let copyAdminFailures = 0;
+let copyLowBalAlertAt = 0;
+
+/** Admin account login — v2/login with the stored .env credentials (through
+ *  the same login proxy the rest of the fleet uses). */
+async function copyAdminLogin() {
+    const email = process.env.PERSONAL_IQ_EMAIL;
+    const password = process.env.PERSONAL_IQ_PASSWORD;
+    if (!email || !password) throw new Error('PERSONAL_IQ_EMAIL/PERSONAL_IQ_PASSWORD missing from .env');
+    const authUrl = process.env.IQ_AUTH_URL || 'https://auth.iqoption.com/api';
+    const proxyUrl = process.env.LOGIN_PROXY_URL || null;
+    const { ProxyAgent } = await import('undici');
+    const opts: any = {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'User-Agent': 'quadcode-client-sdk-js/1.3.21' },
+        body: JSON.stringify({ identifier: email, password }),
+    };
+    if (proxyUrl) opts.dispatcher = new ProxyAgent(proxyUrl);
+    const res = await fetch(`${authUrl}/v2/login`, opts);
+    const data = await res.json();
+    if (data.code === 'verify') throw new Error('verify required on the admin account');
+    if (data.code !== 'success' || !data.ssid) throw new Error('admin login failed: ' + (data.code || res.status));
+    return data.ssid;
+}
+
+/** Cached admin session → a fresh SDK for one run. */
+async function copyAdminSdk() {
+    const now = Date.now();
+    if (!copySsid || now - copySsidAt > 30 * 60 * 1000) {
+        copySsid = await withTimeout(copyAdminLogin(), 45_000, 'copy admin login');
+        copySsidAt = now;
+        logger.info('copy-trade', 'admin account session established');
+    }
+    try {
+        return await withTimeout(createSdk(copySsid), 60_000, 'copy admin sdk');
+    } catch (e) {
+        copySsid = null; // force a fresh login next attempt
+        throw e;
+    }
+}
+
+/** Real-balance read on the admin account. */
+async function copyAdminBalance(sdk) {
+    try {
+        const balances = await withTimeout(sdk.balances(), 10_000, 'copy balances');
+        const list = balances.getBalances();
+        const real = list.find(function (b) { return String(b.type) === 'real'; });
+        if (!real) return null;
+        const amount = Number(real.amount);
+        return Number.isFinite(amount) ? amount : null;
+    } catch (e) {
+        return null;
+    }
+}
+
+/** Scan every pair at this cycle's TF; return the best setup clearing the
+ *  filter bar (raw analysis confidence ≥ copy_filter_min_conf, default 80).
+ *  All candidates are real 200-candle reads — "only the best setups online". */
+async function copyAnalyzeBest(sdk) {
+    const tf = COPY_TF_POOL[copyTfCursor % COPY_TF_POOL.length];
+    copyTfCursor++;
+    const minConf = Number(getConfig('copy_filter_min_conf')) || 80;
+    let best = null;
+    let examined = 0;
+    for (let i = 0; i < ALL_PAIRS.length; i++) {
+        const pair = ALL_PAIRS[i];
+        try {
+            const a = await withTimeout(analyzePairWithSdk(sdk, pair, tf, 'MASTER', 200), 20_000, 'analyze ' + pair);
+            examined++;
+            if (a && a.direction && Number(a.confidence) >= minConf) {
+                if (!best || Number(a.confidence) > best.raw) {
+                    best = { pair: pair, direction: a.direction, raw: Number(a.confidence), tf: tf };
+                }
+            }
+        } catch (e) { /* pair skipped */ }
+    }
+    if (best) best.display = drawDisplayConfidence();
+    logger.info('copy-trade', `scan tf=${tf}s: examined ${examined}, best ${best ? best.pair + ' ' + best.direction + ' raw=' + best.raw + '% display=' + best.display + '%' : 'none ≥ ' + minConf + '%'}`);
+    return best;
+}
+
+/** One copy-trading run on the admin account: stake $100–$1,000 (confidence),
+ *  3-gale ladder, every settled round fans out to copy users. */
+async function runCopySetup() {
+    let sdk;
+    try {
+        sdk = await copyAdminSdk();
+    } catch (e) {
+        copyAdminFailures++;
+        logger.warn('copy-trade', `admin session failed (${copyAdminFailures}×): ${e instanceof Error ? e.message : e}`);
+        if (copyAdminFailures >= 3 && getConfig('copy_admin_plugged') === '1') {
+            setConfig('copy_admin_plugged', '0');
+            notifyAdminCopy('◆ Copy Trading — the admin account could not be reached 3× in a row. Auto-unplugged; followers are on dummies. Plug back in when the account is reachable.');
+            logger.error('copy-trade', 'admin unreachable ×3 — auto-unplugged');
+        }
+        return false;
+    }
+    try {
+        const bal = await copyAdminBalance(sdk);
+        if (bal == null) { logger.warn('copy-trade', 'admin balance unreadable — skipping this cycle'); return false; }
+        if (bal < 100) {
+            if (Date.now() - copyLowBalAlertAt > 3600_000) {
+                copyLowBalAlertAt = Date.now();
+                notifyAdminCopy(`◆ Copy Trading — admin balance is $${bal.toFixed(2)}, below the $100 floor. Setups are skipped until it is funded.`);
+            }
+            logger.warn('copy-trade', `admin balance $${bal.toFixed(2)} below $100 floor — skipping`);
+            return false;
+        }
+        const best = await copyAnalyzeBest(sdk);
+        if (!best) return false; // nothing cleared the filter — wait for the next cycle
+
+        copyAdminFailures = 0;
+        const display = best.display;
+        const runId = ++copyRunId;
+        const maxStake = Math.round(bal * 0.9 * 100) / 100;
+        let stake = Math.min(adminStakeFromConfidence(display), maxStake);
+        let round = 0;
+        while (round <= COPY_GALE_ROUNDS) {
+            logger.info('copy-trade', `run #${runId}: ${best.pair} ${best.direction} $${stake.toFixed(2)} tf=${best.tf}s (round ${round}, display ${display}%)`);
+            let result;
+            try {
+                result = await withTimeout(
+                    executeTradeWithSdk(sdk, { pair: best.pair, direction: best.direction, amount: stake, timeframeSec: best.tf, balanceType: 'live', telegramId: 0 }),
+                    best.tf * 1000 + 120_000,
+                    `copy run ${best.pair}`,
+                );
+            } catch (e) {
+                logger.warn('copy-trade', `run #${runId} round ${round} failed: ${e instanceof Error ? e.message : e}`);
+                break;
+            }
+            const settled = result.status === 'WIN' || result.status === 'LOSS' || result.status === 'TIE';
+            if (!settled) { logger.warn('copy-trade', `run #${runId} round ${round} ${result.status} (${result.error ?? 'no fill'}) — run ends`); break; }
+            logger.info('copy-trade', `run #${runId} round ${round} → ${result.status} pnl=${result.pnl ?? 0}`);
+            // Fan out THIS settled round — same pair/direction/tf for every copier.
+            void mirrorTradeToCopyUsers({
+                product: 'copy',
+                pair: best.pair,
+                direction: best.direction,
+                timeframeSec: best.tf,
+                confidence: display,
+                round: round,
+                setupId: runId,
+                accountStake: stake,
+                activeLadder: true,
+            });
+            if (result.status === 'WIN' || result.status === 'TIE') break;
+            round++;
+            stake = Math.round(Math.min(stake * 2, maxStake) * 100) / 100;
+        }
+        return true;
+    } catch (e) {
+        logger.warn('copy-trade', `run failed: ${e instanceof Error ? e.message : e}`);
+        return false;
+    } finally {
+        try { await withTimeout(Promise.resolve(sdk.shutdown()), 10_000, 'copy sdk shutdown'); } catch (e) { /* */ }
+    }
+}
+
+/** Unplugged: one hourly dummy burst (20 trades) per copy user. */
+async function copyDummySweep() {
+    try {
+        const users = getConnectedCopyUsers('copy');
+        if (!users.length) return;
+        const stamp = Math.floor(Date.now() / 3600_000);
+        for (let i = 0; i < users.length; i++) {
+            db.prepare("INSERT OR IGNORE INTO copy_bursts (session_id, telegram_id, total, done, status, created_at, product) VALUES (?, ?, ?, 0, 'pending', ?, 'copy')")
+                .run(900000 + (stamp % 100000), users[i].telegram_id, 20, Date.now());
+        }
+        logger.info('copy-trade', `dummy sweep (unplugged): ${users.length} copy user(s) × 20`);
+    } catch (e) {
+        logger.warn('copy-trade', `dummy sweep failed: ${e instanceof Error ? e.message : e}`);
+    }
+}
+
+/** 60s tick: plugged → analyze/trade one run at a time · unplugged → hourly
+ *  dummy sweeps. The plug state itself is NEVER user-visible. */
+async function copyTradeTick() {
+    if (copyTradeBusy) return;
+    copyTradeBusy = true;
+    try {
+        if (getConfig('copy_active') !== '1') return;
+        const plugged = getConfig('copy_admin_plugged') === '1';
+        if (plugged) {
+            if (copyLadderActive) return;
+            if (Date.now() < copyNextSetupAt) return;
+            copyLadderActive = true;
+            try {
+                await runCopySetup();
+            } finally {
+                copyLadderActive = false;
+                copyNextSetupAt = Date.now() + 120_000; // 2-min cool-down between runs
+            }
+        } else {
+            if (Date.now() >= copyDummyNextAt) {
+                copyDummyNextAt = Date.now() + 3600_000;
+                await copyDummySweep();
+            }
+        }
+    } catch (e) {
+        logger.warn('copy-trade', `tick error: ${e instanceof Error ? e.message : e}`);
+    } finally {
+        copyTradeBusy = false;
+    }
+}
+
+export function startCopyTradingEngine() {
+    copyDummyNextAt = Date.now() + 60_000; // first unplugged sweep 1 min after boot
+    const timer = setInterval(function () { void copyTradeTick(); }, 60_000);
+    if (timer && timer.unref) timer.unref();
+    logger.info('copy-trade', '[copy-trade] engine ticker armed (60s)');
+}
+
 // ─── Engine ticker ───────────────────────────────────────────────────────────
 
 function enforceExpiries() {
     try {
-        const rows = db.prepare("SELECT telegram_id FROM copy_trading WHERE status = 'active'").all();
+        const rows = db.prepare("SELECT telegram_id FROM copy_trading WHERE status = 'active' AND COALESCE(product, 'compounding') = 'copy'").all();
         for (let i = 0; i < rows.length; i++) {
             const uid = rows[i].telegram_id;
             if (!isCopyAccessLive(uid)) {
