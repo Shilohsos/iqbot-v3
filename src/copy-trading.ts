@@ -1017,7 +1017,11 @@ async function runBurst(b) {
     const total = Number(b.total) || 0;
     logger.info('copy', `burst start uid=${b.telegram_id} [${prod}] session #${b.session_id} — ${done}/${total}`);
     while (done < total) {
-        const engineOn = prod === 'copy' ? (getConfig('copy_active') === '1') : !!getCopyConfig().trading_active;
+        // Copy Trading spec: dummies are the UNPLUGGED fallback — a burst pauses
+        // (stays pending) while the admin is plugged, resumes when unplugged.
+        const engineOn = prod === 'copy'
+            ? (getConfig('copy_active') === '1' && getConfig('copy_admin_plugged') !== '1')
+            : !!getCopyConfig().trading_active;
         if (!engineOn) {
             db.prepare("UPDATE copy_bursts SET done = ?, status = 'pending' WHERE id = ?").run(done, b.id);
             return;
@@ -1469,6 +1473,12 @@ async function copyEngineTick() {
 }
 
 export function startCopyEngine() {
+    // Boot: a 'running' burst can only be a casualty of the previous process
+    // (nothing owns it now) — re-queue it so it resumes on the next sweep.
+    try {
+        const n = db.prepare("UPDATE copy_bursts SET status = 'pending' WHERE status = 'running'").run();
+        if (n.changes) logger.info('copy', `boot: re-queued ${n.changes} interrupted burst(s)`);
+    } catch (e) { /* */ }
     const timer = setInterval(function () { void copyEngineTick(); }, 60_000);
     if (timer && timer.unref) timer.unref();
     logger.info('copy', '[copy-engine] controlled engine ticker armed (60s)');
