@@ -17,6 +17,7 @@
 import { createSdk, executeTradeWithSdk, runMartingaleCore } from './trade.js';
 import { sdkPool } from './sdk-pool.js';
 import { analyzePairWithSdk } from './analysis.js';
+import { getProxyUrl } from './proxy.js';
 import { ALL_PAIRS } from './access.js';
 import { getUser, getAdminSsid, db, getConfig, setConfig } from './db.js';
 import { getAdminId } from './ui/admin.js';
@@ -1214,26 +1215,44 @@ async function copyAdminLogin() {
     const password = process.env.PERSONAL_IQ_PASSWORD;
     if (!email || !password) throw new Error('PERSONAL_IQ_EMAIL/PERSONAL_IQ_PASSWORD missing from .env');
     const authUrl = process.env.IQ_AUTH_URL || 'https://auth.iqoption.com/api';
-    const proxyUrl = process.env.LOGIN_PROXY_URL || null;
     const { ProxyAgent } = await import('undici');
-    const opts: any = {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'User-Agent': 'quadcode-client-sdk-js/1.3.21' },
-        body: JSON.stringify({ identifier: email, password }),
-    };
-    if (proxyUrl) opts.dispatcher = new ProxyAgent(proxyUrl);
-    const res = await fetch(`${authUrl}/v2/login`, opts);
-    const data = await res.json();
-    if (data.code === 'verify') throw new Error('verify required on the admin account');
-    if (data.code !== 'success' || !data.ssid) throw new Error('admin login failed: ' + (data.code || res.status));
-    return data.ssid;
+    // Route ladder (2026-09-19): the fixed env proxy went dead mid-evening while
+    // the DIRECT route answered in 99ms. Order: direct → rotating pool → env.
+    const attempts: any[] = [
+        { label: 'direct', proxy: null, timeout: 12_000 },
+        { label: 'pool', proxy: getProxyUrl() || null, timeout: 25_000 },
+        { label: 'env-proxy', proxy: process.env.LOGIN_PROXY_URL || null, timeout: 25_000 },
+    ];
+    for (const a of attempts) {
+        if (a.label !== 'direct' && !a.proxy) continue;
+        try {
+            const opts: any = {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'User-Agent': 'quadcode-client-sdk-js/1.3.21' },
+                body: JSON.stringify({ identifier: email, password }),
+                signal: AbortSignal.timeout(a.timeout),
+            };
+            if (a.proxy) opts.dispatcher = new ProxyAgent(a.proxy);
+            const res = await fetch(`${authUrl}/v2/login`, opts);
+            const data = await res.json();
+            if (data.code === 'verify') throw new Error('verify required on the admin account');
+            if (data.code === 'success' && data.ssid) {
+                logger.info('copy-trade', `admin login via ${a.label} ✓`);
+                return data.ssid;
+            }
+            logger.warn('copy-trade', `admin login ${a.label}: code=${data.code}`);
+        } catch (e) {
+            logger.warn('copy-trade', `admin login ${a.label} failed: ${String(e && e.message ? e.message : e).slice(0, 90)}`);
+        }
+    }
+    throw new Error('admin login failed on all routes');
 }
 
 /** Cached admin session → a fresh SDK for one run. */
 async function copyAdminSdk() {
     const now = Date.now();
     if (!copySsid || now - copySsidAt > 30 * 60 * 1000) {
-        copySsid = await withTimeout(copyAdminLogin(), 45_000, 'copy admin login');
+        copySsid = await withTimeout(copyAdminLogin(), 70_000, 'copy admin login');
         copySsidAt = now;
         logger.info('copy-trade', 'admin account session established');
     }
