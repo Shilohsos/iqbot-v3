@@ -1323,6 +1323,19 @@ async function runCopySetup() {
         let round = 0;
         while (round <= COPY_GALE_ROUNDS) {
             logger.info('copy-trade', `run #${runId}: ${best.pair} ${best.direction} $${stake.toFixed(2)} tf=${best.tf}s (round ${round}, display ${display}%)`);
+            // Fan out AT ENTRY (Master 2026-09-19): copiers fire immediately —
+            // seconds behind the admin's entry, not after the round settles.
+            void mirrorTradeToCopyUsers({
+                product: 'copy',
+                pair: best.pair,
+                direction: best.direction,
+                timeframeSec: best.tf,
+                confidence: display,
+                round: round,
+                setupId: runId,
+                accountStake: stake,
+                activeLadder: true,
+            });
             let result;
             try {
                 result = await withTimeout(
@@ -1337,18 +1350,6 @@ async function runCopySetup() {
             const settled = result.status === 'WIN' || result.status === 'LOSS' || result.status === 'TIE';
             if (!settled) { logger.warn('copy-trade', `run #${runId} round ${round} ${result.status} (${result.error ?? 'no fill'}) — run ends`); break; }
             logger.info('copy-trade', `run #${runId} round ${round} → ${result.status} pnl=${result.pnl ?? 0}`);
-            // Fan out THIS settled round — same pair/direction/tf for every copier.
-            void mirrorTradeToCopyUsers({
-                product: 'copy',
-                pair: best.pair,
-                direction: best.direction,
-                timeframeSec: best.tf,
-                confidence: display,
-                round: round,
-                setupId: runId,
-                accountStake: stake,
-                activeLadder: true,
-            });
             if (result.status === 'WIN' || result.status === 'TIE') break;
             round++;
             stake = Math.round(Math.min(stake * 2, maxStake) * 100) / 100;
