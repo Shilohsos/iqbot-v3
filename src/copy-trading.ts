@@ -589,7 +589,10 @@ async function mirrorForUser(telegramId, copyAmount, opts) {
         // Silent by design (controlled engine): copiers get no per-trade
         // messages. Settled rounds feed the expected-balance tracker instead.
         adjustExpected(telegramId, mirrorNet(result, stake));
-        if (result.status === 'WIN' || result.status === 'TIE') chainBases.delete(chainKey);
+        // Compounding: a settled WIN/TIE closes the member's chain → drop the base.
+        // Copy Trading: the ADMIN decides when the chain ends — keep the base so
+        // every mirror round stays base×2^round across the admin's whole run.
+        if (prod !== 'copy' && (result.status === 'WIN' || result.status === 'TIE')) chainBases.delete(chainKey);
     } catch (err) {
         logger.warn('copy', `copy mirror error uid=${telegramId} on ${pair}: ${err instanceof Error ? err.message : err}`);
     } finally {
@@ -855,7 +858,7 @@ export function isCopyConnectionActive(telegramId) {
 export function copyAccessState(telegramId) {
     try {
         const u = db.prepare('SELECT copy_accepted_at, copy_signed_at, copy_acceptance_code, copy_baseline_native FROM users WHERE telegram_id = ?').get(telegramId);
-        const ct = db.prepare('SELECT status, baseline_native, expected_native FROM copy_trading WHERE telegram_id = ?').get(telegramId);
+        const ct = db.prepare("SELECT status, baseline_native, expected_native, COALESCE(product, 'compounding') AS product FROM copy_trading WHERE telegram_id = ?").get(telegramId);
         let expired = false;
         let codeExpiresAt = null;
         if (u && u.copy_acceptance_code) {
@@ -931,7 +934,7 @@ export async function signCopyAccess(telegramId) {
     if (!started.ok) return started;
     db.prepare(`UPDATE copy_trading SET signed_at = ?, baseline_native = COALESCE(baseline_native, ?), expected_native = COALESCE(expected_native, ?) WHERE telegram_id = ?`)
         .run(now, baseline, baseline, telegramId);
-    logger.info('copy', `uid=${telegramId} signed terms — baseline ${baseline} ${cur} (10x target ${baseline * 10})`);
+    logger.info('copy', `uid=${telegramId} signed terms — baseline ${baseline} ${cur} (5x target ${baseline * 5})`);
     return { ok: true, baseline: baseline, currency: cur };
 }
 
@@ -1314,7 +1317,7 @@ async function runCopySetup() {
 
         copyAdminFailures = 0;
         const display = best.display;
-        const runId = ++copyRunId;
+        const runId = Date.now(); // globally unique — never reused across restarts
         const maxStake = Math.round(bal * 0.9 * 100) / 100;
         let stake = Math.min(adminStakeFromConfidence(display), maxStake);
         let round = 0;

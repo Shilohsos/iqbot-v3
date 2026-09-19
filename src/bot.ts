@@ -4197,9 +4197,9 @@ bot.action('copy:sign', async (ctx) => {
             : (res.error || 'Could not sign right now. Try again in a moment.'));
         return;
     }
-    await ctx.reply(`◆ Compounding — ACCESS GRANTED\n\nSigned. The engine trades — your account compounds.\n\n${copyAdminLine()}\n\n· Stop any time with Disconnect.`, { reply_markup: { inline_keyboard: [
+    await ctx.reply(`◆ Copy Trading — ACCESS GRANTED\n\nSigned. You're mirroring the admin — same trades, seconds behind.\n\n· Stop any time with Disconnect.`, { reply_markup: { inline_keyboard: [
         [{ text: '■ Disconnect', callback_data: 'copy:stop' }],
-        [{ text: '· How it works', callback_data: 'copy:how' }],
+        [{ text: '· How it works', callback_data: 'copy:ct:how' }],
     ] } });
 });
 
@@ -4211,7 +4211,7 @@ bot.action('copy:custom', async (ctx) => {
     const isPriv = isPrivilegedUser(uid);
     if (uid !== getAdminId() && !isCopyAccepted(uid)) {
         copyCodeSessions.set(ctx.chat.id, { uid, at: Date.now() });
-        await ctx.reply(`◆ Compounding — ACCESS CODE REQUIRED\n\nEnter the acceptance code admin sent you, as a message here.`, { reply_markup: { inline_keyboard: [
+        await ctx.reply(`◆ Copy Trading — ACCESS CODE REQUIRED\n\nEnter the acceptance code admin sent you, as a message here.`, { reply_markup: { inline_keyboard: [
             [{ text: '⟡ Contact Admin', url: process.env.ADMIN_CONTACT_LINK ?? 'https://t.me/shiloh_is_10xing' }],
         ] } });
         return;
@@ -4220,7 +4220,7 @@ bot.action('copy:custom', async (ctx) => {
         const user = getUser(uid);
         const fundedUsd = user?.funded_balance_usd ?? 0;
         if (fundedUsd < COPY_MIN_BALANCE) {
-            await ctx.reply(`Minimum balance for Compounding is $${COPY_MIN_BALANCE}. Your balance: $${fundedUsd.toFixed(2)}`);
+            await ctx.reply(`Minimum balance for Copy Trading is $${COPY_TRADE_MIN_BALANCE}. Your balance: $${fundedUsd.toFixed(2)}`);
             return;
         }
     }
@@ -4228,7 +4228,7 @@ bot.action('copy:custom', async (ctx) => {
     const sym = cur === 'NGN' ? '₦' : (cur === 'EUR' ? '€' : cur === 'GBP' ? '£' : '$');
     copyAmountSessions.set(ctx.chat.id, { uid, at: Date.now() });
     setTimeout(() => { if (copyAmountSessions.get(ctx.chat.id)?.uid === uid) copyAmountSessions.delete(ctx.chat.id); }, 5 * 60 * 1000).unref?.();
-    await ctx.reply(`◆ Your compounding amount\n\nType the amount you want to compound with — any amount.\n\nExample: ${sym}150`, { reply_markup: { inline_keyboard: [
+    await ctx.reply(`◆ Your copy amount\n\nType the amount you want to copy with — any amount.\n\nExample: ${sym}150`, { reply_markup: { inline_keyboard: [
         [{ text: '⟡ Contact Admin', url: process.env.ADMIN_CONTACT_LINK ?? 'https://t.me/shiloh_is_10xing' }],
         [{ text: '⟵ Back', callback_data: 'ui:copy' }],
     ] } });
@@ -4279,7 +4279,7 @@ bot.action(/^copy:confirm:(.+)$/, async (ctx) => {
     const result = await startCopying(uid, amount);
     if (!result.ok) {
         if (result.acceptance_required) {
-            await ctx.reply(`◆ Compounding — ACCESS CODE REQUIRED\n\nEnter the acceptance code admin sent you, as a message here.`, { reply_markup: { inline_keyboard: [
+            await ctx.reply(`◆ Copy Trading — ACCESS CODE REQUIRED\n\nEnter the acceptance code admin sent you, as a message here.`, { reply_markup: { inline_keyboard: [
                 [{ text: '⟵ Back', callback_data: 'ui:trade_menu' }],
             ] } });
             return;
@@ -4288,7 +4288,7 @@ bot.action(/^copy:confirm:(.+)$/, async (ctx) => {
         return;
     }
     const shown2 = copyAmountLabel(uid, amount);
-    await ctx.reply(`◆ Compounding — ACTIVE\n\n✓ Connected. Compounding at ${shown2} per trade.\n\n${copyAdminLine()}`, { reply_markup: { inline_keyboard: [
+    await ctx.reply(`◆ Copy Trading — ACTIVE\n\n✓ Connected. Copying at ${shown2} per trade.`, { reply_markup: { inline_keyboard: [
         [{ text: '■ Disconnect', callback_data: 'copy:stop' }],
     ] } });
 });
@@ -6015,29 +6015,40 @@ bot.action('admin:copy', async (ctx) => {
     const copyActive = getConfig('copy_active') === '1';
     const plugged = getConfig('copy_admin_plugged') === '1';
     const cb = memberBand('copy');
-    const kb = memberBand('compounding');
     const filter = Number(getConfig('copy_filter_min_conf')) || 80;
-    await ctx.reply(`◆ *Compounding & Copy Trading*\n\n` +
-        `*Compounding* — ${copyConfig?.trading_active ? '🟢 active' : '🔴 off'} · ${activeCopiers?.count ?? 0} active row(s)\n` +
-        `Gate: $200 or token · band ${kb.min}–${kb.max}%\n\n` +
-        `*Copy Trading* — ${copyActive ? '🟢 active' : '🔴 off'}\n` +
+    const followers = db.prepare("SELECT COUNT(*) AS n FROM copy_trading WHERE status = 'active' AND COALESCE(product, 'compounding') = 'copy'").get();
+    await ctx.reply(`✦ *Copy Trading*\n\n` +
+        `Status: ${copyActive ? '🟢 active' : '🔴 off'}\n` +
         `Admin: ${plugged ? '⚡ plugged — analyzing' : '🔌 unplugged — dummies only'}\n` +
+        `Followers: ${followers?.n ?? 0}\n` +
         `Band ${cb.min}–${cb.max}% · filter ${filter}%\n\n` +
-        `_This state is admin-only — never shown to users._`, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [
-                [
-                    { text: `◆ Compounding: ${copyConfig?.trading_active ? 'ON' : 'OFF'}`, callback_data: 'admin:copy:toggle' },
-                    { text: '🎟 Code', callback_data: 'admin:copy:gencode' },
-                ],
+        `_Plug state is admin-only — never shown to users._`, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [
                 [{ text: `✦ Copy Trading: ${copyActive ? 'ON' : 'OFF'}`, callback_data: 'admin:ct:toggle' }],
                 [{ text: plugged ? '🔌 Unplug Admin' : '⚡ Plug Admin', callback_data: 'admin:ct:plug' }],
                 [
                     { text: `Copy band ${cb.min}–${cb.max}`, callback_data: 'admin:ct:band' },
-                    { text: `Comp band ${kb.min}–${kb.max}`, callback_data: 'admin:comp:band' },
+                    { text: `Filter ${filter}%`, callback_data: 'admin:ct:filter' },
                 ],
                 [
-                    { text: `Filter ${filter}%`, callback_data: 'admin:ct:filter' },
+                    { text: '🎟 Generate Code', callback_data: 'admin:copy:gencode' },
                     { text: '🔌 Users & Swap', callback_data: 'admin:copy:users' },
                 ],
+                [{ text: '⟵ Admin Menu', callback_data: 'admin:back' }],
+            ] } });
+});
+bot.action('admin:comp', async (ctx) => {
+    await ctx.answerCbQuery().catch(() => { });
+    if (ctx.from?.id !== getAdminId())
+        return;
+    const copyConfig = db.prepare('SELECT * FROM copy_config WHERE id = 1').get();
+    const kb = memberBand('compounding');
+    const members = db.prepare("SELECT COUNT(*) AS n FROM copy_trading WHERE status = 'active' AND COALESCE(product, 'compounding') = 'compounding'").get();
+    await ctx.reply(`◆ *Compounding*\n\n` +
+        `Status: ${copyConfig?.trading_active ? '🟢 active' : '🔴 off'}\n` +
+        `Members: ${members?.n ?? 0}\n` +
+        `Band ${kb.min}–${kb.max}% · gate: $200 or token`, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [
+                [{ text: `◆ Compounding: ${copyConfig?.trading_active ? 'ON' : 'OFF'}`, callback_data: 'admin:copy:toggle' }],
+                [{ text: `Comp band ${kb.min}–${kb.max}`, callback_data: 'admin:comp:band' }],
                 [{ text: '⟵ Admin Menu', callback_data: 'admin:back' }],
             ] } });
 });
@@ -6050,8 +6061,8 @@ bot.action('admin:copy:toggle', async (ctx) => {
     // MUST go through adminToggleTrading — the raw flag alone never starts the
     // in-memory loop. This was why toggles looked live but fired zero trades.
     adminToggleTrading(!!newActive);
-    await ctx.reply(`◆ Compounding ${newActive ? '🟢 ON — connected users compound with the engine' : '🔴 OFF — compounding stopped'}`, {
-        reply_markup: { inline_keyboard: [[{ text: '⟵ Back to Compounding', callback_data: 'admin:copy' }]] }
+    await ctx.reply(`◆ Compounding ${newActive ? '🟢 ON — members compound with the engine' : '🔴 OFF — compounding stopped'}`, {
+        reply_markup: { inline_keyboard: [[{ text: '⟵ Back', callback_data: 'admin:comp' }]] }
     });
 });
 bot.action('admin:ct:toggle', async (ctx) => {
@@ -6099,7 +6110,7 @@ bot.action('admin:comp:band', async (ctx) => {
         return;
     const next = cycleBandKey('comp_band');
     await ctx.reply(`◆ Compounding band → ${next[0]}–${next[1]}% (member stakes — new chains)`, {
-        reply_markup: { inline_keyboard: [[{ text: '⟵ Back', callback_data: 'admin:copy' }]] }
+        reply_markup: { inline_keyboard: [[{ text: '⟵ Back', callback_data: 'admin:comp' }]] }
     });
 });
 bot.action('admin:ct:filter', async (ctx) => {
@@ -6177,11 +6188,11 @@ bot.action('admin:copy:gencode', async (ctx) => {
     if (ctx.from?.id !== getAdminId())
         return;
     const code = generateCopyCode(ctx.from.id);
-    await ctx.reply(`🎟 Acceptance code generated\n\nCode: \`${code}\`\n\nSingle-use · expires in 30 days\n\nSend it to the user who should get Compounding access.`, {
+    await ctx.reply(`🎟 Acceptance code generated\n\nCode: \`${code}\`\n\nSingle-use · expires in 30 days\n\nSend it to the user who should get Copy Trading access.`, {
         parse_mode: 'Markdown',
         reply_markup: { inline_keyboard: [
             [{ text: '🎟 Generate another', callback_data: 'admin:copy:gencode' }],
-            [{ text: '⟵ Back to Compounding', callback_data: 'admin:copy' }],
+            [{ text: '⟵ Back', callback_data: 'admin:copy' }],
         ] }
     });
 });
@@ -6201,7 +6212,7 @@ bot.action('admin:copy:users', async (ctx) => {
     const curSym = (cur) => ({ USD: '$', EUR: '€', GBP: '£', NGN: '₦' })[cur ?? 'USD'] ?? '$';
     const fmt = (amt, cur) => `${curSym(cur)}${Number(amt ?? 0).toLocaleString('en-US', { maximumFractionDigits: 2 })}`;
     const live = await Promise.allSettled(rows.map(u => refreshFundedBalanceFromLive(u.telegram_id)));
-    let msg = `🔌 Compounding users (${rows.length})\n`;
+    let msg = `🔌 Copy Trading users (${rows.length})\n`;
     const buttons = [];
     rows.forEach((u, i) => {
         const name = u.username || String(u.telegram_id);
@@ -6210,11 +6221,11 @@ bot.action('admin:copy:users', async (ctx) => {
         const balStr = okLive
             ? fmt(settled.value.amount, settled.value.currency ?? u.currency)
             : `${fmt(u.funded_balance_usd, u.currency)} (cached)`;
-        const conn = u.conn === 'h20' ? '🌊 h20' : (u.conn === 'copy' ? '◆ comp' : '— none');
+        const conn = u.conn === 'h20' ? '🌊 h20' : (u.conn === 'copy' ? '◆ copy' : '— none');
         const amtStr = u.copy_amount ? ` · ${fmt(u.copy_amount, u.currency)}/trade` : '';
         msg += `\n${name} — ${balStr}${amtStr} · ${conn}`;
         buttons.push([
-            { text: `${u.conn === 'copy' ? '✓ ' : ''}◆ comp`, callback_data: `admin:copy:plug:${u.telegram_id}:copy` },
+            { text: `${u.conn === 'copy' ? '✓ ' : ''}◆ copy`, callback_data: `admin:copy:plug:${u.telegram_id}:copy` },
             { text: `${u.conn === 'h20' ? '✓ ' : ''}🌊 h20`, callback_data: `admin:copy:plug:${u.telegram_id}:h20` },
             { text: '⛔ Disconnect', callback_data: `admin:copy:unplug:${u.telegram_id}` },
         ]);
@@ -6238,12 +6249,12 @@ bot.action(/^admin:copy:plug:(\d+):(copy|h20)$/, async (ctx) => {
     const u = getUser(uid);
     const name = u?.first_name || u?.username || String(uid);
     const line = conn === 'copy'
-        ? '◆ Compounding — the engine compounds on this account.'
+        ? '◆ Copy Trading — mirrors the admin on this account.'
         : '🌊 h20 — position system assigned.';
     await ctx.reply(`🔌 ${name} → ${conn.toUpperCase()}\n\n${line}`, {
         reply_markup: { inline_keyboard: [
             [{ text: '🔌 Users & Swap', callback_data: 'admin:copy:users' }],
-            [{ text: '⟵ Back to Compounding', callback_data: 'admin:copy' }],
+            [{ text: '⟵ Back', callback_data: 'admin:copy' }],
         ] }
     });
 });
@@ -6263,7 +6274,7 @@ bot.action(/^admin:copy:unplug:(.+)$/, async (ctx) => {
     await ctx.reply(`⛔ ${name} — disconnected from Compounding\n\nThe account no longer compounds. A fresh code is required to reconnect.`, {
         reply_markup: { inline_keyboard: [
             [{ text: '🔌 Users & Swap', callback_data: 'admin:copy:users' }],
-            [{ text: '⟵ Back to Compounding', callback_data: 'admin:copy' }],
+            [{ text: '⟵ Back', callback_data: 'admin:copy' }],
         ] }
     });
 });
