@@ -71,18 +71,21 @@ const SETUP_PAUSE_MS = 120_000;
 /** Gap between one session ending and the next starting. */
 const COOLDOWN_MS = 2 * 60 * 60_000;
 /** Settle slack added on top of the full martingale ladder when budgeting one
- *  setup's execution (DIRECTIVE-YACHT-RESULT-HARDENING Part 1). */
-const CHAIN_SLACK_MS = 180_000;
+ *  setup's execution (DIRECTIVE-YACHT-RESULT-HARDENING Part 1). Covers the
+ *  full 3-minute entry hold plus the settle margin. */
+const CHAIN_SLACK_MS = 300_000;
 /** How long after a setup was posted an orphaned `executing` row is considered
  *  resolvable. The row can only be orphaned by a process death — while a chain
  *  is genuinely running in-process, `engineBusy` stops any tick from reaching
  *  the check at all — so this is purely "has the broker had time to settle it".
- *  Covers the 60s entry hold + the expiry + 30s. */
-const ORPHAN_SETTLE_SLACK_MS = 90_000;
-/** The entry hold between the channel post and the trade: the card counts 60s
- *  down to 0:00 and the buy fires there. Shared by runOneSetup and the boot
- *  scan's resume path so both agree on when a posted setup was due to enter. */
-const ENTRY_HOLD_MS = 60_000;
+ *  Covers the full 3-minute entry hold + the expiry + 60s of settle margin. */
+const ORPHAN_SETTLE_SLACK_MS = 240_000;
+/** The entry hold between the channel post and the trade: the card counts
+ *  three minutes down to 0:00 and the buy fires there (2026-09-20 — raised
+ *  from 60s so the nudge sweep's tail lands inside a live window). Shared by
+ *  runOneSetup and the boot scan's resume path so both agree on when a posted
+ *  setup was due to enter. */
+const ENTRY_HOLD_MS = 180_000;
 /** How long a `posted` row may still be resumed or voided by the boot scan.
  *  Anything older is housekeeping only: no channel post, no counting. */
 const POSTED_ORPHAN_MAX_MS = 30 * 60_000;
@@ -117,10 +120,10 @@ const FIRST_LIVE_STAKE = 50;
 const LIVE_MIN_STAKE = 1;
 /** A hung live buy must never stall the session. One trade, one budget. */
 const LIVE_MIRROR_TIMEOUT_MS = 20_000;
-/** How long a prepared mirror stays usable. The entry hold is 60s, so a prep
- *  older than this means something went badly out of step and the connection is
- *  rebuilt rather than trusted. */
-const MIRROR_PREP_TTL_MS = 90_000;
+/** How long a prepared mirror stays usable. The entry hold is 3 minutes, so a
+ *  prep older than this means something went badly out of step and the
+ *  connection is rebuilt rather than trusted. */
+const MIRROR_PREP_TTL_MS = 300_000;
 /** Pause between ladder rounds — mirrors the demo chain's `cooldownMs`. */
 const MIRROR_ROUND_COOLDOWN_MS = 2_000;
 /** A TIE refunds the stake, so it does not consume a recovery round. Bounded so
@@ -344,7 +347,7 @@ function setupCard(product: string, pair: string, timeframeSec: number, directio
             'Execute it yourself in the bot — tap the button below 👇',
         ].join('\n');
     }
-    const entryTime = new Date(Date.now() + 60_000);
+    const entryTime = new Date(Date.now() + ENTRY_HOLD_MS);
     const lvlTime = (n: number) => fmtClock(new Date(entryTime.getTime() + n * timeframeSec * 1000));
     return [
         '· 10x Signal',
@@ -456,6 +459,46 @@ function sessionCloseCard(product: string, wins: number, losses: number): string
 const NUDGE_TEXT = '· New setup just dropped in the Yacht Club ✦\nThe scan is live — check it before the window closes.';
 const NUDGE_KB = { inline_keyboard: [[{ text: 'Check the Yacht Club', url: YACHT_CLUB_LINK }]] };
 
+/** Pin the live setup card (2026-09-20): everyone opening the club meets the
+ *  running setup first, wherever the nudge sweep left them. The base pin (the
+ *  welcome post) is captured once and restored at session close. */
+async function pinSetupCard(msgId: number): Promise<void> {
+    const bot = botRef;
+    if (!bot)
+        return;
+    try {
+        const target = channelTarget();
+        if (!getConfig('yacht_welcome_pin_id')) {
+            try {
+                const chat = await bot.telegram.getChat(target);
+                const cur = chat && chat.pinned_message ? chat.pinned_message.message_id : null;
+                if (cur && cur !== msgId)
+                    setConfig('yacht_welcome_pin_id', String(cur));
+            }
+            catch (e) { /* capture is best-effort */ }
+        }
+        await bot.telegram.pinChatMessage(target, msgId, { disable_notification: true });
+        setConfig('yacht_pinned_msg_id', String(msgId));
+    }
+    catch (e) {
+        logger.warn('yacht', `setup card pin failed: ${errText(e)}`);
+    }
+}
+/** Put the club's base pin (the welcome post) back at session close. */
+async function restoreWelcomePin(): Promise<void> {
+    const bot = botRef;
+    const welcome = getConfig('yacht_welcome_pin_id');
+    if (!bot || !welcome)
+        return;
+    try {
+        await bot.telegram.pinChatMessage(channelTarget(), Number(welcome), { disable_notification: true });
+        setConfig('yacht_pinned_msg_id', '');
+        logger.info('yacht', `welcome pin restored (message ${welcome})`);
+    }
+    catch (e) {
+        logger.warn('yacht', `welcome pin restore failed: ${errText(e)}`);
+    }
+}
 // ─── IQ Option side — a dedicated SDK for the Yacht account ─────────────────
 //
 // The Yacht Club trades a SEPARATE IQ account, so it must never take an entry
@@ -598,7 +641,7 @@ async function postToChannelRetry(text: string, keyboard?: { inline_keyboard: Ar
 }
 
 /** Live countdown on the signal card: edits the posted message every second —
- *  "⏳ Entry in 0:47" during the 60s prep window, then "⏳ Expiry in 1:30"
+ *  "⏳ Entry in 2:47" during the entry window, then "⏳ Expiry in 1:30"
  *  until the trade window closes. Best-effort: any edit failure stops the
  *  countdown silently (a dead countdown must never block the engine). */
 function fmtCountdown(totalSec: number): string {
@@ -1295,7 +1338,7 @@ async function discardMirrorPrep(reason: string): Promise<void> {
  *
  *  Part 3 opened the mirror's WebSocket and read the live balance AT the entry
  *  moment, which measured ~5.8s on the real broker — on a 30s timeframe that is
- *  a fifth of the trade. Both of those are done here instead, in the ~60s hold
+ *  a fifth of the trade. Both of those are done here instead, in the ~3-minute hold
  *  between the setup post and countdown 0:00, so the hot path is a bare buy.
  *
  *  Fire-and-forget and never throws. Started right after the post and BEFORE
@@ -1369,7 +1412,7 @@ async function placeLiveMirror(setup: GeneratedSetup, setupId: number): Promise<
         const usable = prep !== null && prep.setupId === setupId && Date.now() - prep.readyAt < MIRROR_PREP_TTL_MS;
 
         if (prep && !usable) {
-            // Belongs to another setup, or went stale (the 90s TTL vs a 60s
+            // Belongs to another setup, or went stale (the 5-min TTL vs a 3-min
             // hold means this should not happen) — never spend it.
             const why = prep.setupId !== setupId ? `belongs to setup ${prep.setupId}` : 'stale';
             if (prep.kind === 'ready') await shutdownMirrorSdk(prep.sdk);
@@ -1467,8 +1510,8 @@ async function runOneSetup(session: YachtSession): Promise<void> {
         const cardText = setupCard(product, setup.pair, setup.timeframeSec, setup.direction, setup.confidence, galeRounds);
         const msgId = await postToChannel(cardText, kb);
         clearOnce('poster');
-        // One clock for card and execution: the entry fires 60s after the post
-        // (when the countdown hits 0:00), expiry is entry + timeframe. Signals
+        // One clock for card and execution: the entry fires at the end of the
+        // hold (when the countdown hits 0:00), expiry is entry + timeframe. Signals
         // show the countdown live on the card; private-trader posts run the
         // same hold silently so results land at the true expiry.
         entryAt = Date.now() + ENTRY_HOLD_MS;
@@ -1478,6 +1521,9 @@ async function runOneSetup(session: YachtSession): Promise<void> {
             activeCountdown = token;
             void runSignalCountdown(msgId, cardText, entryAt, expiryAt, token).catch(() => { });
         }
+        // Pin the live card so it is the first thing anyone opening the club
+        // sees (2026-09-20). Fire-and-forget — never blocks the drop.
+        void pinSetupCard(msgId);
     } catch (e) {
         updateYachtSetup(setupId, { status: 'aborted', closed_at: new Date().toISOString() });
         logger.error('yacht', `channel post failed — setup NOT dropped: ${errText(e)}`);
@@ -1486,7 +1532,7 @@ async function runOneSetup(session: YachtSession): Promise<void> {
     }
     logger.info('yacht', `setup #${setupId} posted (${product}, ${setup.pair}, ${tfLabel(setup.timeframeSec)}, ${dirLabel(setup.direction)}, ${setup.confidence}%)`);
 
-    // 2a. Pre-warm the live mirror NOW, in the ~60s hold before entry (Part 4).
+    // 2a. Pre-warm the live mirror NOW, in the ~3-minute hold before entry (Part 4).
     //     Deliberately before the nudges: those are awaited and can take most of
     //     the hold on their own, so starting the prep first lets the WebSocket
     //     handshake and the balance read overlap with them instead of queueing
@@ -1529,7 +1575,7 @@ async function executeSetupChain(
     // in-process `runMartingaleCore` await died with it, and — because nothing
     // bounded this step — the engine sat on `status='executing'` forever, never
     // posted a confirmed WIN, and blocked the next setup for 24 minutes.
-    // Budget = the full ladder's expiries + 3 min of settle slack. The 60s entry
+    // Budget = the full ladder's expiries + the settle slack. The entry
     // hold is INSIDE the budget (it lives in the same wrapped promise), covered
     // by the slack.
     const chainTimeoutMs = (galeRounds + 1) * setup.timeframeSec * 1000 + CHAIN_SLACK_MS;
@@ -1865,6 +1911,7 @@ async function endSession(session: YachtSession): Promise<void> {
     } catch (e) {
         logger.error('yacht', `session-close post failed: ${errText(e)}`);
     }
+    await restoreWelcomePin();
     const closeSummary = session.product === 'private_trader'
         ? `${session.setups_done} setups shared`
         : `${wins} won / ${losses} lost`;
