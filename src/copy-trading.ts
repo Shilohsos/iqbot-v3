@@ -1394,7 +1394,11 @@ async function probeCopyFlow(row) {
             db.prepare('INSERT INTO copy_flows (telegram_id, detected_at, delta_native, kind, note) VALUES (?, ?, ?, ?, ?)')
                 .run(uid, Date.now(), delta, 'outflow', belowTarget ? `below ${mult}x — violation` : `above ${mult}x — permitted`);
             logger.warn('copy', `flow uid=${uid} [${ct.product}] unexplained outflow ${delta.toFixed(2)} (${belowTarget ? 'VIOLATION' : `above ${mult}x — allowed`})`);
-            if (belowTarget) { revokeCopyAccess(uid, 'early-withdrawal'); return; }
+            if (belowTarget) {
+                // 2026-09-20: auto-disconnect SUPPRESSED — cannot tell ordinary
+                // losses from withdrawals; alert the admin, resync below.
+                notifyAdminCopy('⚠ Copy probe: unexplained drop uid ' + uid + ' (' + delta.toFixed(2) + ') — no disconnect (auto-revoke suppressed, review)');
+            }
             db.prepare('UPDATE copy_trading SET expected_native = ? WHERE telegram_id = ?').run(bal.usable, uid);
             return;
         }
