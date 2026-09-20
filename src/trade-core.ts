@@ -38,6 +38,9 @@ export interface CoreOrder {
     balanceType?: 'demo' | 'live';
     telegramId?: number;
     martingaleRunId?: string;
+    /** Copy safety hooks. Checked again before each actual broker buy/retry. */
+    beforeSubmit?: (availableBalance: number) => boolean;
+    onAccepted?: (accepted: { tradeId: number; externalId?: number; acceptedAt: number; entryAt: number }) => void;
 }
 
 export interface CoreFinal {
@@ -148,9 +151,14 @@ export async function recoverFinal(
                 const m = opened.find(p => p.orderIds?.includes(optionId));
                 if (m?.externalId != null) ext = m.externalId;
             }
+            // A history endpoint may return a position whose external ID is
+            // unrelated to the order ID used as the lookup key. Require proof.
+            const sameOrder = (p: any) => !!p && (ext != null
+                ? p.externalId === ext && (!p.orderIds?.length || p.orderIds.includes(optionId))
+                : p.orderIds?.includes(optionId));
             if (ext != null) {
                 const live = opened.find(p => p.externalId === ext);
-                if (live?.status === 'closed') {
+                if (live?.status === 'closed' && sameOrder(live)) {
                     const f = finalFromPosition(live);
                     if (f) return { status: f.status, pnl: f.pnl, externalId: ext, settleSource: 'poll' };
                 }
@@ -162,7 +170,7 @@ export async function recoverFinal(
                 for (const id of [ext, optionId].filter((x): x is number => x != null && x > 0)) {
                     try {
                         const hp = await sdkTimeout(hist.getPositionHistory(id), `history#${id}`, 10_000);
-                        if (hp && (hp as any).status === 'closed') {
+                        if (sameOrder(hp) && (hp as any).status === 'closed') {
                             const f = finalFromPosition(hp as any);
                             if (f) return { status: f.status, pnl: f.pnl, externalId: ext ?? (hp as any).externalId, settleSource: 'history' };
                         }
@@ -174,7 +182,8 @@ export async function recoverFinal(
                 logger.warn('trade-core', `recoverFinal history lookup failed: ${e instanceof Error ? e.message : e}`);
             }
 
-            // 3) history page scan by amount + time window
+            // 3) History pages are exact-identity only. An amount/time guess is
+            // not settlement evidence; null leaves the result unresolved.
             try {
                 const facade = (positions as any).positionsHistoryFacade;
                 if (facade?.fetchPrevPage) {
@@ -184,18 +193,15 @@ export async function recoverFinal(
                 const list: any[] = typeof facade?.getPositions === 'function'
                     ? await sdkTimeout(Promise.resolve(facade.getPositions()), 'history-list', 10_000)
                     : [];
-                const windowStart = startedAtMs - 5_000;
-                const match = (Array.isArray(list) ? list : [])
+                const matches = (Array.isArray(list) ? list : [])
                     .filter(p => p && p.status === 'closed')
-                    .filter(p => Math.abs(Number(p.invest ?? p.amount ?? 0) - amount) < 0.021)
-                    .filter(p => {
-                        const ot = p.openTime ? new Date(p.openTime).getTime() : 0;
-                        return !ot || ot >= windowStart;
-                    })
-                    .sort((a, b) => {
-                        const ta = new Date(b.closeTime || 0).getTime() - new Date(a.closeTime || 0).getTime();
-                        return ta;
-                    })[0];
+                    .filter(sameOrder);
+                const identities = new Set(matches.map(p => p.externalId));
+                if (identities.size > 1) {
+                    logger.warn('trade-core', `unresolved history identity for optionId=${optionId}`);
+                    return null;
+                }
+                const match = matches[0];
                 if (match) {
                     const f = finalFromPosition(match);
                     if (f) return { status: f.status, pnl: f.pnl, externalId: match.externalId, settleSource: 'history' };
@@ -374,12 +380,16 @@ export async function settle(sdk: ClientSdk, order: CoreOrder): Promise<CoreFina
         if (!active.expirationTimes.includes(targetSize)) return noFill(`No ${targetSize}s instrument available for ${pair}`);
 
         const dir = direction === 'call' ? BlitzOptionsDirection.Call : BlitzOptionsDirection.Put;
-        let option: { id: number };
+        let option: { id: number; externalId?: number; openedAt?: Date };
+        let submittedAt = Date.now();
         let sentRate: number | string = 'n/a';
         try {
             // Read the rate IMMEDIATELY before the buy — no intervening await.
             // profitPercent is a METHOD on BlitzOptionsActive (index.ts:4699).
             sentRate = typeof (active as any).profitPercent === 'function' ? (active as any).profitPercent() : (active as any).profitPercent;
+            if (order.beforeSubmit && !order.beforeSubmit(Number(selectedBalance.amount)))
+                return noFill('submission_guard');
+            submittedAt = Date.now();
             option = await sdkTimeout(blitzOptions.buy(active, dir, targetSize, amount, selectedBalance), 'buy', 20_000);
         } catch (buyErr) {
             const msg = buyErr instanceof Error ? buyErr.message : String(buyErr);
@@ -408,6 +418,9 @@ export async function settle(sdk: ClientSdk, order: CoreOrder): Promise<CoreFina
                         // Re-read the FRESH active — the stale object still carries the old rate.
                         const freshActive = (blitzOptions as any).getActives().find((a: any) => normTicker(a.ticker) === normalizedInput ||
                             normTicker(a.localizationKey) === normalizedInput) ?? active;
+                        if (order.beforeSubmit && !order.beforeSubmit(Number(selectedBalance.amount)))
+                            return noFill('submission_guard');
+                        submittedAt = Date.now();
                         option = await sdkTimeout((blitzOptions as any).buy(freshActive, dir, targetSize, amount, selectedBalance), 'buy-retry', 20_000);
                         placed = true;
                         break;
@@ -436,17 +449,23 @@ export async function settle(sdk: ClientSdk, order: CoreOrder): Promise<CoreFina
             }
         }
         optionId = option!.id;
+        if (!Number.isFinite(optionId) || optionId <= 0) return noFill('unconfirmed_acceptance');
+        const acceptedAt = Date.now();
+        const brokerEntryAt = option!.openedAt?.getTime();
+        const entryAt = Math.min(acceptedAt, Number.isFinite(brokerEntryAt) ? brokerEntryAt! : submittedAt);
 
         const nowSql = new Date().toISOString();
         if (order.telegramId != null) {
             db.prepare(`INSERT OR IGNORE INTO users (telegram_id, created_at, last_used) VALUES (?, datetime('now'), datetime('now'))`)
                 .run(order.telegramId);
         }
-        db.prepare(`INSERT INTO trades (telegram_id, pair, direction, amount, status, trade_id, created_at, timeframe_sec)
-                     VALUES (?, ?, ?, ?, 'in_flight', ?, ?, ?)`)
-            .run(order.telegramId ?? null, pair, direction, amount, optionId, nowSql, order.timeframeSec ?? 60);
+        db.prepare(`INSERT INTO trades (telegram_id, pair, direction, amount, status, trade_id, created_at, timeframe_sec, external_id)
+                     VALUES (?, ?, ?, ?, 'in_flight', ?, ?, ?, ?)`)
+            .run(order.telegramId ?? null, pair, direction, amount, optionId, nowSql, order.timeframeSec ?? 60, option!.externalId ?? null);
 
-        let externalId: number | undefined;
+        let externalId: number | undefined = option!.externalId;
+        try { order.onAccepted?.({ tradeId: optionId, externalId, acceptedAt, entryAt }); }
+        catch (e) { logger.warn('trade-core', `acceptance callback failed for optionId=${optionId}: ${e instanceof Error ? e.message : e}`); }
         const optId = optionId;
         const saveExtId = setInterval(() => {
             const match = positions.getOpenedPositions().find(p => p.orderIds.includes(optId));
@@ -553,3 +572,4 @@ export async function settle(sdk: ClientSdk, order: CoreOrder): Promise<CoreFina
         };
     }
 }
+

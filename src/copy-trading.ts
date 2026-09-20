@@ -15,6 +15,7 @@
 // the account trades. The global ON/OFF flag in the admin panel gates the
 // fan-out (trading_active); h20 is unaffected by it.
 import { createSdk, executeTradeWithSdk, runMartingaleCore } from './trade.js';
+import { settle } from './trade-core.js';
 import { sdkPool } from './sdk-pool.js';
 import { analyzePairWithSdk } from './analysis.js';
 import { getProxyUrl } from './proxy.js';
@@ -111,6 +112,9 @@ const NGN_USD_ANCHOR = 500;
 const MIN_STAKE_NATIVE = { USD: 1, NGN: 1000 };
 /** Mirror buy+settle budget: 20s headroom + the trade window itself. */
 const COPY_MIRROR_TIMEOUT_MS = 20_000;
+const COPY_ENTRY_DEADLINE_SHORT_MS = 15_000;
+const COPY_ENTRY_DEADLINE_LONG_MS = 30_000;
+let copySubmissionGuardsReady = false;
 
 let notifier;
 export function setCopyNotifier(n) { notifier = n; }
@@ -223,6 +227,46 @@ export function initCopyDb() {
             );
         `);
     } catch (e) { console.error('[copy] controlled-engine migration failed', e); }
+    // Invalidate old mirror work even when a switch is turned off and back on
+    // while the queue is blocked. Existing UI setters need no changes.
+    copySubmissionGuardsReady = false;
+    try {
+        db.exec(`
+            CREATE TABLE IF NOT EXISTS copy_submission_versions (
+                telegram_id INTEGER PRIMARY KEY,
+                version INTEGER NOT NULL DEFAULT 0
+            );
+            INSERT OR IGNORE INTO copy_submission_versions VALUES (0, 0);
+            CREATE TRIGGER IF NOT EXISTS copy_guard_config_update AFTER UPDATE OF value ON config
+            WHEN NEW.key IN ('copy_active', 'copy_admin_plugged') AND OLD.value IS NOT NEW.value
+            BEGIN UPDATE copy_submission_versions SET version = version + 1 WHERE telegram_id = 0; END;
+            CREATE TRIGGER IF NOT EXISTS copy_guard_config_insert AFTER INSERT ON config
+            WHEN NEW.key IN ('copy_active', 'copy_admin_plugged')
+            BEGIN UPDATE copy_submission_versions SET version = version + 1 WHERE telegram_id = 0; END;
+            CREATE TRIGGER IF NOT EXISTS copy_guard_config_delete AFTER DELETE ON config
+            WHEN OLD.key IN ('copy_active', 'copy_admin_plugged')
+            BEGIN UPDATE copy_submission_versions SET version = version + 1 WHERE telegram_id = 0; END;
+            CREATE TRIGGER IF NOT EXISTS copy_guard_membership_update AFTER UPDATE OF status, product, started_at ON copy_trading
+            WHEN OLD.status IS NOT NEW.status OR OLD.product IS NOT NEW.product OR OLD.started_at IS NOT NEW.started_at
+            BEGIN
+                INSERT OR IGNORE INTO copy_submission_versions VALUES (NEW.telegram_id, 0);
+                UPDATE copy_submission_versions SET version = version + 1 WHERE telegram_id = NEW.telegram_id;
+            END;
+            CREATE TRIGGER IF NOT EXISTS copy_guard_membership_delete AFTER DELETE ON copy_trading
+            BEGIN
+                INSERT OR IGNORE INTO copy_submission_versions VALUES (OLD.telegram_id, 0);
+                UPDATE copy_submission_versions SET version = version + 1 WHERE telegram_id = OLD.telegram_id;
+            END;
+            CREATE TRIGGER IF NOT EXISTS copy_guard_user_update AFTER UPDATE OF copy_connection_type, h20, ssid ON users
+            WHEN OLD.copy_connection_type IS NOT NEW.copy_connection_type OR OLD.h20 IS NOT NEW.h20 OR OLD.ssid IS NOT NEW.ssid
+            BEGIN
+                INSERT OR IGNORE INTO copy_submission_versions VALUES (NEW.telegram_id, 0);
+                UPDATE copy_submission_versions SET version = version + 1 WHERE telegram_id = NEW.telegram_id;
+            END;
+        `);
+        copySubmissionGuardsReady = true;
+        logger.info('copy', 'submission guard migration complete');
+    } catch (e) { logger.warn('copy', `submission guard migration failed — mirrors blocked: ${e instanceof Error ? e.message : e}`); }
 }
 
 export function getCopyConfig() {
@@ -496,6 +540,37 @@ function mirrorAccessOk(telegramId, product) {
     return true;
 }
 
+function copySubmissionVersion(telegramId) {
+    if (!copySubmissionGuardsReady) return null;
+    try {
+        const global = db.prepare('SELECT version FROM copy_submission_versions WHERE telegram_id = 0').get();
+        if (!global) return null;
+        const user = db.prepare('SELECT version FROM copy_submission_versions WHERE telegram_id = ?').get(telegramId);
+        return `${global.version}:${user?.version ?? 0}`;
+    } catch { return null; }
+}
+
+function copyMirrorCanSubmit(telegramId, opts) {
+    if (opts.product !== 'copy') return isCopyConnectionActive(telegramId);
+    const version = copySubmissionVersion(telegramId);
+    if (!version || version !== opts.submissionVersion || getConfig('copy_active') !== '1' || getConfig('copy_admin_plugged') !== '1') {
+        logger.info('copy', `mirror skipped uid=${telegramId} run=${opts.runId ?? opts.setupId} round=${opts.round} — state changed`);
+        return false;
+    }
+    const row = db.prepare(`SELECT ct.product, u.copy_connection_type, u.h20 FROM copy_trading ct
+        JOIN users u ON u.telegram_id = ct.telegram_id WHERE ct.telegram_id = ? AND ct.status = 'active'`).get(telegramId);
+    if (!row || row.product !== 'copy' || row.copy_connection_type !== 'copy' || row.h20 === 1 || !isCopyAccessLive(telegramId)) {
+        logger.info('copy', `mirror skipped uid=${telegramId} run=${opts.runId ?? opts.setupId} round=${opts.round} — connection or access changed`);
+        return false;
+    }
+    if (!Number.isFinite(opts.entryDeadline) || Date.now() > opts.entryDeadline) {
+        const late = Number.isFinite(opts.entryDeadline) ? Math.max(0, (Date.now() - opts.entryDeadline) / 1000).toFixed(1) : 'unknown';
+        logger.info('copy', `stale mirror skipped (${late}s late) uid=${telegramId} run=${opts.runId ?? opts.setupId} round=${opts.round}`);
+        return false;
+    }
+    return true;
+}
+
 async function mirrorForUser(telegramId, copyAmount, opts) {
     const { pair, direction, timeframeSec, round, setupId, accountStake } = opts;
     const user = getUser(telegramId);
@@ -506,6 +581,7 @@ async function mirrorForUser(telegramId, copyAmount, opts) {
         return;
     }
     const prod = opts?.product === 'copy' ? 'copy' : 'compounding';
+    if (prod === 'copy' && !copyMirrorCanSubmit(telegramId, opts)) return;
     if (!mirrorAccessOk(telegramId, prod)) {
         logger.warn('copy', `copy mirror skipped uid=${telegramId} on ${pair} — access not live (${prod}: unsigned or code expired)`);
         return;
@@ -568,15 +644,20 @@ async function mirrorForUser(telegramId, copyAmount, opts) {
 
         logger.info('copy', `copy mirror uid=${telegramId}: ${pair} ${direction} ${isNGN ? '₦' : '$'}${stake.toFixed(2)} (round ${round} of setup ${setupId}; account staked $${accountStake}) tf=${timeframeSec}s`);
 
-        const result = await withTimeout(
-            executeTradeWithSdk(sdk, {
-                pair,
-                direction,
-                amount: stake,
-                timeframeSec,
-                balanceType: 'live',
-                telegramId,
-            }),
+        const order = {
+            pair,
+            direction,
+            amount: stake,
+            timeframeSec,
+            balanceType: 'live',
+            telegramId,
+        };
+        // Copy trades stay on the queue until TradeCore finishes tracking. A
+        // shorter Promise.race would release the SDK while a buy may continue.
+        const result = prod === 'copy'
+            ? await settle(sdk, { ...order, beforeSubmit: () => copyMirrorCanSubmit(telegramId, opts) })
+            : await withTimeout(
+            executeTradeWithSdk(sdk, order),
             COPY_MIRROR_TIMEOUT_MS + timeframeSec * 1000,
             `uid=${telegramId} ${pair}`,
         );
@@ -617,11 +698,9 @@ async function mirrorForUser(telegramId, copyAmount, opts) {
 export async function mirrorTradeToCopyUsers(opts) {
     const prod = opts?.product === 'copy' ? 'copy' : 'compounding';
     if (prod === 'copy') {
-        // Copy Trading gates: master switch + the admin must be plugged — but a
-        // ladder that is already OPEN finishes (its remaining rounds still fan
-        // out; activeLadder=true). No NEW runs start once unplugged.
+        // Admin recovery may finish after unplug, but no new follower order may.
         if (getConfig('copy_active') !== '1') return;
-        if (getConfig('copy_admin_plugged') !== '1' && opts?.activeLadder !== true) return;
+        if (getConfig('copy_admin_plugged') !== '1') return;
     } else {
         const cfg = getCopyConfig();
         if (!cfg.trading_active) return;
@@ -645,11 +724,16 @@ export async function mirrorTradeToCopyUsers(opts) {
     }
     const users = getConnectedCopyUsers(prod);
     if (!users.length) return;
+    const entryAt = Number(opts?.entryAt);
+    const entryDeadline = prod === 'copy' && Number.isFinite(entryAt)
+        ? entryAt + (opts.timeframeSec <= 60 ? COPY_ENTRY_DEADLINE_SHORT_MS : COPY_ENTRY_DEADLINE_LONG_MS)
+        : NaN;
     for (const u of users) {
+        const submissionVersion = prod === 'copy' ? copySubmissionVersion(u.telegram_id) : null;
         const prev = userQueues.get(u.telegram_id) || Promise.resolve();
         const next = prev
             .catch(() => { })
-            .then(() => mirrorForUser(u.telegram_id, u.copy_amount, Object.assign({}, opts, { product: prod, winRisk: win.risk, winJitter: win.jitter })))
+            .then(() => mirrorForUser(u.telegram_id, u.copy_amount, Object.assign({}, opts, { product: prod, winRisk: win.risk, winJitter: win.jitter, entryDeadline, submissionVersion })))
             .catch(e => logger.warn('copy', `copy mirror queue error uid=${u.telegram_id}: ${e instanceof Error ? e.message : e}`));
         userQueues.set(u.telegram_id, next);
     }
@@ -1337,6 +1421,12 @@ async function runCopySetup() {
         }
         const best = await copyAnalyzeBest(sdk);
         if (!best) return false; // nothing cleared the filter — wait for the next cycle
+        if (getConfig('copy_active') !== '1' || getConfig('copy_admin_plugged') !== '1') {
+            logger.info('copy-trade', 'run skipped — state changed during analysis');
+            return false;
+        }
+        const runVersion = copySubmissionVersion(0);
+        if (!runVersion) return false;
 
         copyAdminFailures = 0;
         const display = best.display;
@@ -1344,28 +1434,37 @@ async function runCopySetup() {
         const maxStake = Math.round(bal * 0.9 * 100) / 100;
         let stake = Math.min(adminStakeFromConfidence(display), maxStake);
         let round = 0;
+        let acceptedRun = false;
         while (round <= COPY_GALE_ROUNDS) {
+            const currentBalance = await copyAdminBalance(sdk);
+            const currentCap = Math.round((currentBalance ?? 0) * 0.9 * 100) / 100;
+            if (currentBalance == null || !(stake >= LIVE_MIN_STAKE) || stake > currentCap) {
+                logger.info('copy-trade', `run #${runId} round ${round} ended — stake ${stake} exceeds current usable cap ${currentCap}`);
+                break;
+            }
             logger.info('copy-trade', `run #${runId}: ${best.pair} ${best.direction} $${stake.toFixed(2)} tf=${best.tf}s (round ${round}, display ${display}%)`);
-            // Fan out AT ENTRY (Master 2026-09-19): copiers fire immediately —
-            // seconds behind the admin's entry, not after the round settles.
-            void mirrorTradeToCopyUsers({
-                product: 'copy',
-                pair: best.pair,
-                direction: best.direction,
-                timeframeSec: best.tf,
-                confidence: display,
-                round: round,
-                setupId: runId,
-                accountStake: stake,
-                activeLadder: true,
-            });
             let result;
             try {
-                result = await withTimeout(
-                    executeTradeWithSdk(sdk, { pair: best.pair, direction: best.direction, amount: stake, timeframeSec: best.tf, balanceType: 'live', telegramId: 0 }),
-                    best.tf * 1000 + 120_000,
-                    `copy run ${best.pair}`,
-                );
+                result = await settle(sdk, {
+                    pair: best.pair, direction: best.direction, amount: stake, timeframeSec: best.tf, balanceType: 'live', telegramId: 0,
+                    beforeSubmit: availableBalance => {
+                        if (!acceptedRun && (getConfig('copy_active') !== '1' || getConfig('copy_admin_plugged') !== '1' || copySubmissionVersion(0) !== runVersion)) return false;
+                        const cap = Math.round(availableBalance * 0.9 * 100) / 100;
+                        if (!Number.isFinite(cap) || stake > cap) {
+                            logger.info('copy-trade', `run #${runId} round ${round} ended — unaffordable at submission`);
+                            return false;
+                        }
+                        return true;
+                    },
+                    onAccepted: accepted => {
+                        acceptedRun = true;
+                        void mirrorTradeToCopyUsers({
+                            product: 'copy', pair: best.pair, direction: best.direction,
+                            timeframeSec: best.tf, confidence: display, round,
+                            setupId: runId, runId, accountStake: stake, entryAt: accepted.entryAt,
+                        }).catch(e => logger.warn('copy', `accepted run #${runId} fan-out failed: ${e instanceof Error ? e.message : e}`));
+                    },
+                });
             } catch (e) {
                 logger.warn('copy-trade', `run #${runId} round ${round} failed: ${e instanceof Error ? e.message : e}`);
                 break;
@@ -1483,4 +1582,5 @@ export function startCopyEngine() {
     if (timer && timer.unref) timer.unref();
     logger.info('copy', '[copy-engine] controlled engine ticker armed (60s)');
 }
+
 
