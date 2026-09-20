@@ -21,6 +21,9 @@ export interface TradeRequest {
     timeframeSec?: number;
     balanceType?: 'demo' | 'live';
     telegramId?: number;
+    /** Copy-safety hooks — forwarded to TradeCore (checked before each buy). */
+    beforeSubmit?: (availableBalance: number) => boolean;
+    onAccepted?: (accepted: { tradeId: number; externalId?: number; acceptedAt: number; entryAt: number }) => void;
 }
 
 /** Legacy shape kept for bot/auto compatibility. NO_FILL maps from core. TIMEOUT never emitted. */
@@ -65,6 +68,8 @@ export async function executeTradeWithSdk(sdk: ClientSdk, trade: TradeRequest): 
         balanceType: trade.balanceType,
         telegramId: trade.telegramId,
         martingaleRunId: trade.martingaleRunId,
+        beforeSubmit: trade.beforeSubmit,
+        onAccepted: trade.onAccepted,
     });
     return coreToLegacy(final);
 }

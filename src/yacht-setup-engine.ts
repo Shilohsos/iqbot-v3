@@ -140,8 +140,13 @@ const MIRROR_RESUME_GRACE_MS = 5 * 60_000;
  *  can be in flight at once — each on its own socket. This bounds that growth;
  *  hitting it skips one mirror with a WARN, it never blocks a setup. */
 const MIRROR_MAX_CONCURRENT_LADDERS = 4;
-/** Config key holding the one in-flight ladder's state for restart resume. */
-const MIRROR_LADDER_KEY = 'yacht_mirror_ladder';
+/** Config-key prefix holding in-flight ladder state for restart resume. One key
+ *  per ladder (2026-09-20) — concurrent ladders used to share a single key, so
+ *  finishing ladder A erased ladder B's recovery state. */
+const MIRROR_LADDER_PREFIX = 'yacht_mirror_ladder:';
+/** Pre-fix single key; cleared once on boot so it can never double-fire. */
+const MIRROR_LADDER_KEY_LEGACY = 'yacht_mirror_ladder';
+function ladderKeyFor(setupId: number): string { return `${MIRROR_LADDER_PREFIX}${setupId}`; }
 
 const CHANNEL_ID_DEFAULT = '-1004351740042';
 const YACHT_CLUB_LINK = 'https://t.me/xyachtclub';
@@ -927,6 +932,8 @@ interface MirrorLadderState {
     round: number;
     /** Display confidence of the setup — drives the Compounding stake. */
     confidence?: number;
+    /** The exact stake this round was about to buy — keys orphan matching. */
+    stake?: number;
     updatedAt: number;
 }
 
@@ -939,12 +946,26 @@ interface MirrorLadderState {
  *  therefore exactly the round that was in flight when the process died. */
 function findOrphanedMirrorTrade(st: MirrorLadderState): { trade_id: number; amount: number; created_at: string } | null {
     try {
+        // 2026-09-20: match the ladder's OWN round — pair + direction + (when the
+        // state carries it) the exact stake, inside a bounded window. An
+        // ambiguous match resolves to nothing rather than a guess: concurrent
+        // ladders on the same pair used to cross-resolve.
         const since = new Date(st.updatedAt - 60_000).toISOString();
-        return (db.prepare(`
+        const until = new Date(st.updatedAt + (st.timeframeSec * 1000) + 120_000).toISOString();
+        let rows = db.prepare(`
             SELECT trade_id, amount, created_at FROM trades
-            WHERE telegram_id IS NULL AND pair = ? AND trade_id IS NOT NULL AND created_at >= ?
-            ORDER BY id DESC LIMIT 1
-        `).get(st.pair, since) as { trade_id: number; amount: number; created_at: string } | undefined) ?? null;
+            WHERE telegram_id IS NULL AND pair = ? AND direction = ? AND trade_id IS NOT NULL
+              AND created_at >= ? AND created_at <= ?
+            ORDER BY id DESC LIMIT 3
+        `).all(st.pair, st.direction, since, until) as Array<{ trade_id: number; amount: number; created_at: string }>;
+        if (Number.isFinite(st.stake) && (st.stake as number) > 0)
+            rows = rows.filter(r => Math.abs(Number(r.amount) - (st.stake as number)) < 0.011);
+        if (!rows.length) return null;
+        if (rows.length > 1) {
+            logger.warn('yacht', `live mirror orphan ambiguous (${rows.length} candidates) for setup ${st.setupId} — resolving nothing`);
+            return null;
+        }
+        return rows[0];
     } catch (e) {
         logger.warn('yacht', `live mirror orphan lookup failed: ${errText(e)}`);
         return null;
@@ -956,24 +977,30 @@ function findOrphanedMirrorTrade(st: MirrorLadderState): { trade_id: number; amo
 let activeLadders = 0;
 
 function saveLadderState(s: MirrorLadderState): void {
-    try { setConfig(MIRROR_LADDER_KEY, JSON.stringify(s)); }
+    try { setConfig(ladderKeyFor(s.setupId), JSON.stringify(s)); }
     catch (e) { logger.warn('yacht', `live mirror ladder state save failed: ${errText(e)}`); }
 }
 
-function loadLadderState(): MirrorLadderState | null {
+/** Every ladder state left behind by a previous process (one key per ladder). */
+function loadLadderStates(): MirrorLadderState[] {
+    const out: MirrorLadderState[] = [];
     try {
-        const raw = getConfig(MIRROR_LADDER_KEY);
-        if (!raw) return null;
-        const s = JSON.parse(raw) as MirrorLadderState;
-        return (s && typeof s.setupId === 'number' && typeof s.pair === 'string') ? s : null;
+        const rows = db.prepare('SELECT value FROM config WHERE key LIKE ?').all(`${MIRROR_LADDER_PREFIX}%`) as Array<{ value: string }>;
+        for (const r of rows) {
+            if (!r.value) continue;
+            try {
+                const s = JSON.parse(r.value) as MirrorLadderState;
+                if (s && typeof s.setupId === 'number' && typeof s.pair === 'string') out.push(s);
+            } catch { /* skip unreadable entries */ }
+        }
     } catch (e) {
-        logger.warn('yacht', `live mirror ladder state unreadable: ${errText(e)}`);
-        return null;
+        logger.warn('yacht', `live mirror ladder state scan failed: ${errText(e)}`);
     }
+    return out;
 }
 
-function clearLadderState(): void {
-    try { setConfig(MIRROR_LADDER_KEY, ''); }
+function clearLadderState(setupId: number): void {
+    try { setConfig(ladderKeyFor(setupId), ''); }
     catch (e) { logger.warn('yacht', `live mirror ladder state clear failed: ${errText(e)}`); }
 }
 
@@ -997,7 +1024,7 @@ type MirrorResult = Awaited<ReturnType<typeof executeTradeWithSdk>>;
  *  trade-core only touches the users table when it is non-null, and the trades
  *  row it writes then carries telegram_id NULL, which the yacht recovery query
  *  (`WHERE telegram_id = 0`) and the user recovery (`JOIN users`) both exclude. */
-async function mirrorBuy(sdk: YachtSdk, setup: GeneratedSetup, amount: number): Promise<MirrorResult> {
+async function mirrorBuy(sdk: YachtSdk, setup: GeneratedSetup, amount: number, hooks?: { onAccepted?: (accepted: { tradeId: number; externalId?: number; acceptedAt: number; entryAt: number }) => void }): Promise<MirrorResult> {
     const result = await withTimeout(
         executeTradeWithSdk(sdk, {
             pair: setup.pair,
@@ -1005,6 +1032,7 @@ async function mirrorBuy(sdk: YachtSdk, setup: GeneratedSetup, amount: number): 
             amount,
             timeframeSec: setup.timeframeSec,
             balanceType: 'live',
+            onAccepted: hooks?.onAccepted,
         }),
         LIVE_MIRROR_TIMEOUT_MS + setup.timeframeSec * 1000,
         'live mirror',
@@ -1072,35 +1100,37 @@ async function runMirrorLadder(
             saveLadderState({
                 setupId, pair: setup.pair, direction: setup.direction,
                 timeframeSec: setup.timeframeSec, round, confidence: setup.confidence,
+                stake,
                 updatedAt: Date.now(),
             });
 
             let result: MirrorResult;
             try {
-                result = await mirrorBuy(sdk, setup, stake);
+                // Compounding fan-out AT ENTRY (2026-09-20): mirrors fire seconds
+                // behind THIS round's accepted entry — the same contract as Copy
+                // Trading. One fan-out per accepted buy; NO_FILL / ERROR rounds
+                // never fan out because nothing was placed. Fire-and-forget; it
+                // can never hold this ladder.
+                result = await mirrorBuy(sdk, setup, stake, {
+                    onAccepted: (acc) => {
+                        void mirrorTradeToCopyUsers({
+                            pair: setup.pair,
+                            direction: setup.direction,
+                            timeframeSec: setup.timeframeSec,
+                            confidence: setup.confidence,
+                            round,
+                            setupId,
+                            accountStake: stake,
+                            entryAt: acc.entryAt,
+                        });
+                    },
+                });
             } catch (e) {
                 // The buy itself threw (timeout, dead socket). Nothing is known
                 // about whether an order landed, so the ladder stops here rather
                 // than risking a double entry on the same round.
                 logger.warn('yacht', `live mirror ladder aborted ${setup.pair} — round ${round} failed: ${errText(e)}`);
                 return;
-            }
-
-            // Compounding fan-out (DIRECTIVE-COPY-MIRROR-COMPOUNDING): every settled
-            // round the account really took is mirrored to plugged copy users
-            // at this same moment. Their stakes compound on their own balance
-            // with the same ladder structure. NO_FILL / ERROR never fan out —
-            // nothing was placed. Fire-and-forget; can never hold this ladder.
-            if (result.status === 'WIN' || result.status === 'LOSS' || result.status === 'TIE') {
-                void mirrorTradeToCopyUsers({
-                    pair: setup.pair,
-                    direction: setup.direction,
-                    timeframeSec: setup.timeframeSec,
-                    confidence: setup.confidence,
-                    round,
-                    setupId,
-                    accountStake: stake,
-                });
             }
 
             if (result.status === 'WIN') {
@@ -1147,7 +1177,7 @@ async function runMirrorLadder(
             logger.warn('yacht', `live mirror ladder aborted ${setup.pair} — attempt ceiling (${MIRROR_LADDER_MAX_ATTEMPTS}) reached`);
         }
     } finally {
-        clearLadderState();
+        clearLadderState(setupId);
     }
 }
 
@@ -1160,11 +1190,9 @@ async function runMirrorLadder(
  *  doubling into a signal that expired an hour ago is a large bet on nothing,
  *  not a recovery — so past MIRROR_RESUME_GRACE_MS the ladder is abandoned and
  *  the next setup starts at base. A pm2 restart takes seconds and resumes. */
-async function resumeMirrorLadder(): Promise<void> {
-    const st = loadLadderState();
-    if (!st) return;
-    // One attempt only, whatever happens below.
-    clearLadderState();
+async function resumeOneMirrorLadder(st: MirrorLadderState): Promise<void> {
+    // One attempt only, whatever happens below — keyed to THIS ladder.
+    clearLadderState(st.setupId);
 
     logger.warn('yacht', `live mirror ladder from setup ${st.setupId} (${st.pair}, round ${st.round}) survived a restart — resolving`);
     let sdk: YachtSdk | null = null;
@@ -1226,6 +1254,17 @@ async function resumeMirrorLadder(): Promise<void> {
     } finally {
         activeLadders--;
         if (sdk) await shutdownMirrorSdk(sdk);
+    }
+}
+
+/** Resume EVERY ladder a previous process left behind (one key per ladder).
+ *  A legacy single-key state is cleared so it can never double-fire. */
+async function resumeMirrorLadders(): Promise<void> {
+    try { if (getConfig(MIRROR_LADDER_KEY_LEGACY)) setConfig(MIRROR_LADDER_KEY_LEGACY, ''); } catch { /* */ }
+    const states = loadLadderStates();
+    if (states.length) logger.warn('yacht', `live mirror scan: ${states.length} ladder(s) survived a restart — resolving`);
+    for (const st of states) {
+        await resumeOneMirrorLadder(st);
     }
 }
 
@@ -1487,6 +1526,20 @@ async function executeSetupChain(
     let lastTradeId: string | null = null;
     let outcome: Awaited<ReturnType<typeof runMartingaleCore>> | null = null;
 
+    /** Close a setup that neither won nor lost: no trade ever filled. */
+    const finishVoid = async (reason: string): Promise<void> => {
+        updateYachtSetup(setupId, { status: 'aborted', result_rounds: null, closed_at: new Date().toISOString() });
+        bumpYachtSessionCounters(session.id, 'none');
+        logger.warn('yacht', `setup ${setupId} voided — ${reason}, no trade was placed`);
+        await notifyAdminOnce(`void-${setupId}`, `Yacht engine: setup ${setupId} (${setup.pair}, ${tfLabel(setup.timeframeSec)}) was voided — ${reason}. No trade was placed, so it counts as neither a win nor a loss.`);
+        try {
+            await postToChannelRetry(voidCard(product, setup.pair, setup.timeframeSec, setup.direction));
+        } catch (e) {
+            logger.error('yacht', `void post failed for setup ${setupId}: ${errText(e)}`);
+        }
+        nextSetupAt = Date.now() + SETUP_PAUSE_MS;
+    };
+
     try {
         outcome = await withTimeout((async () => {
             // Entry hold — the trade fires when the card's countdown reaches 0:00.
@@ -1527,24 +1580,7 @@ async function executeSetupChain(
         })(), chainTimeoutMs, chainLabel);
     } catch (e) {
         cancelCountdown();
-    // A chain that never placed a single trade is NOT a loss. NO_FILL / ERROR
-    // before the first fill means no money moved: the broker had no instrument
-    // for this pair/timeframe (BTCUSD-OTC 30S, 2026-09-17), or the socket died
-    // before the buy. Void it — neither win nor loss — and close the card with a
-    // neutral line instead of a loss that never happened.
-    if (lastTradeId === null && outcome.status !== 'WIN' && outcome.status !== 'LOSS' && outcome.status !== 'TIE') {
-        updateYachtSetup(setupId, { status: 'aborted', result_rounds: null, closed_at: new Date().toISOString() });
-        bumpYachtSessionCounters(session.id, 'none');
-        logger.warn('yacht', `setup ${setupId} voided — ${outcome.status}, no trade was placed (${outcome.error ?? 'no error text'})`);
-        await notifyAdminOnce(`void-${setupId}`, `Yacht engine: setup ${setupId} (${setup.pair}, ${tfLabel(setup.timeframeSec)}) was voided — ${outcome.error ?? outcome.status}. No trade was placed, so it counts as neither a win nor a loss.`);
-        try {
-            await postToChannelRetry(voidCard(product, setup.pair, setup.timeframeSec, setup.direction));
-        } catch (e) {
-            logger.error('yacht', `void post failed for setup ${setupId}: ${errText(e)}`);
-        }
-        nextSetupAt = Date.now() + SETUP_PAUSE_MS;
-        return;
-    }
+        const chainStatus = outcome ? outcome.status : null;
         if (errText(e) === `${chainLabel} timeout`) {
             // The chain blew its budget. Do NOT fabricate a result and do NOT
             // pause the engine: resolve the real outcome from position history
@@ -1561,6 +1597,19 @@ async function executeSetupChain(
             nextSetupAt = Date.now() + SETUP_PAUSE_MS;
             return;
         }
+        // A chain that never placed a single trade is NOT a loss. NO_FILL / ERROR
+        // before the first fill means no money moved: the broker had no instrument
+        // for this pair/timeframe (BTCUSD-OTC 30S, 2026-09-17), or the socket died
+        // before the buy. Void it — neither win nor loss — and close the card with
+        // a neutral line instead of a loss that never happened.
+        // (2026-09-20: `outcome` is null on any THROWN chain — reading its fields
+        // here used to crash the handler and strand the setup on `executing`.)
+        if (lastTradeId === null && chainStatus !== 'WIN' && chainStatus !== 'LOSS' && chainStatus !== 'TIE') {
+            await finishVoid(chainStatus
+                ? `${chainStatus}${outcome && outcome.error ? ` (${outcome.error})` : ''}`
+                : 'chain failed before the first fill');
+            return;
+        }
         dropYachtSdk(errText(e));
         updateYachtSetup(setupId, { status: 'aborted', trade_id: lastTradeId, closed_at: new Date().toISOString() });
         // The card is already in the channel; advance the counter so the session
@@ -1571,6 +1620,14 @@ async function executeSetupChain(
         return;
     }
     cancelCountdown();
+
+    // 2026-09-20: a RETURNED non-settled outcome (NO_FILL / ERROR) with zero
+    // fills is not a loss — nothing was placed on any round. Void it instead of
+    // posting a loss card that never happened.
+    if (lastTradeId === null && outcome.status !== 'WIN' && outcome.status !== 'LOSS' && outcome.status !== 'TIE') {
+        await finishVoid(`${outcome.status}${outcome.error ? ` (${outcome.error})` : ''}`);
+        return;
+    }
 
     // 5. Settle. WIN/TIE count as a win; everything else is a loss.
     const won = outcome.status === 'WIN' || outcome.status === 'TIE';
@@ -1746,7 +1803,7 @@ async function runBootScan(): Promise<void> {
     // take minutes to finish, and the boot scan (which holds engineBusy) must
     // not wait on it. Only reached when the engine is armed — a paused engine
     // never resumes a live ladder on its own.
-    void resumeMirrorLadder();
+    void resumeMirrorLadders();
     // `posted` rows left by a restart: resume the one still inside its countdown,
     // void anything whose entry has already passed.
     await sweepPostedSetups();

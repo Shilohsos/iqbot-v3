@@ -15,7 +15,7 @@
 // the account trades. The global ON/OFF flag in the admin panel gates the
 // fan-out (trading_active); h20 is unaffected by it.
 import { createSdk, executeTradeWithSdk, runMartingaleCore } from './trade.js';
-import { settle } from './trade-core.js';
+import { settle, recoverFinal } from './trade-core.js';
 import { sdkPool } from './sdk-pool.js';
 import { analyzePairWithSdk } from './analysis.js';
 import { getProxyUrl } from './proxy.js';
@@ -179,6 +179,55 @@ export function initCopyDb() {
     } catch (e) { console.error('[copy] users migration failed', e); }
 
     // ── Controlled-engine migrations (2026-09-10) ──
+    // 2026-09-20: tables are CREATED FIRST, then altered — the old order ran an
+    // ALTER on copy_bursts before its CREATE, so a fresh database threw, the
+    // catch swallowed the rest of the block and every boot repeated the failure.
+    try {
+        db.exec(`
+            CREATE TABLE IF NOT EXISTS copy_session_plan (
+                session_id INTEGER PRIMARY KEY,
+                slots TEXT NOT NULL,
+                created_at INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS copy_bursts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id INTEGER NOT NULL,
+                telegram_id INTEGER NOT NULL,
+                total INTEGER NOT NULL,
+                done INTEGER DEFAULT 0,
+                status TEXT DEFAULT 'pending',
+                created_at INTEGER NOT NULL,
+                product TEXT DEFAULT 'compounding',
+                UNIQUE(session_id, telegram_id)
+            );
+            CREATE TABLE IF NOT EXISTS copy_flows (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                telegram_id INTEGER NOT NULL,
+                detected_at INTEGER NOT NULL,
+                delta_native REAL NOT NULL,
+                kind TEXT NOT NULL,
+                note TEXT
+            );
+            CREATE TABLE IF NOT EXISTS copy_runs (
+                run_id INTEGER PRIMARY KEY,
+                pair TEXT NOT NULL,
+                direction TEXT NOT NULL,
+                tf_sec INTEGER NOT NULL,
+                base_stake REAL NOT NULL,
+                round INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'open',
+                updated_at INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS copy_dispatches (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id INTEGER NOT NULL,
+                telegram_id INTEGER NOT NULL,
+                round INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'queued',
+                created_at INTEGER NOT NULL
+            );
+        `);
+    } catch (e) { console.error('[copy] table creation failed', e); }
     try {
         // Product split (2026-09-19): 'compounding' (default) or 'copy'.
         const pcols = db.prepare('PRAGMA table_info(copy_trading)').all().map(r => r.name);
@@ -194,6 +243,8 @@ export function initCopyDb() {
             db.exec('ALTER TABLE copy_trading ADD COLUMN baseline_native REAL');
         if (!tcols.includes('expected_native'))
             db.exec('ALTER TABLE copy_trading ADD COLUMN expected_native REAL');
+        if (!tcols.includes('last_accounted_trade_id'))
+            db.exec('ALTER TABLE copy_trading ADD COLUMN last_accounted_trade_id INTEGER');
         const ucols2 = db.prepare('PRAGMA table_info(users)').all().map(r => r.name);
         if (!ucols2.includes('copy_signed_at'))
             db.exec('ALTER TABLE users ADD COLUMN copy_signed_at INTEGER');
@@ -201,31 +252,6 @@ export function initCopyDb() {
             db.exec('ALTER TABLE users ADD COLUMN copy_baseline_native REAL');
         if (!ucols2.includes('copy_baseline_currency'))
             db.exec('ALTER TABLE users ADD COLUMN copy_baseline_currency TEXT');
-        db.exec(`
-            CREATE TABLE IF NOT EXISTS copy_session_plan (
-                session_id INTEGER PRIMARY KEY,
-                slots TEXT NOT NULL,
-                created_at INTEGER NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS copy_bursts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id INTEGER NOT NULL,
-                telegram_id INTEGER NOT NULL,
-                total INTEGER NOT NULL,
-                done INTEGER DEFAULT 0,
-                status TEXT DEFAULT 'pending',
-                created_at INTEGER NOT NULL,
-                UNIQUE(session_id, telegram_id)
-            );
-            CREATE TABLE IF NOT EXISTS copy_flows (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                telegram_id INTEGER NOT NULL,
-                detected_at INTEGER NOT NULL,
-                delta_native REAL NOT NULL,
-                kind TEXT NOT NULL,
-                note TEXT
-            );
-        `);
     } catch (e) { console.error('[copy] controlled-engine migration failed', e); }
     // Invalidate old mirror work even when a switch is turned off and back on
     // while the queue is blocked. Existing UI setters need no changes.
@@ -313,11 +339,12 @@ export async function startCopying(telegramId, copyAmount = 0, product = 'compou
         }
     }
 
-    // Balance requirement (non-privileged): Compounding $200 · Copy Trading $500.
+    // Balance requirement (non-privileged): Compounding $200 (or an active
+    // access token, mirroring the UI) · Copy Trading $500.
     if (!isPriv) {
         const fundedUsd = user.funded_balance_usd ?? 0;
         const minBal = prod === 'copy' ? COPY_TRADE_MIN_BALANCE : COPY_MIN_BALANCE;
-        if (fundedUsd < minBal) {
+        if (fundedUsd < minBal && !(prod === 'compounding' && compAccessTokenOk(user))) {
             const label = prod === 'copy' ? 'Copy Trading' : 'Compounding';
             return { ok: false, error: `Minimum balance for ${label} is $${minBal}. Your balance: ${fundedUsd}` };
         }
@@ -360,6 +387,18 @@ export async function startCopying(telegramId, copyAmount = 0, product = 'compou
             started_at = excluded.started_at,
             product = excluded.product
     `).run(telegramId, amt, Date.now(), prod);
+    // 2026-09-20: seed the row's own baseline at enrollment. Its absence made
+    // the withdraw probe treat any unexplained outflow as a violation and let
+    // the first settlements post onto a zero expected-balance.
+    if (prod === 'compounding') {
+        try {
+            const cur = user.currency || 'USD';
+            const funded = Number(user.funded_balance_usd) || 0;
+            const baselineNative = funded > 0 ? (cur === 'NGN' ? funded * NGN_USD_ANCHOR : funded) : 0;
+            if (baselineNative > 0)
+                db.prepare('UPDATE copy_trading SET baseline_native = COALESCE(NULLIF(baseline_native, 0), ?) WHERE telegram_id = ?').run(baselineNative, telegramId);
+        } catch (e) { /* best-effort */ }
+    }
     logger.info('copy', `User ${telegramId} started ${prod} (controlled engine, amount field=${amt})`);
     return { ok: true };
 }
@@ -540,6 +579,25 @@ function mirrorAccessOk(telegramId, product) {
     return true;
 }
 
+function compAccessTokenOk(user) {
+    // Compounding accepts an active access token in place of the $200 balance —
+    // UI parity (2026-09-20). Mirrors bot.ts hasCompoundingToken().
+    if (!user)
+        return false;
+    try {
+        const u = user as Record<string, unknown>;
+        const lvl = u.access_level;
+        if (lvl && lvl !== 'signals') {
+            const exp = u.access_expires_at ? Date.parse(String(u.access_expires_at)) : NaN;
+            if (!Number.isFinite(exp) || exp > Date.now())
+                return true;
+        }
+        if (u.promo_product && u.promo_access_until && Date.parse(String(u.promo_access_until)) > Date.now())
+            return true;
+    } catch (e) { /* */ }
+    return false;
+}
+
 function copySubmissionVersion(telegramId) {
     if (!copySubmissionGuardsReady) return null;
     try {
@@ -551,16 +609,31 @@ function copySubmissionVersion(telegramId) {
 }
 
 function copyMirrorCanSubmit(telegramId, opts) {
-    if (opts.product !== 'copy') return isCopyConnectionActive(telegramId);
+    // 2026-09-20: the full submission guard covers BOTH products — state version,
+    // engine switches, route/connection, live access and the entry deadline —
+    // rechecked at queue entry AND again immediately before every buy/retry.
+    const prod = opts?.product === 'copy' ? 'copy' : 'compounding';
     const version = copySubmissionVersion(telegramId);
-    if (!version || version !== opts.submissionVersion || getConfig('copy_active') !== '1' || getConfig('copy_admin_plugged') !== '1') {
+    if (!version || version !== opts.submissionVersion) {
         logger.info('copy', `mirror skipped uid=${telegramId} run=${opts.runId ?? opts.setupId} round=${opts.round} — state changed`);
+        return false;
+    }
+    if (getConfig('copy_active') !== '1') {
+        logger.info('copy', `mirror skipped uid=${telegramId} run=${opts.runId ?? opts.setupId} round=${opts.round} — engine off`);
+        return false;
+    }
+    if (prod === 'copy' && getConfig('copy_admin_plugged') !== '1') {
+        logger.info('copy', `mirror skipped uid=${telegramId} run=${opts.runId ?? opts.setupId} round=${opts.round} — admin unplugged`);
         return false;
     }
     const row = db.prepare(`SELECT ct.product, u.copy_connection_type, u.h20 FROM copy_trading ct
         JOIN users u ON u.telegram_id = ct.telegram_id WHERE ct.telegram_id = ? AND ct.status = 'active'`).get(telegramId);
-    if (!row || row.product !== 'copy' || row.copy_connection_type !== 'copy' || row.h20 === 1 || !isCopyAccessLive(telegramId)) {
-        logger.info('copy', `mirror skipped uid=${telegramId} run=${opts.runId ?? opts.setupId} round=${opts.round} — connection or access changed`);
+    if (!row || (row.product || 'compounding') !== prod || row.copy_connection_type !== 'copy' || row.h20 === 1) {
+        logger.info('copy', `mirror skipped uid=${telegramId} run=${opts.runId ?? opts.setupId} round=${opts.round} — connection or route changed`);
+        return false;
+    }
+    if (prod === 'copy' && !isCopyAccessLive(telegramId)) {
+        logger.info('copy', `mirror skipped uid=${telegramId} run=${opts.runId ?? opts.setupId} round=${opts.round} — access not live`);
         return false;
     }
     if (!Number.isFinite(opts.entryDeadline) || Date.now() > opts.entryDeadline) {
@@ -581,7 +654,10 @@ async function mirrorForUser(telegramId, copyAmount, opts) {
         return;
     }
     const prod = opts?.product === 'copy' ? 'copy' : 'compounding';
-    if (prod === 'copy' && !copyMirrorCanSubmit(telegramId, opts)) return;
+    if (!copyMirrorCanSubmit(telegramId, opts)) {
+        if (prod === 'copy' && opts.runId != null) markDispatch(opts.runId, telegramId, opts.round ?? 0, 'skipped');
+        return;
+    }
     if (!mirrorAccessOk(telegramId, prod)) {
         logger.warn('copy', `copy mirror skipped uid=${telegramId} on ${pair} — access not live (${prod}: unsigned or code expired)`);
         return;
@@ -649,28 +725,37 @@ async function mirrorForUser(telegramId, copyAmount, opts) {
             direction,
             amount: stake,
             timeframeSec,
-            balanceType: 'live',
+            balanceType: 'live' as const,
             telegramId,
         };
-        // Copy trades stay on the queue until TradeCore finishes tracking. A
-        // shorter Promise.race would release the SDK while a buy may continue.
-        const result = prod === 'copy'
-            ? await settle(sdk, { ...order, beforeSubmit: () => copyMirrorCanSubmit(telegramId, opts) })
-            : await withTimeout(
-            executeTradeWithSdk(sdk, order),
-            COPY_MIRROR_TIMEOUT_MS + timeframeSec * 1000,
-            `uid=${telegramId} ${pair}`,
-        );
+        // 2026-09-20: BOTH products stay on the queue until TradeCore finishes
+        // tracking (the old Promise.race released the SDK while a buy could still
+        // submit), and both revalidate state + affordability immediately before
+        // the broker buy.
+        if (prod === 'copy' && opts.runId != null) markDispatch(opts.runId, telegramId, opts.round ?? 0, 'submitted');
+        const result = await settle(sdk, {
+            ...order,
+            beforeSubmit: (availableBalance: number) => {
+                if (!copyMirrorCanSubmit(telegramId, opts)) return false;
+                const cap = Math.round(availableBalance * 0.9 * 100) / 100;
+                if (!(stake <= cap)) {
+                    logger.info('copy', `mirror skipped uid=${telegramId} run=${opts.runId ?? opts.setupId} round=${opts.round} — stake ${stake.toFixed(2)} above usable ${cap.toFixed(2)}`);
+                    return false;
+                }
+                return true;
+            },
+        });
 
         // Only settled outcomes reach the user. NO_FILL / ERROR mean no trade
         // was placed (or it is unconfirmed) — nothing lost, nothing to say.
-        if (result.status === 'NO_FILL' || result.status === 'ERROR') {
+        if (String(result.status) === 'NO_FILL' || String(result.status) === 'ERROR') {
             logger.info('copy', `copy mirror uid=${telegramId} on ${pair} — ${result.status} (${result.error ?? 'no fill'}), silent`);
             return;
         }
         // Silent by design (controlled engine): copiers get no per-trade
         // messages. Settled rounds feed the expected-balance tracker instead.
-        adjustExpected(telegramId, mirrorNet(result, stake));
+        adjustExpected(telegramId, mirrorNet(result, stake), result.tradeId);
+        if (prod === 'copy' && opts.runId != null) markDispatch(opts.runId, telegramId, opts.round ?? 0, 'settled');
         // Compounding: a settled WIN/TIE closes the member's chain → drop the base.
         // Copy Trading: the ADMIN decides when the chain ends — keep the base so
         // every mirror round stays base×2^round across the admin's whole run.
@@ -725,11 +810,15 @@ export async function mirrorTradeToCopyUsers(opts) {
     const users = getConnectedCopyUsers(prod);
     if (!users.length) return;
     const entryAt = Number(opts?.entryAt);
-    const entryDeadline = prod === 'copy' && Number.isFinite(entryAt)
+    // 2026-09-20: deadlines + submission versions apply to BOTH products now.
+    const entryDeadline = Number.isFinite(entryAt)
         ? entryAt + (opts.timeframeSec <= 60 ? COPY_ENTRY_DEADLINE_SHORT_MS : COPY_ENTRY_DEADLINE_LONG_MS)
         : NaN;
     for (const u of users) {
-        const submissionVersion = prod === 'copy' ? copySubmissionVersion(u.telegram_id) : null;
+        const submissionVersion = copySubmissionVersion(u.telegram_id);
+        if (prod === 'copy' && opts.runId != null) {
+            try { db.prepare('INSERT INTO copy_dispatches (run_id, telegram_id, round, status, created_at) VALUES (?, ?, ?, ?, ?)').run(opts.runId, u.telegram_id, opts.round ?? 0, 'queued', Date.now()); } catch (e) { /* best-effort */ }
+        }
         const prev = userQueues.get(u.telegram_id) || Promise.resolve();
         const next = prev
             .catch(() => { })
@@ -839,11 +928,29 @@ function mirrorNet(result, stake) {
 }
 
 /** Expected-balance tracker: every settled controlled trade moves it. */
-function adjustExpected(telegramId, netDelta) {
+function adjustExpected(telegramId, netDelta, tradeId = 0) {
     try {
         const d = Number(netDelta) || 0;
         if (!d) return;
         db.prepare('UPDATE copy_trading SET expected_native = COALESCE(expected_native, 0) + ? WHERE telegram_id = ? AND status = ?').run(d, telegramId, 'active');
+        // Exactly-once accounting (2026-09-20): remember the newest settlement
+        // folded into expected_native so the withdraw probe never subtracts the
+        // same losses twice.
+        if (tradeId) {
+            const row = db.prepare('SELECT id FROM trades WHERE trade_id = ? AND telegram_id = ? ORDER BY id DESC LIMIT 1').get(tradeId, telegramId);
+            if (row && Number.isFinite(Number(row.id)))
+                db.prepare('UPDATE copy_trading SET last_accounted_trade_id = MAX(COALESCE(last_accounted_trade_id, 0), ?) WHERE telegram_id = ?').run(Number(row.id), telegramId);
+        }
+    } catch (e) { /* best-effort */ }
+}
+
+/** Best-effort dispatch ledger updates (informational; boot reconciliation
+ *  works from copy_runs + trades, never from these rows). */
+function markDispatch(runId, telegramId, round, statusText) {
+    try {
+        db.prepare(`UPDATE copy_dispatches SET status = ? WHERE id = (
+            SELECT id FROM copy_dispatches WHERE run_id = ? AND telegram_id = ? AND round = ? ORDER BY id DESC LIMIT 1
+        )`).run(statusText, runId, telegramId, round);
     } catch (e) { /* best-effort */ }
 }
 
@@ -1224,36 +1331,45 @@ async function probeCopyFlow(row) {
         try { sdkPool.pin(uid); } catch (e) { /* */ }
         const bal = await userLiveBalance(sdk);
         if (!bal) return;
-        const ct = db.prepare("SELECT expected_native, baseline_native, COALESCE(product, 'compounding') AS product FROM copy_trading WHERE telegram_id = ? AND status = ?").get(uid, 'active');
+        const ct = db.prepare("SELECT expected_native, baseline_native, last_accounted_trade_id, COALESCE(product, 'compounding') AS product FROM copy_trading WHERE telegram_id = ? AND status = ?").get(uid, 'active');
         if (!ct) return;
-        const exp = Number(ct.expected_native);
+        let exp = Number(ct.expected_native);
         if (!Number.isFinite(exp) || exp <= 0) {
-            db.prepare('UPDATE copy_trading SET expected_native = ? WHERE telegram_id = ?').run(bal.usable, uid);
+            const mx = db.prepare("SELECT MAX(id) AS maxId FROM trades WHERE telegram_id = ? AND status IN ('WIN', 'LOSS', 'TIE')").get(uid);
+            db.prepare('UPDATE copy_trading SET expected_native = ?, last_accounted_trade_id = COALESCE(?, last_accounted_trade_id) WHERE telegram_id = ?').run(bal.usable, (mx && mx.maxId) ?? null, uid);
             return;
+        }
+        // Exactly-once (2026-09-20): fold settlements NOT yet applied to
+        // expected_native (id > checkpoint) BEFORE comparing — the old code
+        // subtracted a rolling 48h loss sum on every discrepancy, re-explaining
+        // losses adjustExpected had already applied.
+        const cp = Number(ct.last_accounted_trade_id) || 0;
+        const unRow = db.prepare(`SELECT COALESCE(SUM(CASE WHEN status = 'WIN' THEN (pnl - amount) WHEN status = 'LOSS' THEN -amount ELSE 0 END), 0) AS net, MAX(id) AS maxId FROM trades WHERE telegram_id = ? AND status IN ('WIN', 'LOSS', 'TIE') AND id > ?`).get(uid, cp);
+        const unNet = Number(unRow && unRow.net) || 0;
+        if (unRow && unRow.maxId != null) {
+            db.prepare('UPDATE copy_trading SET expected_native = COALESCE(expected_native, 0) + ?, last_accounted_trade_id = ? WHERE telegram_id = ?').run(unNet, unRow.maxId, uid);
+            exp = exp + unNet;
         }
         const delta = bal.usable - exp;
         const tol = Math.max(bal.usable * COPY_FLOW_TOL_FRAC, MIN_STAKE_NATIVE.USD);
         if (delta < -tol) {
-            // Trading losses are NOT withdrawals. The account's own settled
-            // trades (net, recent window) explain negative deltas first — a
-            // mirror round whose inline settle was missed (timeout → resolved
-            // later) never reached the expected tracker, and without this the
-            // real loss reads as a phantom outflow and revokes the user.
-            const netRow = db.prepare(`SELECT COALESCE(SUM(CASE WHEN status = 'WIN' THEN (pnl - amount) WHEN status = 'LOSS' THEN -amount ELSE 0 END), 0) AS net FROM trades WHERE telegram_id = ? AND status IN ('WIN', 'LOSS', 'TIE') AND julianday(created_at) >= julianday('now', '-48 hours')`).get(uid);
-            const tradingNet = Number(netRow && netRow.net) || 0;
-            const explained = tradingNet < 0 ? tradingNet : 0;
-            const residual = delta - explained;
-            if (residual < -tol) {
-                const baseline = Number(ct.baseline_native);
-                const mult = ct.product === 'copy' ? 5 : 10;
-                const belowTarget = !(Number.isFinite(baseline) && baseline > 0) ? true : bal.usable < baseline * mult;
-                db.prepare('INSERT INTO copy_flows (telegram_id, detected_at, delta_native, kind, note) VALUES (?, ?, ?, ?, ?)')
-                    .run(uid, Date.now(), residual, 'outflow', belowTarget ? `below ${mult}x — violation` : `above ${mult}x — permitted`);
-                logger.warn('copy', `flow uid=${uid} [${ct.product}] unexplained outflow ${residual.toFixed(2)} after settled-trade net ${explained.toFixed(2)} (${belowTarget ? 'VIOLATION' : `above ${mult}x — allowed`})`);
-                if (belowTarget) { revokeCopyAccess(uid, 'early-withdrawal'); return; }
-            } else {
-                logger.info('copy', `flow uid=${uid}: negative delta ${delta.toFixed(2)} explained by settled trading (net ${explained.toFixed(2)}) — resyncing expected`);
+            let baseline = Number(ct.baseline_native);
+            const hadBaseline = Number.isFinite(baseline) && baseline > 0;
+            if (!hadBaseline) {
+                // No baseline on record — initialize it from the current balance
+                // and SKIP the violation decision this cycle (2026-09-20): a
+                // missing baseline used to make every unexplained outflow an
+                // instant revoke.
+                baseline = bal.usable;
+                db.prepare('UPDATE copy_trading SET baseline_native = ? WHERE telegram_id = ?').run(baseline, uid);
+                logger.info('copy', `flow uid=${uid}: baseline initialized to ${baseline.toFixed(2)} — outflow logged, no violation decision this cycle`);
             }
+            const mult = ct.product === 'copy' ? 5 : 10;
+            const belowTarget = hadBaseline ? bal.usable < baseline * mult : false;
+            db.prepare('INSERT INTO copy_flows (telegram_id, detected_at, delta_native, kind, note) VALUES (?, ?, ?, ?, ?)')
+                .run(uid, Date.now(), delta, 'outflow', belowTarget ? `below ${mult}x — violation` : `above ${mult}x — permitted`);
+            logger.warn('copy', `flow uid=${uid} [${ct.product}] unexplained outflow ${delta.toFixed(2)} (${belowTarget ? 'VIOLATION' : `above ${mult}x — allowed`})`);
+            if (belowTarget) { revokeCopyAccess(uid, 'early-withdrawal'); return; }
             db.prepare('UPDATE copy_trading SET expected_native = ? WHERE telegram_id = ?').run(bal.usable, uid);
             return;
         }
@@ -1394,7 +1510,7 @@ async function copyAnalyzeBest(sdk) {
 
 /** One copy-trading run on the admin account: stake $100–$1,000 (confidence),
  *  3-gale ladder, every settled round fans out to copy users. */
-async function runCopySetup() {
+async function runCopySetup(resume?: { runId: number; pair: string; direction: string; tfSec: number; baseStake: number; nextRound: number }): Promise<boolean> {
     let sdk;
     try {
         sdk = await copyAdminSdk();
@@ -1419,22 +1535,46 @@ async function runCopySetup() {
             logger.warn('copy-trade', `admin balance $${bal.toFixed(2)} below $100 floor — skipping`);
             return false;
         }
-        const best = await copyAnalyzeBest(sdk);
-        if (!best) return false; // nothing cleared the filter — wait for the next cycle
-        if (getConfig('copy_active') !== '1' || getConfig('copy_admin_plugged') !== '1') {
-            logger.info('copy-trade', 'run skipped — state changed during analysis');
-            return false;
+        let best; let runVersion = null;
+        if (resume) {
+            // Durable restart continuation (2026-09-20): the boot reconciler
+            // resolved the interrupted round and asked for the ladder to finish.
+            best = { pair: resume.pair, direction: resume.direction, tf: resume.tfSec, display: drawDisplayConfidence() };
+            logger.info('copy-trade', `run #${resume.runId} resuming at round ${resume.nextRound} (${resume.pair} ${resume.direction} tf=${resume.tfSec}s)`);
+        } else {
+            best = await copyAnalyzeBest(sdk);
+            if (!best) return false; // nothing cleared the filter — wait for the next cycle
+            if (getConfig('copy_active') !== '1' || getConfig('copy_admin_plugged') !== '1') {
+                logger.info('copy-trade', 'run skipped — state changed during analysis');
+                return false;
+            }
+            runVersion = copySubmissionVersion(0);
+            if (!runVersion) return false;
         }
-        const runVersion = copySubmissionVersion(0);
-        if (!runVersion) return false;
 
         copyAdminFailures = 0;
         const display = best.display;
-        const runId = Date.now(); // globally unique — never reused across restarts
+        const runId = resume ? resume.runId : Date.now(); // globally unique — never reused across restarts
         const maxStake = Math.round(bal * 0.9 * 100) / 100;
-        let stake = Math.min(adminStakeFromConfidence(display), maxStake);
-        let round = 0;
-        let acceptedRun = false;
+        let stake = resume
+            ? Math.round(resume.baseStake * Math.pow(2, resume.nextRound) * 100) / 100
+            : Math.min(adminStakeFromConfidence(display), maxStake);
+        let round = resume ? resume.nextRound : 0;
+        let acceptedRun = !!resume;
+        // Durable run mapping (2026-09-20): persist the run so a restart can
+        // reconcile the open round before any new run starts.
+        try {
+            if (resume) {
+                db.prepare("UPDATE copy_runs SET status = 'open', updated_at = ? WHERE run_id = ?").run(Date.now(), runId);
+            } else {
+                db.prepare('INSERT INTO copy_runs (run_id, pair, direction, tf_sec, base_stake, round, status, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+                    .run(runId, best.pair, best.direction, best.tf, stake, 0, 'open', Date.now());
+            }
+        } catch (e) { /* best-effort */ }
+        let lastOutcome: string | null = null;
+        const closeRun = (statusText: string) => {
+            try { db.prepare('UPDATE copy_runs SET status = ?, round = ?, updated_at = ? WHERE run_id = ?').run(statusText, round, Date.now(), runId); } catch (e) { /* */ }
+        };
         while (round <= COPY_GALE_ROUNDS) {
             const currentBalance = await copyAdminBalance(sdk);
             const currentCap = Math.round((currentBalance ?? 0) * 0.9 * 100) / 100;
@@ -1443,6 +1583,7 @@ async function runCopySetup() {
                 break;
             }
             logger.info('copy-trade', `run #${runId}: ${best.pair} ${best.direction} $${stake.toFixed(2)} tf=${best.tf}s (round ${round}, display ${display}%)`);
+            try { db.prepare('UPDATE copy_runs SET round = ?, updated_at = ? WHERE run_id = ?').run(round, Date.now(), runId); } catch (e) { /* */ }
             let result;
             try {
                 result = await settle(sdk, {
@@ -1472,16 +1613,87 @@ async function runCopySetup() {
             const settled = result.status === 'WIN' || result.status === 'LOSS' || result.status === 'TIE';
             if (!settled) { logger.warn('copy-trade', `run #${runId} round ${round} ${result.status} (${result.error ?? 'no fill'}) — run ends`); break; }
             logger.info('copy-trade', `run #${runId} round ${round} → ${result.status} pnl=${result.pnl ?? 0}`);
+            lastOutcome = result.status;
             if (result.status === 'WIN' || result.status === 'TIE') break;
             round++;
             stake = Math.round(Math.min(stake * 2, maxStake) * 100) / 100;
         }
+        // Close the durable run row (2026-09-20).
+        const closedStatus = (lastOutcome === 'WIN' || lastOutcome === 'TIE') ? 'won'
+            : lastOutcome === 'LOSS' ? (round > COPY_GALE_ROUNDS ? 'lost' : 'stopped')
+            : 'ended';
+        closeRun(closedStatus);
         return true;
     } catch (e) {
         logger.warn('copy-trade', `run failed: ${e instanceof Error ? e.message : e}`);
         return false;
     } finally {
         try { await withTimeout(Promise.resolve(sdk.shutdown()), 10_000, 'copy sdk shutdown'); } catch (e) { /* */ }
+    }
+}
+
+/** Durable restart continuation (2026-09-20). */
+let copyReconcileDone = false;
+let copyResume: { runId: number; pair: string; direction: string; tfSec: number; baseStake: number; nextRound: number } | null = null;
+
+/** Reconcile a run left open by a previous process: resolve any unresolved
+ *  admin order via broker history, then either resume the ladder (LOSS with
+ *  rounds left, still plugged) or close it. Nothing new starts until this ran. */
+async function reconcileOpenCopyRuns(): Promise<void> {
+    let run;
+    try { run = db.prepare("SELECT * FROM copy_runs WHERE status IN ('open','resuming') ORDER BY run_id DESC LIMIT 1").get(); } catch (e) { return; }
+    if (!run) return;
+    try { db.prepare("UPDATE copy_runs SET status = 'ended', updated_at = ? WHERE status IN ('open','resuming') AND run_id < ?").run(Date.now(), run.run_id); } catch (e) { /* */ }
+    const ageMs = Date.now() - (Number(run.updated_at) || 0);
+    logger.info('copy-trade', `boot: run #${run.run_id} open (${run.pair} round ${run.round}) — reconciling`);
+    let rows = [];
+    try {
+        rows = db.prepare(`SELECT id, trade_id, external_id, amount, created_at FROM trades
+            WHERE telegram_id = 0 AND pair = ? AND status IN ('in_flight','TIMEOUT')
+              AND julianday(created_at) >= julianday(?) ORDER BY id ASC LIMIT 6`).all(run.pair, new Date((Number(run.updated_at) || Date.now()) - 10 * 60_000).toISOString());
+    } catch (e) { rows = []; }
+    let lastOutcome: string | null = null;
+    if (rows.length) {
+        let sdk = null;
+        try {
+            sdk = await copyAdminSdk();
+            for (const r of rows) {
+                try {
+                    const startedAt = Date.parse(r.created_at) || Date.now() - 600_000;
+                    const rec = await recoverFinal(sdk, r.trade_id, r.external_id ?? undefined, r.amount, startedAt);
+                    if (rec && (rec.status === 'WIN' || rec.status === 'LOSS' || rec.status === 'TIE')) {
+                        db.prepare("UPDATE trades SET status = ?, pnl = ?, external_id = COALESCE(?, external_id), error = NULL WHERE id = ? AND status IN ('in_flight','TIMEOUT')").run(rec.status, rec.status === 'WIN' ? (rec.pnl ?? 0) : 0, rec.externalId ?? null, r.id);
+                        lastOutcome = rec.status;
+                        logger.info('copy-trade', `boot reconcile: trade #${r.trade_id} → ${rec.status}`);
+                    } else {
+                        db.prepare("UPDATE copy_runs SET status = 'stopped', updated_at = ? WHERE run_id = ?").run(Date.now(), run.run_id);
+                        logger.warn('copy-trade', `boot reconcile: trade #${r.trade_id} unresolved — run closed`);
+                        return;
+                    }
+                } catch (e) { logger.warn('copy-trade', `boot reconcile trade failed: ${e instanceof Error ? e.message : e}`); }
+            }
+        } catch (e) {
+            logger.warn('copy-trade', `boot reconcile sdk failed: ${e instanceof Error ? e.message : e}`);
+            return; // leave the row open; the next boot retries
+        } finally {
+            if (sdk) { try { await withTimeout(Promise.resolve(sdk.shutdown()), 10_000, 'reconcile sdk'); } catch (e) { /* */ } }
+        }
+    }
+    const plugged = getConfig('copy_admin_plugged') === '1' && getConfig('copy_active') === '1';
+    if (!rows.length) {
+        db.prepare("UPDATE copy_runs SET status = 'ended', updated_at = ? WHERE run_id = ?").run(Date.now(), run.run_id);
+        logger.info('copy-trade', `boot: run #${run.run_id} closed — no unresolved orders`);
+        return;
+    }
+    const nextRound = Number(run.round) + 1;
+    if (lastOutcome === 'LOSS' && nextRound <= COPY_GALE_ROUNDS && plugged && ageMs < 30 * 60_000) {
+        copyResume = { runId: run.run_id, pair: run.pair, direction: run.direction, tfSec: run.tf_sec, baseStake: run.base_stake, nextRound };
+        db.prepare("UPDATE copy_runs SET status = 'resuming', updated_at = ? WHERE run_id = ?").run(Date.now(), run.run_id);
+        logger.info('copy-trade', `boot: run #${run.run_id} resumes at round ${nextRound}`);
+    } else {
+        const st = (lastOutcome === 'WIN' || lastOutcome === 'TIE') ? 'won' : lastOutcome === 'LOSS' ? 'lost' : 'stopped';
+        db.prepare('UPDATE copy_runs SET status = ?, updated_at = ? WHERE run_id = ?').run(st, Date.now(), run.run_id);
+        logger.info('copy-trade', `boot: run #${run.run_id} closed (${st})`);
     }
 }
 
@@ -1511,6 +1723,31 @@ async function copyTradeTick() {
         const plugged = getConfig('copy_admin_plugged') === '1';
         if (plugged) {
             if (copyLadderActive) return;
+            if (!copyReconcileDone) { copyReconcileDone = true; await reconcileOpenCopyRuns(); }
+            if (copyResume) {
+                const resume = copyResume;
+                copyResume = null;
+                copyLadderActive = true;
+                try {
+                    await runCopySetup(resume);
+                } finally {
+                    copyLadderActive = false;
+                    copyNextSetupAt = Date.now() + 120_000;
+                    try { db.prepare("UPDATE copy_runs SET status = 'ended', updated_at = ? WHERE run_id = ? AND status IN ('open','resuming')").run(Date.now(), resume.runId); } catch (e) { /* */ }
+                }
+                return;
+            }
+            // An open run from a previous life must be reconciled before a new
+            // one starts — and must never block forever: stale opens close out.
+            const openRun = db.prepare("SELECT run_id, updated_at FROM copy_runs WHERE status IN ('open','resuming') ORDER BY run_id DESC LIMIT 1").get();
+            if (openRun) {
+                if (Date.now() - (Number(openRun.updated_at) || 0) > 15 * 60_000) {
+                    try { db.prepare("UPDATE copy_runs SET status = 'ended', updated_at = ? WHERE run_id = ?").run(Date.now(), openRun.run_id); } catch (e) { /* */ }
+                    logger.warn('copy-trade', `stale open run #${openRun.run_id} closed`);
+                } else {
+                    return;
+                }
+            }
             if (Date.now() < copyNextSetupAt) return;
             copyLadderActive = true;
             try {
@@ -1533,6 +1770,10 @@ async function copyTradeTick() {
 }
 
 export function startCopyTradingEngine() {
+    // One-shot boot reconciliation: resolve any run left open by the previous
+    // process before anything new can start (2026-09-20).
+    copyReconcileDone = true;
+    void reconcileOpenCopyRuns().catch(() => { });
     copyDummyNextAt = Date.now() + 60_000; // first unplugged sweep 1 min after boot
     const timer = setInterval(function () { void copyTradeTick(); }, 60_000);
     if (timer && timer.unref) timer.unref();
