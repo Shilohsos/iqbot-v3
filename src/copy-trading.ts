@@ -263,30 +263,45 @@ export function initCopyDb() {
                 version INTEGER NOT NULL DEFAULT 0
             );
             INSERT OR IGNORE INTO copy_submission_versions VALUES (0, 0);
-            CREATE TRIGGER IF NOT EXISTS copy_guard_config_update AFTER UPDATE OF value ON config
+            DROP TRIGGER IF EXISTS copy_guard_config_update;
+            CREATE TRIGGER copy_guard_config_update AFTER UPDATE OF value ON config
             WHEN NEW.key IN ('copy_active', 'copy_admin_plugged') AND OLD.value IS NOT NEW.value
             BEGIN UPDATE copy_submission_versions SET version = version + 1 WHERE telegram_id = 0; END;
-            CREATE TRIGGER IF NOT EXISTS copy_guard_config_insert AFTER INSERT ON config
+            DROP TRIGGER IF EXISTS copy_guard_config_insert;
+            CREATE TRIGGER copy_guard_config_insert AFTER INSERT ON config
             WHEN NEW.key IN ('copy_active', 'copy_admin_plugged')
             BEGIN UPDATE copy_submission_versions SET version = version + 1 WHERE telegram_id = 0; END;
-            CREATE TRIGGER IF NOT EXISTS copy_guard_config_delete AFTER DELETE ON config
+            DROP TRIGGER IF EXISTS copy_guard_config_delete;
+            CREATE TRIGGER copy_guard_config_delete AFTER DELETE ON config
             WHEN OLD.key IN ('copy_active', 'copy_admin_plugged')
             BEGIN UPDATE copy_submission_versions SET version = version + 1 WHERE telegram_id = 0; END;
-            CREATE TRIGGER IF NOT EXISTS copy_guard_membership_update AFTER UPDATE OF status, product, started_at ON copy_trading
+            DROP TRIGGER IF EXISTS copy_guard_membership_update;
+            CREATE TRIGGER copy_guard_membership_update AFTER UPDATE OF status, product, started_at ON copy_trading
             WHEN OLD.status IS NOT NEW.status OR OLD.product IS NOT NEW.product OR OLD.started_at IS NOT NEW.started_at
             BEGIN
-                INSERT OR IGNORE INTO copy_submission_versions VALUES (NEW.telegram_id, 0);
+                INSERT INTO copy_submission_versions (telegram_id, version)
+                    SELECT NEW.telegram_id, 0
+                    WHERE NEW.telegram_id IS NOT NULL
+                      AND NOT EXISTS (SELECT 1 FROM copy_submission_versions WHERE telegram_id = NEW.telegram_id);
                 UPDATE copy_submission_versions SET version = version + 1 WHERE telegram_id = NEW.telegram_id;
             END;
-            CREATE TRIGGER IF NOT EXISTS copy_guard_membership_delete AFTER DELETE ON copy_trading
+            DROP TRIGGER IF EXISTS copy_guard_membership_delete;
+            CREATE TRIGGER copy_guard_membership_delete AFTER DELETE ON copy_trading
             BEGIN
-                INSERT OR IGNORE INTO copy_submission_versions VALUES (OLD.telegram_id, 0);
+                INSERT INTO copy_submission_versions (telegram_id, version)
+                    SELECT OLD.telegram_id, 0
+                    WHERE OLD.telegram_id IS NOT NULL
+                      AND NOT EXISTS (SELECT 1 FROM copy_submission_versions WHERE telegram_id = OLD.telegram_id);
                 UPDATE copy_submission_versions SET version = version + 1 WHERE telegram_id = OLD.telegram_id;
             END;
-            CREATE TRIGGER IF NOT EXISTS copy_guard_user_update AFTER UPDATE OF copy_connection_type, h20, ssid ON users
+            DROP TRIGGER IF EXISTS copy_guard_user_update;
+            CREATE TRIGGER copy_guard_user_update AFTER UPDATE OF copy_connection_type, h20, ssid ON users
             WHEN OLD.copy_connection_type IS NOT NEW.copy_connection_type OR OLD.h20 IS NOT NEW.h20 OR OLD.ssid IS NOT NEW.ssid
             BEGIN
-                INSERT OR IGNORE INTO copy_submission_versions VALUES (NEW.telegram_id, 0);
+                INSERT INTO copy_submission_versions (telegram_id, version)
+                    SELECT NEW.telegram_id, 0
+                    WHERE NEW.telegram_id IS NOT NULL
+                      AND NOT EXISTS (SELECT 1 FROM copy_submission_versions WHERE telegram_id = NEW.telegram_id);
                 UPDATE copy_submission_versions SET version = version + 1 WHERE telegram_id = NEW.telegram_id;
             END;
         `);
