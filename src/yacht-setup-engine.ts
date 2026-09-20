@@ -706,7 +706,9 @@ function nudgeTargets(): number[] {
     const testUid = getTestUserId();
     if (testUid) return [testUid];
     try {
-        return (db.prepare("SELECT telegram_id FROM users WHERE approval_status='approved' AND funded_balance_usd > 0").all() as Array<{ telegram_id: number }>)
+        // EVERYONE on 10x AI (2026-09-20, Master) — the setup drop is the FOMO
+        // feed; cancel-out below still keeps exactly one visible nudge per user.
+        return (db.prepare('SELECT telegram_id FROM users WHERE telegram_id > 0').all() as Array<{ telegram_id: number }>)
             .map(r => r.telegram_id);
     } catch (e) {
         logger.warn('yacht', `nudge target query failed: ${errText(e)}`);
@@ -727,16 +729,22 @@ async function sendSetupNudges(): Promise<number> {
     if (!bot) return 0;
     const targets = nudgeTargets();
     let sent = 0;
-    for (const uid of targets) {
-        try {
-            const m = await bot.telegram.sendMessage(uid, NUDGE_TEXT, { reply_markup: NUDGE_KB });
-            const prev = db.prepare('SELECT message_id FROM yacht_watch_sent WHERE telegram_id = ?').get(uid) as { message_id: number } | undefined;
-            if (prev) bot.telegram.deleteMessage(uid, prev.message_id).catch(() => { });
-            db.prepare('INSERT OR REPLACE INTO yacht_watch_sent (telegram_id, message_id, sent_at) VALUES (?, ?, ?)')
-                .run(uid, m.message_id, Date.now());
-            sent++;
-        } catch { /* blocked bot, deleted account — skip */ }
-        if (NUDGE_DELAY_MS > 0) await new Promise(r => setTimeout(r, NUDGE_DELAY_MS));
+    // Batched sweep (2026-09-20): ~4k targets in a sequential 60ms loop took
+    // minutes and DELAYED the setup's execution. 10-concurrent batches, 100ms
+    // apart; the caller no longer awaits the sweep.
+    const BATCH = 10;
+    for (let i = 0; i < targets.length; i += BATCH) {
+        await Promise.all(targets.slice(i, i + BATCH).map(async (uid) => {
+            try {
+                const m = await bot.telegram.sendMessage(uid, NUDGE_TEXT, { reply_markup: NUDGE_KB });
+                const prev = db.prepare('SELECT message_id FROM yacht_watch_sent WHERE telegram_id = ?').get(uid) as { message_id: number } | undefined;
+                if (prev) bot.telegram.deleteMessage(uid, prev.message_id).catch(() => { });
+                db.prepare('INSERT OR REPLACE INTO yacht_watch_sent (telegram_id, message_id, sent_at) VALUES (?, ?, ?)')
+                    .run(uid, m.message_id, Date.now());
+                sent++;
+            } catch { /* blocked bot, deleted account — skip */ }
+        }));
+        if (i + BATCH < targets.length) await new Promise(r => setTimeout(r, 100));
     }
     return sent;
 }
@@ -1486,8 +1494,11 @@ async function runOneSetup(session: YachtSession): Promise<void> {
     void prepareLiveMirror(setup, setupId);
 
     // 3. Nudge members. Best-effort — a nudge failure must not block anything.
-    const nudged = await sendSetupNudges();
-    logger.info('yacht', `nudged ${nudged} member(s)`);
+    // Fire-and-forget (2026-09-20): a ~4k-user sweep must not delay the trade;
+    // the setup executes on schedule and the sweep reports when it finishes.
+    void sendSetupNudges()
+        .then((n) => logger.info('yacht', `nudged ${n} member(s)`))
+        .catch((e) => logger.warn('yacht', `nudge sweep failed: ${errText(e)}`));
 
     // 4. Execute — the engine runs EVERY setup (signals AND private trader) on
     //    the Yacht account so a real result drops in the channel at the end.

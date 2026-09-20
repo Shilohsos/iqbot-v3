@@ -242,22 +242,43 @@ bot.on('channel_post', async (ctx) => {
         if (testUid) { targets.push(testUid); }
         else {
             try {
-                targets.push(...db.prepare("SELECT telegram_id FROM users WHERE approval_status='approved' AND funded_balance_usd > 0").all().map((r) => r.telegram_id));
+                // EVERYONE on 10x AI (2026-09-20, Master): the Yacht Club drops are
+                // the FOMO feed — funded-only reach was too narrow. The per-user
+                // cancel-out below still keeps exactly one visible nudge.
+                targets.push(...db.prepare('SELECT telegram_id FROM users WHERE telegram_id > 0').all().map((r) => r.telegram_id));
             } catch { }
         }
-        for (const uid of targets) {
+        console.log(`[yacht-watch] ${cat} post detected → queued for ${targets.length} user(s)`);
+        void sendYachtWatchBatch(targets, nudgeText, kb);
+    } catch (err) {
+        console.error('[yacht-watch] error:', err instanceof Error ? err.message : err);
+    }
+});
+/** Batched, non-blocking nudge sweep (2026-09-20): a ~4k-user sweep must never
+ *  run inside the update handler — Telegraf serializes updates, so a multi-minute
+ *  loop here would freeze the whole bot. Batches of 10, fire-and-forget; each
+ *  send keeps the cancel-out and failures are skipped exactly as before. */
+async function sendYachtWatchBatch(targets, nudgeText, kb) {
+    const BATCH = 10;
+    let sent = 0;
+    let attempted = 0;
+    for (let i = 0; i < targets.length; i += BATCH) {
+        const slice = targets.slice(i, i + BATCH);
+        await Promise.all(slice.map(async (uid) => {
+            attempted++;
             try {
                 const m = await bot.telegram.sendMessage(uid, nudgeText, { reply_markup: kb });
                 const prev = db.prepare('SELECT message_id FROM yacht_watch_sent WHERE telegram_id = ?').get(uid);
                 if (prev) { bot.telegram.deleteMessage(uid, prev.message_id).catch(() => { }); }
                 db.prepare('INSERT OR REPLACE INTO yacht_watch_sent (telegram_id, message_id, sent_at) VALUES (?, ?, ?)').run(uid, m.message_id, Date.now());
-            } catch { }
-        }
-        console.log(`[yacht-watch] ${cat} post detected → sent to ${targets.length} user(s)`);
-    } catch (err) {
-        console.error('[yacht-watch] error:', err instanceof Error ? err.message : err);
+                sent++;
+            } catch { /* blocked bot, deleted account — skip */ }
+        }));
+        if (i + BATCH < targets.length) await new Promise((r) => setTimeout(r, 100));
     }
-});
+    console.log(`[yacht-watch] sweep done — delivered to ${sent}/${attempted} user(s)`);
+}
+
 // ── Central send guard: topic-aware 400 handling + per-chat backoff (fixes #4/#5)
 // All send* calls funnel through telegram.callApi. A chat that returns repeated
 // 400s (e.g. a forum/topic channel needing message_thread_id, or a bad chat) is
