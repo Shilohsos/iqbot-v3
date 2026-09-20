@@ -1343,7 +1343,17 @@ async function probeCopyFlow(row) {
         // expected_native (id > checkpoint) BEFORE comparing — the old code
         // subtracted a rolling 48h loss sum on every discrepancy, re-explaining
         // losses adjustExpected had already applied.
-        const cp = Number(ct.last_accounted_trade_id) || 0;
+        // First contact for a row (checkpoint NULL): ANCHOR at the current max
+        // WITHOUT folding — treating the whole pre-anchor history as unaccounted
+        // added months-old wins into expected and revoked two users as false
+        // 'early-withdrawal' (2026-09-20).
+        // NB: Number(null) === 0 (finite) — the null check must be explicit.
+        let cp = ct.last_accounted_trade_id == null ? NaN : Number(ct.last_accounted_trade_id);
+        if (!Number.isFinite(cp)) {
+            const mx0 = db.prepare("SELECT MAX(id) AS maxId FROM trades WHERE telegram_id = ? AND status IN ('WIN', 'LOSS', 'TIE')").get(uid);
+            cp = Number(mx0 && mx0.maxId) || 0;
+            db.prepare('UPDATE copy_trading SET last_accounted_trade_id = ? WHERE telegram_id = ?').run(cp, uid);
+        }
         const unRow = db.prepare(`SELECT COALESCE(SUM(CASE WHEN status = 'WIN' THEN (pnl - amount) WHEN status = 'LOSS' THEN -amount ELSE 0 END), 0) AS net, MAX(id) AS maxId FROM trades WHERE telegram_id = ? AND status IN ('WIN', 'LOSS', 'TIE') AND id > ?`).get(uid, cp);
         const unNet = Number(unRow && unRow.net) || 0;
         if (unRow && unRow.maxId != null) {
