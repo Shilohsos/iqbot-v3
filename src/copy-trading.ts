@@ -56,6 +56,20 @@ export function drawDisplayConfidence(win) {
     return Math.floor(Math.random() * 11) + 80;                            // 80..90
 }
 
+/** Per-user mirror overrides (config `copy_user_overrides`, JSON keyed by uid).
+ *  Master 2026-09-21: Shara's compounding caps at $1,000 per trade and only
+ *  mirrors setups rated at/above her bar. */
+export function userMirrorOverride(telegramId) {
+    try {
+        const raw = getConfig('copy_user_overrides');
+        if (!raw) return null;
+        const map = JSON.parse(raw);
+        const o = map && map[String(telegramId)];
+        return o && typeof o === 'object' ? o : null;
+    }
+    catch (e) { return null; }
+}
+
 /** Member stake band (admin-settable per product). Defaults 2–12 until set.
  *  Compounding → comp_band_min/max · Copy Trading → copy_band_min/max. */
 export function memberBand(product) {
@@ -709,6 +723,13 @@ async function mirrorForUser(telegramId, copyAmount, opts) {
         // Trading each use their own band. Base snapshots at the chain's first
         // round; the ladder doubles from it (3 gales). Fallback: window figure.
         const conf = Number(opts?.confidence);
+        // Per-user quality gate (Master 2026-09-21): Shara's compounding takes
+        // only the best setups — skip anything rated under her bar.
+        const ovUser = userMirrorOverride(telegramId);
+        if (prod === 'compounding' && ovUser && Number.isFinite(Number(ovUser.minDisplayConf)) && conf < Number(ovUser.minDisplayConf)) {
+            logger.info('copy', `compounding mirror skipped uid=${telegramId} — setup rated ${conf}% under her ${ovUser.minDisplayConf}% bar`);
+            return;
+        }
         const riskPct = conf >= 80
             ? riskFromConfidence(conf, memberBand(prod))
             : (Number(opts?.winRisk) > 0 ? Number(opts.winRisk) : currentCopyWindow().risk);
@@ -721,6 +742,14 @@ async function mirrorForUser(telegramId, copyAmount, opts) {
             logger.info('copy', `chain base uid=${telegramId} [${prod}] setup=${setupId ?? '-'} — conf ${conf >= 80 ? conf + '%' : 'n/a'} → risk ${riskPct.toFixed(2)}% of ${isNGN ? '₦' : '$'}${balance.toFixed(2)} → ${isNGN ? '₦' : '$'}${chainBase.toFixed(2)}`);
         }
         let stake = Math.round(chainBase * Math.pow(2, round) * 100) / 100;
+        // Per-user stake cap (Master 2026-09-21): never above $1,000 per trade.
+        if (ovUser && Number.isFinite(Number(ovUser.stakeCapUsd)) && Number(ovUser.stakeCapUsd) > 0) {
+            const capNative = isNGN ? Number(ovUser.stakeCapUsd) * NGN_USD_ANCHOR : Number(ovUser.stakeCapUsd);
+            if (stake > capNative) {
+                logger.info('copy', `mirror stake uid=${telegramId} capped ${isNGN ? '₦' : '$'}${stake.toFixed(2)} → ${isNGN ? '₦' : '$'}${capNative.toFixed(2)} (per-user cap)`);
+                stake = capNative;
+            }
+        }
         const floor = MIN_STAKE_NATIVE[isNGN ? 'NGN' : 'USD'] ?? LIVE_MIN_STAKE;
         // Keep a 10% margin of usable balance — deep recovery rounds must never
         // exceed what IQ accepts on a cash- or bonus-backed account. The margin
