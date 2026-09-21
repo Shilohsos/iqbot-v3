@@ -815,6 +815,10 @@ function timeframeFor(product: string): number {
 
 /** Analyze every open pair at the product's timeframe and return the highest
  *  confidence one. Returns null when nothing is analyzable (market closed). */
+/** The always-open additions (2026-09-21). Used ONLY when no major pair is
+ *  open — majors always win the pick while any of them is live. */
+const SUBSTITUTE_PAIRS = ['USDNGN-OTC', 'USDHKD-OTC', 'ETHUSD-OTC', 'US100/JP225-OTC', 'USDZAR-OTC'];
+
 async function generateSetup(product: string): Promise<GeneratedSetup | null> {
     const timeframeSec = timeframeFor(product);
     const sdk = await getYachtSdk();
@@ -830,9 +834,15 @@ async function generateSetup(product: string): Promise<GeneratedSetup | null> {
     const turboActives = turbo.getActives();
     const blitzActives = blitz.getActives();
 
-    let best: GeneratedSetup | null = null;
+    // Substitute pairs (2026-09-21) — the always-open additions. RULE (Master):
+    // majors always win the pick while ANY major is open; the substitutes are
+    // used only when every major is closed. Tracked as two separate bests.
+    let best: GeneratedSetup | null = null;      // best MAJOR
     let bestRaw = -1;
+    let bestSub: GeneratedSetup | null = null;   // best SUBSTITUTE (fallback)
+    let bestSubRaw = -1;
     let examined = 0;
+    let majorsOpen = 0;
 
     for (const pair of ALL_PAIRS) {
         try {
@@ -858,8 +868,21 @@ async function generateSetup(product: string): Promise<GeneratedSetup | null> {
             if (history.length < MIN_CANDLES) continue;
 
             examined++;
+            const isSub = SUBSTITUTE_PAIRS.includes(pair);
+            if (!isSub) majorsOpen++;
             const analysis = runAdminAnalysis(history);
-            if (analysis.confidence > bestRaw) {
+            if (isSub) {
+                if (analysis.confidence > bestSubRaw) {
+                    bestSubRaw = analysis.confidence;
+                    bestSub = {
+                        pair,
+                        direction: analysis.direction,
+                        confidence: yachtDisplayConfidence(),
+                        timeframeSec,
+                    };
+                }
+            }
+            else if (analysis.confidence > bestRaw) {
                 bestRaw = analysis.confidence;
                 best = {
                     pair,
@@ -873,9 +896,12 @@ async function generateSetup(product: string): Promise<GeneratedSetup | null> {
         }
     }
 
-    if (!best) return null;
-    logger.info('yacht', `best of ${examined} pair(s): ${best.pair} ${best.direction} raw=${bestRaw}% display=${best.confidence}%`);
-    return best;
+    const chosen = best || bestSub;
+    if (!chosen) return null;
+    const tier = best ? 'majors' : 'substitutes';
+    const chosenRaw = best ? bestRaw : bestSubRaw;
+    logger.info('yacht', `best of ${examined} pair(s) (${majorsOpen} major(s) open) [${tier}]: ${chosen.pair} ${chosen.direction} raw=${chosenRaw}% display=${chosen.confidence}%`);
+    return chosen;
 }
 
 // ─── One setup, end to end ──────────────────────────────────────────────────
