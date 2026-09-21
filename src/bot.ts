@@ -6190,7 +6190,7 @@ bot.action(/^admin:copy:gr:(\d+)$/, async (ctx) => {
         reply_markup: { inline_keyboard: [[{ text: '⟵ Back', callback_data: 'admin:copy' }]] }
     });
 });
-const COPY_ASSET_LIST = ['EURUSD-OTC','GBPUSD-OTC','EURJPY-OTC','GBPJPY-OTC','AUDUSD-OTC','USDCAD-OTC','EURGBP-OTC','USDCHF-OTC','XAUUSD-OTC','BTCUSD-OTC','EURCHF-OTC','AUDJPY-OTC','NZDUSD-OTC','NZDJPY-OTC','GBPCHF-OTC'];
+const COPY_ASSET_LIST = ['EURUSD-OTC','GBPUSD-OTC','EURJPY-OTC','GBPJPY-OTC','AUDUSD-OTC','USDCAD-OTC','EURGBP-OTC','USDCHF-OTC','XAUUSD-OTC','BTCUSD-OTC','EURCHF-OTC','AUDJPY-OTC','NZDUSD-OTC','NZDJPY-OTC','GBPCHF-OTC','USDNGN-OTC','USDHKD-OTC','ETHUSD-OTC','US100/JP225-OTC','USDZAR-OTC'];
 
 function copyAssetsKeyboard(activeSet) {
     const rows = [];

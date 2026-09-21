@@ -2,7 +2,7 @@ export const OTC_PAIRS = [
     'EURUSD-OTC', 'GBPUSD-OTC', 'EURJPY-OTC', 'GBPJPY-OTC',
     'AUDUSD-OTC', 'USDCAD-OTC', 'EURGBP-OTC', 'USDCHF-OTC',
     'XAUUSD-OTC', 'BTCUSD-OTC-op',
-    'EURCHF-OTC', 'AUDJPY-OTC', 'NZDUSD-OTC', 'NZDJPY-OTC', 'GBPCHF-OTC',
+    'EURCHF-OTC', 'AUDJPY-OTC', 'NZDUSD-OTC', 'NZDJPY-OTC', 'GBPCHF-OTC', 'USDNGN-OTC', 'USDHKD-OTC', 'ETHUSD-OTC', 'US100/JP225-OTC', 'USDZAR-OTC',
 ];
 
 type Btn = { text: string; callback_data: string } | { text: string; url: string };
@@ -55,7 +55,7 @@ const ALL_PAIRS = [
     'EURUSD-OTC', 'GBPUSD-OTC', 'EURJPY-OTC', 'GBPJPY-OTC',
     'AUDUSD-OTC', 'USDCAD-OTC', 'EURGBP-OTC', 'USDCHF-OTC',
     'XAUUSD-OTC', 'BTCUSD-OTC-op',
-    'EURCHF-OTC', 'AUDJPY-OTC', 'NZDUSD-OTC', 'NZDJPY-OTC', 'GBPCHF-OTC',
+    'EURCHF-OTC', 'AUDJPY-OTC', 'NZDUSD-OTC', 'NZDJPY-OTC', 'GBPCHF-OTC', 'USDNGN-OTC', 'USDHKD-OTC', 'ETHUSD-OTC', 'US100/JP225-OTC', 'USDZAR-OTC',
 ];
 
 // `tier` params are retained for call-site compatibility but no longer gate
