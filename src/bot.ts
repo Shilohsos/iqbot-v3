@@ -4100,7 +4100,7 @@ bot.action('ui:ct', async (ctx) => {
 
     if (st.copying) {
         const stats = copyTodayStats(uid);
-        await ctx.reply(`◆ Copy Trading — ACTIVE\n\nYou mirror the admin. Same trades, seconds behind.\n\n· Trades today: ${stats.n}`, { reply_markup: { inline_keyboard: [
+        await ctx.reply(`◆ Copy Trading — ACTIVE\n\nOne entry. Your account. His discipline.\n\n· Trades today: ${stats.n}`, { reply_markup: { inline_keyboard: [
             [{ text: '■ Disconnect', callback_data: 'copy:stop' }],
             [{ text: '⟵ Back', callback_data: 'ui:trade_menu' }],
         ] } });
@@ -4148,7 +4148,7 @@ bot.action('ui:ct', async (ctx) => {
         ] } });
         return;
     }
-    await ctx.reply(`◆ Copy Trading\n\n✓ Access granted.\n\nYou mirror the admin — same trades, seconds behind.\n\nMin balance: $${COPY_TRADE_MIN_BALANCE}\n\nReady when you are.`, { reply_markup: { inline_keyboard: [
+    await ctx.reply(`◆ Copy Trading\n\n✓ Access granted.\n\nOne entry. Your account. His discipline.\n\nMin balance: $${COPY_TRADE_MIN_BALANCE}\n\nReady when you are.`, { reply_markup: { inline_keyboard: [
         [{ text: '⟡ Start Copying', callback_data: 'copy:start' }],
         [{ text: '· How it works', callback_data: 'copy:ct:how' }],
         [{ text: '⟵ Back', callback_data: 'ui:trade_menu' }],
@@ -4192,7 +4192,7 @@ bot.action('copy:start', async (ctx) => {
         await ctx.reply(startRes.error || 'Could not start right now. Try again in a moment.');
         return;
     }
-    await ctx.reply(`◆ Copy Trading — ON\n\nYou're mirroring the admin — same trades, seconds behind.\n\n· Stop any time with Disconnect.`, { reply_markup: { inline_keyboard: [
+    await ctx.reply(`◆ Copy Trading — ON\n\nOne entry. Your account. His discipline.\n\n· Stop any time with Disconnect.`, { reply_markup: { inline_keyboard: [
         [{ text: '■ Disconnect', callback_data: 'copy:stop' }],
         [{ text: '⟵ Back', callback_data: 'ui:ct' }],
     ] } });
@@ -4200,7 +4200,7 @@ bot.action('copy:start', async (ctx) => {
 
 bot.action('copy:ct:how', async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
-    await ctx.reply(`◆ How Copy Trading works\n\nWhen the admin trades, you trade — same pair, same direction, the same moment, seconds behind.\n\nYour stake follows your own balance — no fixed amounts.\n\n· Min balance: $${COPY_TRADE_MIN_BALANCE}\n· Stop any time with Disconnect · Restart any time`, { reply_markup: { inline_keyboard: [
+    await ctx.reply(`◆ How Copy Trading works\n\nWhen the admin trades, you trade — same pair, same direction, moments behind.\n\nYour stake follows your own balance — no fixed amounts.\n\n· Min balance: $${COPY_TRADE_MIN_BALANCE}\n· Stop any time with Disconnect · Restart any time`, { reply_markup: { inline_keyboard: [
         [{ text: '⟡ Start Copying', callback_data: 'ui:ct' }],
         [{ text: '⟵ Back', callback_data: 'ui:trade_menu' }],
     ] } });
@@ -4218,7 +4218,7 @@ bot.action('copy:sign', async (ctx) => {
             : (res.error || 'Could not sign right now. Try again in a moment.'));
         return;
     }
-    await ctx.reply(`◆ Copy Trading — ACCESS GRANTED\n\nSigned. You're mirroring the admin — same trades, seconds behind.\n\n· Stop any time with Disconnect.`, { reply_markup: { inline_keyboard: [
+    await ctx.reply(`◆ Copy Trading — ACCESS GRANTED\n\nSigned. One entry. Your account. His discipline.\n\n· Stop any time with Disconnect.`, { reply_markup: { inline_keyboard: [
         [{ text: '■ Disconnect', callback_data: 'copy:stop' }],
         [{ text: '· How it works', callback_data: 'copy:ct:how' }],
     ] } });
