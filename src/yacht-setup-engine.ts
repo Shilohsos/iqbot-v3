@@ -815,11 +815,12 @@ function timeframeFor(product: string): number {
 
 /** Analyze every open pair at the product's timeframe and return the highest
  *  confidence one. Returns null when nothing is analyzable (market closed). */
-/** The always-open additions (2026-09-21). Used ONLY when no major pair is
- *  open — majors always win the pick while any of them is live. */
+/** The always-open additions (2026-09-21). Prefer majors while ≥3 of them are
+ *  live; below that they compete (2026-09-22) so a thin window can never lock
+ *  a whole session to one asset. */
 const SUBSTITUTE_PAIRS = ['USDNGN-OTC', 'USDHKD-OTC', 'ETHUSD-OTC', 'US100/JP225-OTC', 'USDZAR-OTC'];
 
-async function generateSetup(product: string): Promise<GeneratedSetup | null> {
+async function generateSetup(product: string, sessionId?: number): Promise<GeneratedSetup | null> {
     const timeframeSec = timeframeFor(product);
     const sdk = await getYachtSdk();
 
@@ -834,13 +835,13 @@ async function generateSetup(product: string): Promise<GeneratedSetup | null> {
     const turboActives = turbo.getActives();
     const blitzActives = blitz.getActives();
 
-    // Substitute pairs (2026-09-21) — the always-open additions. RULE (Master):
-    // majors always win the pick while ANY major is open; the substitutes are
-    // used only when every major is closed. Tracked as two separate bests.
-    let best: GeneratedSetup | null = null;      // best MAJOR
-    let bestRaw = -1;
-    let bestSub: GeneratedSetup | null = null;   // best SUBSTITUTE (fallback)
-    let bestSubRaw = -1;
+    // Substitute pairs (2026-09-21) — the always-open additions. POOL RULE
+    // (2026-09-22): majors-first, but a thin majors window must never lock a
+    // whole session to one asset. ≥3 majors open → majors-only; 1–2 majors
+    // open → substitutes join and compete on raw conviction (majors win ties);
+    // 0 majors open → substitutes only. Variety guard below caps repeats.
+    type Candidate = { pair: string; direction: 'call' | 'put'; raw: number; timeframeSec: number; isSub: boolean };
+    const candidates: Candidate[] = [];
     let examined = 0;
     let majorsOpen = 0;
 
@@ -871,37 +872,53 @@ async function generateSetup(product: string): Promise<GeneratedSetup | null> {
             const isSub = SUBSTITUTE_PAIRS.includes(pair);
             if (!isSub) majorsOpen++;
             const analysis = runAdminAnalysis(history);
-            if (isSub) {
-                if (analysis.confidence > bestSubRaw) {
-                    bestSubRaw = analysis.confidence;
-                    bestSub = {
-                        pair,
-                        direction: analysis.direction,
-                        confidence: yachtDisplayConfidence(),
-                        timeframeSec,
-                    };
-                }
-            }
-            else if (analysis.confidence > bestRaw) {
-                bestRaw = analysis.confidence;
-                best = {
-                    pair,
-                    direction: analysis.direction,
-                    confidence: yachtDisplayConfidence(),
-                    timeframeSec,
-                };
-            }
+            candidates.push({
+                pair,
+                direction: analysis.direction,
+                raw: analysis.confidence,
+                timeframeSec,
+                isSub,
+            });
         } catch (e) {
             logger.warn('yacht', `analysis skipped ${pair}: ${errText(e)}`);
         }
     }
 
-    const chosen = best || bestSub;
-    if (!chosen) return null;
-    const tier = best ? 'majors' : 'substitutes';
-    const chosenRaw = best ? bestRaw : bestSubRaw;
-    logger.info('yacht', `best of ${examined} pair(s) (${majorsOpen} major(s) open) [${tier}]: ${chosen.pair} ${chosen.direction} raw=${chosenRaw}% display=${chosen.confidence}%`);
-    return chosen;
+    if (!candidates.length) return null;
+
+    // POOL RULE (2026-09-22): majors-first, but never lock a session to one
+    // asset. ≥3 majors → majors-only; 1–2 → mixed (subs compete on raw
+    // conviction, majors win ties); 0 → substitutes-only.
+    const majors = candidates.filter(c => !c.isSub).sort((a, b) => b.raw - a.raw);
+    const subs = candidates.filter(c => c.isSub).sort((a, b) => b.raw - a.raw);
+    let pool: Candidate[];
+    let tier: string;
+    if (majors.length >= 3) { pool = majors; tier = 'majors'; }
+    else if (majors.length >= 1) {
+        pool = majors.concat(subs).sort((a, b) => (b.raw - a.raw) || ((a.isSub ? 1 : 0) - (b.isSub ? 1 : 0)));
+        tier = 'mixed';
+    }
+    else { pool = subs; tier = 'substitutes'; }
+
+    // VARIETY GUARD (2026-09-22): no pair more than MAX_PAIR_REPEATS times per
+    // session while an alternative exists; the next-best card rotates in.
+    const MAX_PAIR_REPEATS = 3;
+    const counts = new Map<string, number>();
+    if (sessionId) {
+        try {
+            const rows = db.prepare('SELECT pair, COUNT(*) AS c FROM yacht_setups WHERE session_id = ? GROUP BY pair').all(sessionId) as Array<{ pair: string; c: number }>;
+            for (const r of rows) counts.set(r.pair, r.c);
+        } catch { /* best-effort — a counts failure must not stall the session */ }
+    }
+    const chosen = pool.find(c => (counts.get(c.pair) || 0) < MAX_PAIR_REPEATS) || pool[0];
+    const display = yachtDisplayConfidence();
+    logger.info('yacht', `best of ${examined} pair(s) (${majorsOpen} major(s) open) [${tier}]: ${chosen.pair} ${chosen.direction} raw=${chosen.raw}% display=${display}%`);
+    return {
+        pair: chosen.pair,
+        direction: chosen.direction,
+        confidence: display,
+        timeframeSec: chosen.timeframeSec,
+    };
 }
 
 // ─── One setup, end to end ──────────────────────────────────────────────────
@@ -1498,7 +1515,7 @@ async function runOneSetup(session: YachtSession): Promise<void> {
     //    BEFORE anything is posted and the channel never sees an orphan card.
     let setup: GeneratedSetup | null;
     try {
-        setup = await generateSetup(product);
+        setup = await generateSetup(product, session.id);
     } catch (e) {
         dropYachtSdk(errText(e));
         await fatal(session, `analysis/login failed: ${errText(e)}`, `login failed — check YACHT_IQ_* env (${errText(e)})`);
