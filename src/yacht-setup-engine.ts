@@ -1547,9 +1547,8 @@ async function runOneSetup(session: YachtSession): Promise<void> {
             activeCountdown = token;
             void runSignalCountdown(msgId, cardText, entryAt, expiryAt, token).catch(() => { });
         }
-        // Pin the live card so it is the first thing anyone opening the club
-        // sees (2026-09-20). Fire-and-forget — never blocks the drop.
-        void pinSetupCard(msgId);
+        // Pinning removed (2026-09-22, Master): channel pins are manual only —
+        // setups are never auto-pinned. The post itself is unaffected.
     } catch (e) {
         updateYachtSetup(setupId, { status: 'aborted', closed_at: new Date().toISOString() });
         logger.error('yacht', `channel post failed — setup NOT dropped: ${errText(e)}`);
@@ -1937,7 +1936,7 @@ async function endSession(session: YachtSession): Promise<void> {
     } catch (e) {
         logger.error('yacht', `session-close post failed: ${errText(e)}`);
     }
-    await restoreWelcomePin();
+    // Pinning removed (2026-09-22, Master): the welcome is never re-pinned.
     const closeSummary = session.product === 'private_trader'
         ? `${session.setups_done} setups shared`
         : `${wins} won / ${losses} lost`;
