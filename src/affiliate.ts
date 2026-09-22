@@ -66,6 +66,10 @@ async function getClient(): Promise<TelegramClient> {
         // The TCP socket may already be ESTABLISHED while the MTProto handshake
         // hangs — kill it so the session is never held by a half-open connection
         // (that would AUTH_KEY_DUPLICATED every other client on this session).
+        // Stop the GramJS update/ping loop BEFORE killing the socket: connect()
+        // spawns _updateLoop which exits only when _destroyed is truthy (gramjs
+        // 2.26 has no destroy() method to set it).
+        try { (_client as any)._destroyed = true; } catch { /* best-effort */ }
         try {
             const conn = (_client as any)._connection;
             if (conn?._socket?.destroy) conn._socket.destroy();
@@ -143,6 +147,11 @@ function releaseClient(): void {
             killSocket();
         }
     } catch { /* best-effort */ }
+    // Kill the GramJS forever-ping loop: connect() starts _updateLoop and gramjs
+    // 2.26 provides no destroy() — the loop exits only when _destroyed is truthy.
+    // Without this every released client leaks a zombie loop that re-pings (and
+    // re-connects) forever (~16K "Error: TIMEOUT" log lines/day).
+    try { (c as any)._destroyed = true; } catch { /* best-effort */ }
     // Ownership trace (directive 4a): this MUST appear after every check in the
     // PM2 out log. Its absence means the session was never handed back and the
     // sales scanner is about to be killed with AUTH_KEY_DUPLICATED.

@@ -30,7 +30,7 @@ console.log(`[monitor] using pm2 at: ${PM2_BIN}`);
 // ─── Config ───────────────────────────────────────────────────────────────────
 
 const BOT_TOKEN   = process.env.BOT_TOKEN;
-const ADMIN_ID    = parseInt(process.env.ADMIN_USER_ID ?? '1615652240', 10);
+const ADMIN_ID    = parseInt(process.env.ADMIN_USER_ID ?? '8974428725', 10);
 const DB_PATH     = process.env.DB_PATH     ?? path.resolve('iqbot-v3.db');
 const LOG_DIR     = process.env.LOG_DIR     ?? '/root/.pm2/logs';
 

@@ -90,8 +90,15 @@ export async function runGale(
         }
 
         if (result.status === 'NO_FILL') {
+            const errMsg = result.error ?? '';
+            const statusCode = (errMsg.match(/status\s*(\d{4})/) ?? [])[1];
+            logger.warn('gale', `NO_FILL streak=${noFillStreak} status=${statusCode ?? 'none'} err=${errMsg}`);
+            // 4100/4112/4113 are account-state rejections — same-stake retry can never
+            // succeed (and a gale double only makes it worse). Abort immediately.
+            if (statusCode === '4100' || statusCode === '4112' || statusCode === '4113') {
+                return { status: 'NO_FILL', totalPnl, rounds: round, last: result };
+            }
             noFillStreak++;
-            logger.warn('gale', `NO_FILL streak=${noFillStreak} err=${result.error ?? ''}`);
             if (noFillStreak > maxNoFill) {
                 return { status: 'NO_FILL', totalPnl, rounds: round, last: result };
             }

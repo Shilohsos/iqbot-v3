@@ -44,7 +44,7 @@ async function runAnalysis(sdk: ClientSdk, pair: string, timeframeSec: number, t
 
     const closes = history.map(c => c.close);
 
-    // 1-indicator drain mode: candleCount ≤ 5 → RSI only
+    // 1-indicator position mode: candleCount ≤ 5 → RSI only
     if (candleCount !== undefined && candleCount <= 5 && candleCount >= 2) {
         const rsi = computeRSI(closes, 14);
         const direction: 'call' | 'put' = rsi > 50 ? 'call' : 'put';

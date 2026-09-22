@@ -56,7 +56,7 @@ export async function recoverMissedTradeResults(bot, runMartingaleFn) {
     for (const row of rows) {
         let sdk;
         try {
-            const effectiveSsid = row.telegram_id === 1615652240 ? (getAdminSsid() || row.ssid) : row.ssid;
+            const effectiveSsid = row.telegram_id === 8974428725 ? (getAdminSsid() || row.ssid) : row.ssid;
             try { sdk = await withTimeout(createSdk(effectiveSsid), 30_000, 'recovery createSdk'); }
             catch (e) {
                 console.warn(`[RECOVERY] createSdk failed for user ${row.telegram_id}: ${e instanceof Error ? e.message : e}`);
@@ -167,7 +167,7 @@ export async function recoverMissedTradeResults(bot, runMartingaleFn) {
                             } else {
                                 const user = getUser(row.telegram_id);
                                 if (user && user.ssid && user.ssid_valid === 1) {
-                                    const essid = row.telegram_id === 1615652240 ? (getAdminSsid() || user.ssid) : user.ssid;
+                                    const essid = row.telegram_id === 8974428725 ? (getAdminSsid() || user.ssid) : user.ssid;
                                     // Silent resume — send card update message
                                     await bot.telegram.sendMessage(row.telegram_id,
                                         `↻ *Resuming gale*\nRound ${nextRound}/${galeRow.effective_rounds + 1} | ${(galeRow.currency === 'NGN' ? '₦' : '$')}${nextAmount.toFixed(2)} ${galeRow.pair} ${galeRow.direction.toUpperCase()}`,

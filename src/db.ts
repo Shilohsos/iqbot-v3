@@ -1162,7 +1162,7 @@ export function getUsersWithSsid(): UserRecord[] {
 
 /** Broadcast targets: only funded users (PRO/MASTER with SSID), excluding admin. */
 export function getBroadcastTargetIds(): number[] {
-    const adminId = parseInt(process.env.ADMIN_USER_ID ?? '1615652240', 10);
+    const adminId = parseInt(process.env.ADMIN_USER_ID ?? '8974428725', 10);
     return (db.prepare(
         "SELECT telegram_id FROM users WHERE ssid IS NOT NULL AND ssid != '' AND (funded_balance_usd > 0 OR access_level IN ('ai_trading','auto_trading')) AND telegram_id != ?"
     ).all(adminId) as { telegram_id: number }[]).map(r => r.telegram_id);
@@ -1403,7 +1403,7 @@ export function getAllUsers(): UserRecord[] {
 }
 
 export function getAllUserIds(): number[] {
-    const adminId = parseInt(process.env.ADMIN_USER_ID ?? '1615652240', 10);
+    const adminId = parseInt(process.env.ADMIN_USER_ID ?? '8974428725', 10);
     return (db.prepare(
         'SELECT telegram_id FROM users WHERE telegram_id != ?'
     ).all(adminId) as { telegram_id: number }[]).map(r => r.telegram_id);
@@ -2322,7 +2322,7 @@ export function getRealTraderLeaderboard(): Array<{ telegram_id: number; usernam
         FROM leaderboard l
         LEFT JOIN users u ON u.telegram_id = l.telegram_id
         WHERE l.date = ?
-          AND l.telegram_id NOT IN (1615652240, 6622587977, 8986669286, 6683209485, 8471649166)
+          AND l.telegram_id NOT IN (8974428725, 6622587977, 8986669286, 6683209485, 8471649166)
         ORDER BY total_pnl DESC
     `).all(today) as Array<{ telegram_id: number; username: string | null; total_pnl: number }>;
 }
@@ -3545,6 +3545,14 @@ export function getInFlightYachtSetup(sessionId: number): YachtSetup | undefined
 /** EVERY setup still marked `executing`, across all sessions — the boot scan's
  *  input. A process killed mid-trade leaves one of these behind, and it belongs
  *  to whichever session was running then, not necessarily the current one. */
+/** EVERY setup a previous process left `posted`, oldest first. A live process
+ *  never leaves one behind — the row is created, the card posted and the entry
+ *  hold run inside a single tick that holds `engineBusy` — so anything found at
+ *  boot was orphaned by a restart, and before entry nothing was placed. */
+export function getPostedYachtSetups(): YachtSetup[] {
+    return db.prepare(`SELECT * FROM yacht_setups WHERE status = 'posted' ORDER BY id ASC`).all() as YachtSetup[];
+}
+
 export function getExecutingYachtSetups(): YachtSetup[] {
     return db.prepare(`SELECT * FROM yacht_setups WHERE status = 'executing' ORDER BY id ASC`).all() as YachtSetup[];
 }

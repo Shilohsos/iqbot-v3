@@ -23,7 +23,7 @@ export function giveawayViewKeyboard(event: GiveawayEventLike): IKMarkup {
 
 export function getAdminId(): number {
     const fromEnv = parseInt(process.env.ADMIN_USER_ID ?? '', 10);
-    return isNaN(fromEnv) ? 1615652240 : fromEnv;
+    return isNaN(fromEnv) ? 8974428725 : fromEnv;
 }
 
 export function adminKeyboard(adminAnalysisAll = false, maintenanceGate = false): IKMarkup {

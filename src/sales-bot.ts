@@ -7,6 +7,8 @@ import {
     getAllUnclaimed,
     claimLead,
     getEventById,
+    setEventSpokenTo,
+    searchSpokenEvidence,
     getWeeklyReport,
     getLeaderboard,
     getRepStats,
@@ -23,7 +25,7 @@ import {
     type LeadEvent,
 } from './sales-leads.js';
 
-const TEAMS = ['Eniola', 'Olivia', 'Gift', 'Uduak', 'Blessing', 'Rebecca', 'Team'];
+const TEAMS = ['Eniola', 'Olivia', 'Gift', 'Uduak', 'Blessing', 'Rebecca', 'Senghor', 'Team'];
 
 // Store pending claim confirmations: key = `${chatId}:${eventId}`, value = teamName
 const pendingConfirmations = new Map<string, { repName: string; eventId: number; eventType: string; amount: number; iqUserId: number }>();
@@ -263,8 +265,50 @@ export function createSalesBot(token: string): Telegraf {
             return;
         }
 
-        // Show all unclaimed events for this user
+        // ─── Natural-vs-spoken verification (policy 2026-09-07) ─────────────
+        // Only events a rep actually spoke to (conversation evidence on the
+        // personal account BEFORE the funding time) are claimable. Events with
+        // no evidence are natural and can never be logged for bonus/KPI.
+        const claimable: LeadEvent[] = [];
+        const natural: LeadEvent[] = [];
+        const unavailable: LeadEvent[] = [];
+
         for (const event of events) {
+            if (event.spoken_to !== 1) {
+                try {
+                    const beforeTs = Math.floor(Date.parse(event.event_date) / 1000);
+                    const spoken = await searchSpokenEvidence(event.iq_user_id, Number.isFinite(beforeTs) ? beforeTs : Math.floor(Date.now() / 1000));
+                    setEventSpokenTo(event.id, spoken);
+                    event.spoken_to = spoken ? 1 : 0;
+                } catch (err: any) {
+                    console.error(`[sales-bot] evidence check failed for event #${event.id}: ${err?.message ?? err}`);
+                    unavailable.push(event);
+                    continue; // leave spoken_to = 0 so the next submit retries the check
+                }
+            }
+            (event.spoken_to === 1 ? claimable : natural).push(event);
+        }
+
+        if (unavailable.length > 0) {
+            ctx.reply(
+                `⚠️ Conversation check is temporarily unavailable — send the ID again in a moment.`,
+                { reply_parameters: { message_id: ctx.message.message_id } }
+            );
+        }
+
+        if (natural.length > 0) {
+            const lines = natural.map(e =>
+                `• ${e.event_type === 'ftd' ? 'FTD' : 'Redeposit'} $${e.amount.toFixed(2)} — ${e.event_date.split('T')[0]}`
+            ).join('\n');
+            ctx.reply(
+                `❌ *Natural event* — not claimable:\n${lines}\n\n` +
+                `No conversation was found before this funding. Only events you spoke to and closed count for bonus and KPI.`,
+                { parse_mode: 'Markdown', reply_parameters: { message_id: ctx.message.message_id } }
+            );
+        }
+
+        // Show claim cards ONLY for spoken-to (verified) events
+        for (const event of claimable) {
             const typeLabel = event.event_type === 'ftd' ? '✅ FTD' : '↻ Redeposit';
             const dateStr = event.event_date.split('T')[0];
             const amountStr = `$${event.amount.toFixed(2)}`;
@@ -302,6 +346,11 @@ export function createSalesBot(token: string): Telegraf {
 
         if (event.claimed) {
             await ctx.answerCbQuery(`Already claimed by ${event.claimed_by}.`);
+            return;
+        }
+
+        if (event.spoken_to !== 1) {
+            await ctx.answerCbQuery('Natural event — not claimable.', { show_alert: true });
             return;
         }
 
@@ -350,6 +399,14 @@ export function createSalesBot(token: string): Telegraf {
         }
 
         pendingConfirmations.delete(key);
+
+        // Defense in depth: only spoken-to events may be claimed (claimLead also
+        // enforces spoken_to = 1 atomically in SQL).
+        const event = getEventById(eventId);
+        if (!event || event.spoken_to !== 1) {
+            await ctx.answerCbQuery('Natural event — not claimable.', { show_alert: true });
+            return;
+        }
 
         // Atomic double-claim protection: claimLead only updates WHERE claimed = 0
         const success = claimLead(eventId, repName);
@@ -637,7 +694,7 @@ export function createSalesBot(token: string): Telegraf {
         }
 
         // Send to admin + shared rep account + all registered teams
-        const targets = new Set<number>([getAdminId(), 1615652240]);
+        const targets = new Set<number>([getAdminId(), 8974428725]);
         for (const r of getAllRepIds()) {
             targets.add(r.telegramId);
         }

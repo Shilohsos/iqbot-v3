@@ -2,8 +2,9 @@
 // Scans affiliate channel, stores FTD/redep events, handles attribution.
 
 import { db } from './db.js';
-import { TelegramClient } from 'telegram';
+import { TelegramClient, Api } from 'telegram';
 import { StringSession } from 'telegram/sessions/index.js';
+import { readFileSync } from 'fs';
 
 // ─── DB Schema (self-initializing) ───────────────────────────────────────────
 
@@ -20,9 +21,13 @@ db.exec(`
         claimed         INTEGER NOT NULL DEFAULT 0,
         claimed_by      TEXT,                       -- rep name: Eniola, Gift, Blessing
         claimed_at      TEXT,
+        spoken_to       INTEGER NOT NULL DEFAULT 0, -- 1 = conversation evidence found (unnatural/spoken-to event)
         created_at      TEXT NOT NULL DEFAULT (datetime('now'))
     )
 `);
+
+// Migration for existing databases (idempotent)
+try { db.exec('ALTER TABLE lead_events ADD COLUMN spoken_to INTEGER NOT NULL DEFAULT 0'); } catch { /* already present */ }
 
 // Ensure indexes exist (idempotent)
 try { db.exec('CREATE INDEX IF NOT EXISTS idx_lead_events_iq ON lead_events(iq_user_id)'); } catch {}
@@ -68,6 +73,7 @@ export interface LeadEvent {
     claimed: 0 | 1;
     claimed_by: string | null;
     claimed_at: string | null;
+    spoken_to: number;
 }
 
 export interface RepStats {
@@ -257,7 +263,7 @@ const SCAN_INTERVAL_MS = 2 * 60_000;
 const BACKOFF_MS = [2 * 60_000, 4 * 60_000, 8 * 60_000, 15 * 60_000];
 const MAX_BACKOFF_MS = 15 * 60_000;
 const OUTAGE_ALERT_MS = 60 * 60_000;
-const ADMIN_TELEGRAM_ID = 1615652240;
+const ADMIN_TELEGRAM_ID = 8974428725;
 
 let scannerStarted = false;
 let consecutiveFailures = 0;
@@ -351,13 +357,177 @@ export function getAllUnclaimed(iqUserId: number): LeadEvent[] {
     `).all(iqUserId) as LeadEvent[];
 }
 
-/** Claim an event for a rep. */
+/** Claim an event for a rep. Only spoken-to (verified) events are claimable —
+ *  natural events (no conversation evidence) can never be logged. */
 export function claimLead(eventId: number, repName: string): boolean {
     const result = db.prepare(`
         UPDATE lead_events SET claimed = 1, claimed_by = ?, claimed_at = datetime('now')
-        WHERE id = ? AND claimed = 0
+        WHERE id = ? AND claimed = 0 AND spoken_to = 1
     `).run(repName, eventId);
     return result.changes > 0;
+}
+
+/** Persist the conversation-evidence verdict for an event (1 = spoken-to). */
+export function setEventSpokenTo(eventId: number, spoken: boolean): void {
+    try {
+        db.prepare('UPDATE lead_events SET spoken_to = ? WHERE id = ?').run(spoken ? 1 : 0, eventId);
+    } catch (err: any) {
+        console.error(`[sales-leads] setEventSpokenTo failed: ${err?.message ?? err}`);
+    }
+}
+
+// ─── Spoken-to evidence search (Master's personal account) ───────────────────
+// Policy (2026-09-07): only events a rep actually spoke to and closed count for
+// bonus + KPI. Evidence = the IQ User ID appearing in a PRIVATE conversation on
+// Master's personal account (+234 808 629 3670, @shiloh_is_10xing) BEFORE the
+// funding event time. The personal session is a SEPARATE auth key from the sales
+// scanner's — it is still connect-per-check and force-released after every call.
+// Only private-chat hits count as evidence: channel posts (Affstore feed,
+// giveaway winner lists, bot verification messages) also contain 9-digit IDs and
+// would otherwise false-positive EVERY event as spoken-to.
+//
+// Service-noise filter (2026-09-07 reconfirm): reps frequently FORWARD the
+// sales bot's own replies ("No unclaimed funding events found for User ID …",
+// claim confirm cards) into Master's DM when asking what to do. Those forwards
+// carry the ID in a private chat but are NOT evidence of speaking to the user.
+// Excluded: (a) messages forwarded FROM a known bot, (b) text matching known
+// bot-service templates.
+
+const PERSONAL_SESSION_FILE = '/root/iqbot-v3/.personal-session.txt';
+const EVIDENCE_CONNECT_TIMEOUT_MS = 12_000;
+const EVIDENCE_SEARCH_TIMEOUT_MS = 10_000;
+
+const SERVICE_TEXT_RE = /no unclaimed funding events found|which team closed this lead|already claimed by|closed user \d+|sales lead tracker|natural event|conversation check is temporarily unavailable|telegram session|iq option user id \(numbers only\)|confirm:|natural event|only events you spoke to and closed/i;
+
+/** Bot user IDs whose forwarded replies are never evidence. Sales bot id comes
+ *  from its token; the main 10x bot from BOT_TOKEN; extras hardcoded. */
+function knownBotIds(): number[] {
+    const ids = new Set<number>([6461943886]); // sales bot @wr199_bot
+    for (const key of Object.keys(process.env)) {
+        if (/TOKEN$/i.test(key)) {
+            const m = (process.env[key] ?? '').match(/^(\d+):/);
+            if (m) ids.add(parseInt(m[1], 10));
+        }
+    }
+    return [...ids];
+}
+
+/** True when a global-search hit is genuine evidence (private chat, not
+ *  service noise). Exported so one-off audits reuse the same rule. */
+export function isPrivateEvidenceHit(m: any): boolean {
+    if (m?.peerId?.className !== 'PeerUser') return false;
+    const text = String(m?.message ?? m?.text ?? '');
+    if (SERVICE_TEXT_RE.test(text)) return false;
+    // Forwarded from a bot (original sender is a bot) => service noise.
+    const fwdFrom = m?.fwdFrom;
+    if (fwdFrom?.fromId?.userId && knownBotIds().includes(fwdFrom.fromId.userId)) return false;
+    // Direct sender is a bot (user messaged Master about a bot conversation) —
+    // still not evidence of the rep speaking to the user.
+    if (m?.senderId && knownBotIds().includes(m.senderId)) return false;
+    return true;
+}
+
+let _evidenceClient: TelegramClient | null = null;
+
+function getPersonalSessionString(): string {
+    const fromEnv = process.env.PERSONAL_TELETHON_SESSION;
+    if (fromEnv) return fromEnv.trim();
+    try {
+        return readFileSync(PERSONAL_SESSION_FILE, 'utf8').trim();
+    } catch {
+        return '';
+    }
+}
+
+async function getEvidenceClient(): Promise<TelegramClient> {
+    if (_evidenceClient?.connected) return _evidenceClient;
+
+    const session = getPersonalSessionString();
+    const apiId = parseInt(process.env.TELEGRAM_API_ID ?? '', 10);
+    const apiHash = process.env.TELEGRAM_API_HASH;
+    if (!session || isNaN(apiId) || !apiHash) {
+        throw new Error('Missing personal session (PERSONAL_TELETHON_SESSION or .personal-session.txt) or API creds');
+    }
+
+    _evidenceClient = new TelegramClient(new StringSession(session), apiId, apiHash, {
+        connectionRetries: 1,
+        baseLogger: undefined as never,
+    });
+    try {
+        await Promise.race([
+            _evidenceClient.connect(),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('evidence connect timeout')), EVIDENCE_CONNECT_TIMEOUT_MS)),
+        ]);
+    } catch (err) {
+        releaseEvidenceClient();
+        throw err;
+    }
+    return _evidenceClient;
+}
+
+/** Force-release the personal session — never hold it between checks. */
+function releaseEvidenceClient(): void {
+    const c = _evidenceClient;
+    _evidenceClient = null; // idempotent: a racing second call sees null
+    if (!c) return;
+    const killSocket = () => {
+        try {
+            const conn = (c as any)._connection;
+            if (conn?._socket?.destroy) conn._socket.destroy();
+        } catch { /* best-effort */ }
+    };
+    const state = c.connected ? 'connected' : 'half-open';
+    try {
+        if (c.connected) {
+            Promise.race([
+                c.disconnect(),
+                new Promise((_, rej) => setTimeout(() => rej(new Error('disconnect timeout')), 2_000)),
+            ]).catch(() => {
+                try { c.destroy?.(); } catch { /* best-effort */ }
+                killSocket();
+            });
+        } else {
+            try { c.destroy?.(); } catch { /* best-effort */ }
+            killSocket();
+        }
+    } catch { /* best-effort */ }
+    console.log(`[sales-evidence] released (was ${state})`);
+}
+
+/**
+ * Search Master's personal account for the IQ User ID in a private conversation
+ * dated BEFORE `beforeTsSec`. Returns true when at least one private-chat
+ * message containing the ID predates the funding event.
+ * THROWS on session/search failure — the caller decides how to message reps.
+ */
+export async function searchSpokenEvidence(iqUserId: number, beforeTsSec: number): Promise<boolean> {
+    const client = await getEvidenceClient();
+    try {
+        const res: any = await Promise.race([
+            client.invoke(new Api.messages.SearchGlobal({
+                q: String(iqUserId),
+                filter: new Api.InputMessagesFilterEmpty(),
+                minDate: 0,
+                maxDate: beforeTsSec,
+                offsetRate: 0,
+                offsetPeer: new Api.InputPeerEmpty(),
+                offsetId: 0,
+                limit: 20,
+            })),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('evidence search timeout')), EVIDENCE_SEARCH_TIMEOUT_MS)),
+        ]);
+        const messages: any[] = res?.messages ?? [];
+        for (const m of messages) {
+            if (isPrivateEvidenceHit(m)) {
+                console.log(`[sales-evidence] HIT: ${iqUserId} found in private chat (msg ${m.id}, ${new Date((m.date ?? 0) * 1000).toISOString()})`);
+                return true;
+            }
+        }
+        console.log(`[sales-evidence] miss: ${iqUserId} before ${new Date(beforeTsSec * 1000).toISOString()} (${messages.length} global hits, none qualifying)`);
+        return false;
+    } finally {
+        releaseEvidenceClient();
+    }
 }
 
 /** Get a specific event by ID. */
