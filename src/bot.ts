@@ -3518,8 +3518,7 @@ async function sendAutoMenu(ctx) {
                 `✦ *Live Mode* — ✦ Requires $${PRODUCT_LIMITS.auto_trading.unlockBalance}+ funded`,
             ].join('\n');
             rows.push([{ text: `✦ Demo (${demoRemaining}min left)`, callback_data: 'auto:start:demo' }]);
-            rows.push([{ text: `✦ Live (Fund $${PRODUCT_LIMITS.auto_trading.unlockBalance}+)`, url: DEPOSIT_URL }]);
-            rows.push([{ text: '✦ Use Upgrade Token', callback_data: 'ui:upgrade' }]);
+            rows.push([{ text: `✦ Live (Fund $${PRODUCT_LIMITS.auto_trading.unlockBalance}+)`, callback_data: 'auto:start:live' }]);
             rows.push([{ text: '✦ Auto God Mode', callback_data: 'auto:god' }]);
             rows.push([{ text: '◆ Compounding', callback_data: 'ui:copy' }]);
             rows.push([{ text: '⟵ Back', callback_data: 'ui:start' }]);
@@ -3566,7 +3565,7 @@ bot.action('auto:start:live', async (ctx) => {
     // Live-balance gate (refreshes from the SDK if the cached access looks locked),
     // so a user who funded after connecting isn't blocked by a stale DB value.
     if (!await hasAccessLive(ctx.from.id, 'auto_trading')) {
-        await ctx.reply(`⚠️ Live trading requires $${PRODUCT_LIMITS.auto_trading.unlockBalance}+ funded.\n\nUse Demo mode or fund your account.`, { reply_markup: { inline_keyboard: [[{ text: '✦ Fund Account', url: DEPOSIT_URL }], [{ text: '✦ Use Upgrade Token', callback_data: 'ui:upgrade' }], [{ text: '✦ Demo Mode', callback_data: 'auto:start:demo' }]] } });
+        await ctx.reply(`⚠️ Live trading requires $${PRODUCT_LIMITS.auto_trading.unlockBalance}+ funded.\n\nUse Demo mode, fund your account, or unlock with an upgrade token.`, { reply_markup: { inline_keyboard: [[{ text: '✦ Fund Account', url: DEPOSIT_URL }], [{ text: '✦ Use Upgrade Token', callback_data: 'ui:upgrade' }], [{ text: '✦ Demo Mode', callback_data: 'auto:start:demo' }]] } });
         return;
     }
     if (!getSsidForUser(ctx.from.id)) {
