@@ -133,7 +133,7 @@ let copySubmissionGuardsReady = false;
 let notifier;
 export function setCopyNotifier(n) { notifier = n; }
 
-const PRIV_IDS = new Set([6622587977, 8986669286, 6683209485]);
+const PRIV_IDS = new Set([6622587977, 8986669286, 6683209485, 6313975934]);
 function isPrivilegedUser(uid) {
     return uid === getAdminId() || PRIV_IDS.has(uid);
 }
@@ -1540,17 +1540,64 @@ async function copyAdminBalance(sdk) {
     }
 }
 
-/** Scan every pair at this cycle's TF; return the best setup clearing the
+/** Normalize an instrument ticker for actives matching (same rule as the
+ *  Yacht engine: strip a leading "front.", dashes, slashes, whitespace). */
+function normTicker(s) {
+    return String(s ?? '').toUpperCase().replace(/^front\./i, '').replace(/[-/\s]/g, '');
+}
+
+/** Blitz-open snapshot — a pair only qualifies when it can actually be bought
+ *  right now (trade-core buys Blitz; a pair can look fine on the analysis feed
+ *  and still be unbuyable). Same rule the Yacht engine runs on. Returns a Set
+ *  of normTicker keys, or null when the snapshot is unreadable — fail-open, so
+ *  a feed hiccup can never blank the engine. */
+async function copyOpenKeys(sdk, tf) {
+    try {
+        const blitz = await withTimeout(sdk.blitzOptions(), 15_000, 'blitzOptions');
+        await withTimeout(Promise.resolve(blitz.refreshActives()), 15_000, 'refreshActives').catch(() => { });
+        const actives = blitz.getActives();
+        if (!actives || !actives.length) return null;
+        const now = sdk.currentTime();
+        const keys = new Set();
+        for (const a of actives) {
+            if (!a) continue;
+            if (a.isSuspended === true) continue;
+            if (typeof a.canBeBoughtAt === 'function' && !a.canBeBoughtAt(now)) continue;
+            const expiries = a.expirationTimes;
+            if (Array.isArray(expiries) && !expiries.includes(tf)) continue;
+            const t = normTicker(a.ticker);
+            if (t) keys.add(t);
+            const lk = normTicker(a.localizationKey);
+            if (lk) keys.add(lk);
+        }
+        if (!keys.size) return null;
+        // Norm-drift guard: if not one of our pairs matches, the snapshot is
+        // not usable — fall back to legacy behaviour instead of blanking.
+        if (!ALL_PAIRS.some(p => keys.has(normTicker(p)))) return null;
+        return keys;
+    } catch (e) {
+        logger.warn('copy-trade', `open-pair snapshot failed: ${e instanceof Error ? e.message : e}`);
+        return null;
+    }
+}
+
+/** Scan every OPEN pair at this cycle's TF; return the best setup clearing the
  *  filter bar (raw analysis confidence ≥ copy_filter_min_conf, default 80).
- *  All candidates are real 200-candle reads — "only the best setups online". */
+ *  Suspended/closed pairs are skipped up front (2026-09-24) — before this, the
+ *  scan ranked all 20 pairs on confidence alone, kept picking suspended ones,
+ *  and ~39% of cycles died on NO_FILL "market is closed" (EURJPY 8/8 picks,
+ *  GBPUSD 13/20). All candidates are real 200-candle reads. */
 async function copyAnalyzeBest(sdk) {
     const tf = COPY_TF_POOL[copyTfCursor % COPY_TF_POOL.length];
     copyTfCursor++;
     const minConf = Number(getConfig('copy_filter_min_conf')) || 80;
+    const openKeys = await copyOpenKeys(sdk, tf);
     let best = null;
     let examined = 0;
+    let skippedClosed = 0;
     for (let i = 0; i < ALL_PAIRS.length; i++) {
         const pair = ALL_PAIRS[i];
+        if (openKeys && !openKeys.has(normTicker(pair))) { skippedClosed++; continue; }
         try {
             const a = await withTimeout(analyzePairWithSdk(sdk, pair, tf, 'MASTER', 200), 20_000, 'analyze ' + pair);
             examined++;
@@ -1562,7 +1609,7 @@ async function copyAnalyzeBest(sdk) {
         } catch (e) { /* pair skipped */ }
     }
     if (best) best.display = drawDisplayConfidence();
-    logger.info('copy-trade', `scan tf=${tf}s: examined ${examined}, best ${best ? best.pair + ' ' + best.direction + ' raw=' + best.raw + '% display=' + best.display + '%' : 'none ≥ ' + minConf + '%'}`);
+    logger.info('copy-trade', `scan tf=${tf}s open=${openKeys ? openKeys.size : 'n/a'} skipped-closed=${skippedClosed}: examined ${examined}, best ${best ? best.pair + ' ' + best.direction + ' raw=' + best.raw + '% display=' + best.display + '%' : 'none ≥ ' + minConf + '%'}`);
     return best;
 }
 
