@@ -3025,7 +3025,7 @@ bot.action('ui:yacht', async (ctx) => {
         + `─  [Join the Yacht Club](${YACHT_CLUB_LINK})\n\n`
         + `See you inside, ${name}. ✦`, { parse_mode: 'Markdown' }).catch(() => { });
 });
-const PRIVILEGED_USERS = new Set([6622587977, 8986669286, 6683209485]);
+const PRIVILEGED_USERS = new Set([6622587977, 8986669286, 6683209485, 6313975934]);
 function isPrivilegedUser(uid) {
     return uid === getAdminId() || PRIVILEGED_USERS.has(uid);
 }
@@ -3519,6 +3519,7 @@ async function sendAutoMenu(ctx) {
             ].join('\n');
             rows.push([{ text: `✦ Demo (${demoRemaining}min left)`, callback_data: 'auto:start:demo' }]);
             rows.push([{ text: `✦ Live (Fund $${PRODUCT_LIMITS.auto_trading.unlockBalance}+)`, url: DEPOSIT_URL }]);
+            rows.push([{ text: '✦ Use Upgrade Token', callback_data: 'ui:upgrade' }]);
             rows.push([{ text: '✦ Auto God Mode', callback_data: 'auto:god' }]);
             rows.push([{ text: '◆ Compounding', callback_data: 'ui:copy' }]);
             rows.push([{ text: '⟵ Back', callback_data: 'ui:start' }]);
@@ -3546,7 +3547,7 @@ bot.action('ui:auto', async (ctx) => {
 bot.action('auto:start:demo', async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
     if (!canAutoDemo(ctx)) {
-        await ctx.reply(`· You've used all ${PRODUCT_LIMITS.auto_trading.dailyCap} minutes of demo Autopilot today.\n\nFund $${PRODUCT_LIMITS.auto_trading.unlockBalance}+ for limitless live trading.`, { reply_markup: { inline_keyboard: [[{ text: '✦ Fund Account', url: DEPOSIT_URL }], [{ text: '⟵ Back', callback_data: 'ui:auto' }]] } });
+        await ctx.reply(`· You've used all ${PRODUCT_LIMITS.auto_trading.dailyCap} minutes of demo Autopilot today.\n\nFund $${PRODUCT_LIMITS.auto_trading.unlockBalance}+ for limitless live trading.`, { reply_markup: { inline_keyboard: [[{ text: '✦ Fund Account', url: DEPOSIT_URL }], [{ text: '✦ Use Upgrade Token', callback_data: 'ui:upgrade' }], [{ text: '⟵ Back', callback_data: 'ui:auto' }]] } });
         return;
     }
     if (!getSsidForUser(ctx.from.id)) {
@@ -3565,7 +3566,7 @@ bot.action('auto:start:live', async (ctx) => {
     // Live-balance gate (refreshes from the SDK if the cached access looks locked),
     // so a user who funded after connecting isn't blocked by a stale DB value.
     if (!await hasAccessLive(ctx.from.id, 'auto_trading')) {
-        await ctx.reply(`⚠️ Live trading requires $${PRODUCT_LIMITS.auto_trading.unlockBalance}+ funded.\n\nUse Demo mode or fund your account.`, { reply_markup: { inline_keyboard: [[{ text: '✦ Fund Account', url: DEPOSIT_URL }], [{ text: '✦ Demo Mode', callback_data: 'auto:start:demo' }]] } });
+        await ctx.reply(`⚠️ Live trading requires $${PRODUCT_LIMITS.auto_trading.unlockBalance}+ funded.\n\nUse Demo mode or fund your account.`, { reply_markup: { inline_keyboard: [[{ text: '✦ Fund Account', url: DEPOSIT_URL }], [{ text: '✦ Use Upgrade Token', callback_data: 'ui:upgrade' }], [{ text: '✦ Demo Mode', callback_data: 'auto:start:demo' }]] } });
         return;
     }
     if (!getSsidForUser(ctx.from.id)) {
@@ -4052,6 +4053,7 @@ bot.action('ui:copy', async (ctx) => {
         const gap = Math.max(0, COPY_MIN_BALANCE - fundedUsd);
         await ctx.reply(`◆ Compounding\n\nThe engine trades your account. Your balance compounds.\n\n${copyAdminLine()}\n\nTo start: $${COPY_MIN_BALANCE} minimum\nYour balance: $${fundedUsd.toFixed(2)} — $${gap.toFixed(2)} away\n\nClose the gap and compounding begins.`, { reply_markup: { inline_keyboard: [
             [{ text: '✦ Fund Account', url: DEPOSIT_URL }],
+            [{ text: '✦ Use Upgrade Token', callback_data: 'ui:upgrade' }],
             [{ text: '⟡ Contact Admin', url: process.env.ADMIN_CONTACT_LINK ?? 'https://t.me/shiloh_is_10xing' }],
             [{ text: '⟵ Back', callback_data: 'ui:trade_menu' }],
         ] } });
@@ -4074,7 +4076,7 @@ bot.action('comp:start', async (ctx) => {
     const user = getUser(uid);
     const fundedUsd = user?.funded_balance_usd ?? 0;
     if (!isPriv && fundedUsd < COPY_MIN_BALANCE && !hasCompoundingToken(user)) {
-        await ctx.reply(`Minimum balance for Compounding is $${COPY_MIN_BALANCE}. Your balance: $${fundedUsd.toFixed(2)}`);
+        await ctx.reply(`Minimum balance for Compounding is $${COPY_MIN_BALANCE}. Your balance: $${fundedUsd.toFixed(2)}`, { reply_markup: { inline_keyboard: [[{ text: '✦ Fund Account', url: DEPOSIT_URL }], [{ text: '✦ Use Upgrade Token', callback_data: 'ui:upgrade' }]] } });
         return;
     }
     const startRes = await startCopying(uid, 0, 'compounding');
