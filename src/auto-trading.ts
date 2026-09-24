@@ -25,7 +25,7 @@ const RECONNECT_BACKOFF_MS = [2000, 4000, 8000, 16000];
 const MAX_CONSECUTIVE_ERRORS = 3;
 // Privileged user IDs that get admin-grade analysis (200 candles, 6 indicators)
 // in the auto engine even in demo mode. Module-level so it isn't rebuilt per loop.
-const PRIV_IDS = new Set([6622587977, 8986669286, 6683209485]);
+const PRIV_IDS = new Set([6622587977, 8986669286, 6683209485, 6313975934]);
 // ── Timer tracking for demo mode ──────────────────────────────────────────
 // Accumulated demo minutes used today. `baselineMin` is the DB-stored total
 // captured when the timer started, so totals SURVIVE a PM2 restart (the old code

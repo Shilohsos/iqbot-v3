@@ -50,7 +50,7 @@ const DEFAULT_TIMEFRAME_SEC = 60;
 
 /** Privileged (admin-level) accounts: stake cap and banned assets/timeframes
  *  apply to admin + PRIVILEGED_USERS (mirrors bot.ts PRIVILEGED_USERS + getAdminId). */
-const PRIVILEGED_IDS = new Set([6622587977, 8986669286, 6683209485]);
+const PRIVILEGED_IDS = new Set([6622587977, 8986669286, 6683209485, 6313975934]);
 const PRIV_STAKE_CAP_USD = 700;
 const PRIV_BANNED_ASSETS = new Set(['EURGBP', 'BTCUSD', 'XAUUSD']);
 /** Allowed timeframe pairs for privileged accounts — must include 2m or 5m. */

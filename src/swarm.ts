@@ -17,7 +17,7 @@ const SWARM_MIN_BALANCE = 200; // USD
 const MAX_CONCURRENT = 5;
 const TIMEFRAMES = [30, 60, 120, 300];
 // Privileged users — same as bot.ts PRIVILEGED_USERS
-const PRIV_IDS = new Set([6622587977, 8986669286, 6683209485]);
+const PRIV_IDS = new Set([6622587977, 8986669286, 6683209485, 6313975934]);
 function isPrivilegedUser(uid) {
     return uid === getAdminId() || PRIV_IDS.has(uid);
 }
