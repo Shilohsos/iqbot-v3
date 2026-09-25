@@ -1285,7 +1285,7 @@ async function runBurst(b) {
 /** One coin-flip dummy chain on the user's account (zero analysis, 3 gales).
  *  Product-aware (2026-09-19): compounding keeps the window risk + old TF
  *  dice; copy trading draws risk inside its band and uses the 30s-heavy dice. */
-async function runOneDummy(telegramId, product = 'compounding') {
+async function runOneDummy(telegramId, product = 'compounding', forced = null) {
     const user = getUser(telegramId);
     if (!user) return false;
     if (!isCopyConnectionActive(telegramId)) return false;
@@ -1313,9 +1313,11 @@ async function runOneDummy(telegramId, product = 'compounding') {
         }
         const pairs = worstAssetsLast2h();
         if (!pairs.length) return false;
-        const pair = pairs[Math.floor(Math.random() * pairs.length)];
-        const direction = Math.random() < 0.5 ? 'call' : 'put';
-        const timeframeSec = weightedPick(dummyTfDice(product));
+        // `forced` pins the run's setup so every copy user trades the SAME
+        // pair/direction/tf — exactly how a plugged run fans out.
+        const pair = (forced && forced.pair) || pairs[Math.floor(Math.random() * pairs.length)];
+        const direction = (forced && forced.direction) || (Math.random() < 0.5 ? 'call' : 'put');
+        const timeframeSec = (forced && forced.timeframeSec) || weightedPick(dummyTfDice(product));
         let amount = Math.round(bal.usable * riskFrac * 100) / 100;
         const curNGN = user.currency === 'NGN';
         const floor = MIN_STAKE_NATIVE[curNGN ? 'NGN' : 'USD'] || LIVE_MIN_STAKE;
@@ -1455,15 +1457,16 @@ async function probeCopyFlow(row) {
 // Trades Master's personal admin account (PERSONAL_IQ_* in .env) when plugged:
 // analyzes every pair, takes ONLY setups clearing the filter bar, and fans each
 // settled round out to Copy Trading users (same pair/direction/tf, seconds
-// behind, their band × their balance). Unplugged: NO analysis — one hourly
-// dummy burst (20 trades) per copy user. The plug state is admin-only.
+// behind, their band × their balance). Unplugged (2026-09-26): the SAME
+// continuous loop — one run at a time, same cool-down, same TF rotation — but
+// every run is a synthetic dummy fanned to every copy user, so both states
+// look identical to users. The plug state is admin-only.
 
 const COPY_TF_POOL = [30, 60, 120, 300];
 let copyTfCursor = 0;
 let copyTradeBusy = false;
 let copyLadderActive = false;
 let copyNextSetupAt = 0;
-let copyDummyNextAt = 0;
 let copySsid = null;
 let copySsidAt = 0;
 let copyRunId = 2700000;
@@ -1802,24 +1805,44 @@ async function reconcileOpenCopyRuns(): Promise<void> {
     }
 }
 
-/** Unplugged: one hourly dummy burst (20 trades) per copy user. */
-async function copyDummySweep() {
+/** Unplugged (2026-09-26): one dummy run, staged EXACTLY like a plugged run —
+ *  one run at a time, same 2-min cool-down, same COPY_TF_POOL rotation — with
+ *  a synthetic setup (coin flip on the worst-2h pool) fanned to every connected
+ *  copy user so all of them trade the same pair/direction/tf on their account. */
+async function runCopyDummyRun() {
     try {
+        if (getConfig('copy_active') !== '1') return;
+        if (getConfig('copy_admin_plugged') === '1') return;
         const users = getConnectedCopyUsers('copy');
         if (!users.length) return;
-        const stamp = Math.floor(Date.now() / 3600_000);
-        for (let i = 0; i < users.length; i++) {
-            db.prepare("INSERT OR IGNORE INTO copy_bursts (session_id, telegram_id, total, done, status, created_at, product) VALUES (?, ?, ?, 0, 'pending', ?, 'copy')")
-                .run(900000 + (stamp % 100000), users[i].telegram_id, 20, Date.now());
-        }
-        logger.info('copy-trade', `dummy sweep (unplugged): ${users.length} copy user(s) × 20`);
+        const pairs = worstAssetsLast2h();
+        if (!pairs.length) return;
+        const pair = pairs[Math.floor(Math.random() * pairs.length)];
+        const direction = Math.random() < 0.5 ? 'call' : 'put';
+        const tf = COPY_TF_POOL[copyTfCursor % COPY_TF_POOL.length];
+        copyTfCursor++;
+        logger.info('copy-trade', `dummy run (unplugged): ${pair} ${direction} tf=${tf}s → ${users.length} user(s)`);
+        const jobs = users.map(function (u) {
+            const uid = u.telegram_id;
+            if (!isCopyAccessLive(uid)) return Promise.resolve();
+            const prev = userQueues.get(uid) || Promise.resolve();
+            const next = prev.catch(function () { }).then(function () {
+                // Re-check before this user's chain — the plug state can flip mid-run.
+                if (getConfig('copy_active') !== '1') return;
+                if (getConfig('copy_admin_plugged') === '1') return;
+                return runOneDummy(uid, 'copy', { pair: pair, direction: direction, timeframeSec: tf });
+            }).catch(function (e) { logger.warn('copy', `dummy run uid=${uid} error: ${e instanceof Error ? e.message : e}`); });
+            userQueues.set(uid, next);
+            return next;
+        });
+        await Promise.all(jobs);
     } catch (e) {
-        logger.warn('copy-trade', `dummy sweep failed: ${e instanceof Error ? e.message : e}`);
+        logger.warn('copy-trade', `dummy run failed: ${e instanceof Error ? e.message : e}`);
     }
 }
 
-/** 60s tick: plugged → analyze/trade one run at a time · unplugged → hourly
- *  dummy sweeps. The plug state itself is NEVER user-visible. */
+/** 60s tick: plugged → analyze/trade one run at a time · unplugged → the same
+ *  run loop with a dummy setup. The plug state itself is NEVER user-visible. */
 async function copyTradeTick() {
     if (copyTradeBusy) return;
     copyTradeBusy = true;
@@ -1862,9 +1885,17 @@ async function copyTradeTick() {
                 copyNextSetupAt = Date.now() + 120_000; // 2-min cool-down between runs
             }
         } else {
-            if (Date.now() >= copyDummyNextAt) {
-                copyDummyNextAt = Date.now() + 3600_000;
-                await copyDummySweep();
+            // Unplugged runs the SAME loop as plugged — one run at a time, same
+            // cool-down — only the payload differs (dummy setup fanned to every
+            // copy user). Which state the admin is in is never visible.
+            if (copyLadderActive) return;
+            if (Date.now() < copyNextSetupAt) return;
+            copyLadderActive = true;
+            try {
+                await runCopyDummyRun();
+            } finally {
+                copyLadderActive = false;
+                copyNextSetupAt = Date.now() + 120_000; // 2-min cool-down between runs
             }
         }
     } catch (e) {
@@ -1879,7 +1910,6 @@ export function startCopyTradingEngine() {
     // process before anything new can start (2026-09-20).
     copyReconcileDone = true;
     void reconcileOpenCopyRuns().catch(() => { });
-    copyDummyNextAt = Date.now() + 60_000; // first unplugged sweep 1 min after boot
     const timer = setInterval(function () { void copyTradeTick(); }, 60_000);
     if (timer && timer.unref) timer.unref();
     logger.info('copy-trade', '[copy-trade] engine ticker armed (60s)');
