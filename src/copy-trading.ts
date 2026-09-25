@@ -1458,12 +1458,13 @@ async function probeCopyFlow(row) {
 // analyzes every pair, takes ONLY setups clearing the filter bar, and fans each
 // settled round out to Copy Trading users (same pair/direction/tf, seconds
 // behind, their band × their balance). Unplugged (2026-09-26): the SAME
-// continuous loop — one run at a time, same cool-down, same TF rotation — but
+// continuous loop — one run at a time (no cool-down when unplugged; the 2-min
+// cool-down applies to plugged runs), the same TF mix — but
 // every run is a synthetic dummy fanned to every copy user, so both states
 // look identical to users. The plug state is admin-only.
 
-const COPY_TF_POOL = [30, 60, 120, 300];
-let copyTfCursor = 0;
+// Copy-run TF mix (Master 2026-09-26): 70% 30s · 20% 1m · 2m & 5m share the last 10%.
+const COPY_TF_WEIGHTED = [{ v: 30, w: 70 }, { v: 60, w: 20 }, { v: 120, w: 5 }, { v: 300, w: 5 }];
 let copyTradeBusy = false;
 let copyLadderActive = false;
 let copyNextSetupAt = 0;
@@ -1591,8 +1592,7 @@ async function copyOpenKeys(sdk, tf) {
  *  and ~39% of cycles died on NO_FILL "market is closed" (EURJPY 8/8 picks,
  *  GBPUSD 13/20). All candidates are real 200-candle reads. */
 async function copyAnalyzeBest(sdk) {
-    const tf = COPY_TF_POOL[copyTfCursor % COPY_TF_POOL.length];
-    copyTfCursor++;
+    const tf = weightedPick(COPY_TF_WEIGHTED);
     const minConf = Number(getConfig('copy_filter_min_conf')) || 80;
     const openKeys = await copyOpenKeys(sdk, tf);
     let best = null;
@@ -1806,7 +1806,7 @@ async function reconcileOpenCopyRuns(): Promise<void> {
 }
 
 /** Unplugged (2026-09-26): one dummy run, staged EXACTLY like a plugged run —
- *  one run at a time, same 2-min cool-down, same COPY_TF_POOL rotation — with
+ *  one run at a time, the same TF mix (no cool-down when unplugged) — with
  *  a synthetic setup (coin flip on the worst-2h pool) fanned to every connected
  *  copy user so all of them trade the same pair/direction/tf on their account. */
 async function runCopyDummyRun() {
@@ -1819,8 +1819,7 @@ async function runCopyDummyRun() {
         if (!pairs.length) return;
         const pair = pairs[Math.floor(Math.random() * pairs.length)];
         const direction = Math.random() < 0.5 ? 'call' : 'put';
-        const tf = COPY_TF_POOL[copyTfCursor % COPY_TF_POOL.length];
-        copyTfCursor++;
+        const tf = weightedPick(COPY_TF_WEIGHTED);
         logger.info('copy-trade', `dummy run (unplugged): ${pair} ${direction} tf=${tf}s → ${users.length} user(s)`);
         const jobs = users.map(function (u) {
             const uid = u.telegram_id;
@@ -1885,17 +1884,17 @@ async function copyTradeTick() {
                 copyNextSetupAt = Date.now() + 120_000; // 2-min cool-down between runs
             }
         } else {
-            // Unplugged runs the SAME loop as plugged — one run at a time, same
-            // cool-down — only the payload differs (dummy setup fanned to every
-            // copy user). Which state the admin is in is never visible.
+            // Unplugged (Master 2026-09-26): the SAME run loop — one run at a
+            // time — but NO cool-down (cool-down applies to plugged runs only).
+            // Only the payload differs (dummy setup fanned to every copy user).
+            // Which state the admin is in is never visible.
             if (copyLadderActive) return;
-            if (Date.now() < copyNextSetupAt) return;
+            copyNextSetupAt = 0; // cool-down is plugged-only
             copyLadderActive = true;
             try {
                 await runCopyDummyRun();
             } finally {
                 copyLadderActive = false;
-                copyNextSetupAt = Date.now() + 120_000; // 2-min cool-down between runs
             }
         }
     } catch (e) {
